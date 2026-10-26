@@ -30,18 +30,23 @@ class ArchitectureTest {
     void 기능_간_의존_방향() {
         noClasses().that().resideInAPackage("..aml.source..")
                 .should().dependOnClassesThat().resideInAnyPackage("..aml.detection..", "..aml.cases..", "..aml.str..")
+                .allowEmptyShould(true)   // 아직 빈 기능 폴더는 통과, 클래스가 생기면 그대로 검사
                 .check(classes);
         noClasses().that().resideInAPackage("..aml.detection..")
                 .should().dependOnClassesThat().resideInAnyPackage("..aml.cases..", "..aml.str..")
+                .allowEmptyShould(true)   // 아직 빈 기능 폴더는 통과, 클래스가 생기면 그대로 검사
                 .check(classes);
         noClasses().that().resideInAPackage("..aml.cases..")
                 .should().dependOnClassesThat().resideInAPackage("..aml.str..")
+                .allowEmptyShould(true)   // 아직 빈 기능 폴더는 통과, 클래스가 생기면 그대로 검사
                 .check(classes);
         noClasses().that().resideInAPackage("..aml.user..")
                 .should().dependOnClassesThat().resideInAnyPackage("..aml.source..", "..aml.detection..", "..aml.cases..", "..aml.str..")
+                .allowEmptyShould(true)   // 아직 빈 기능 폴더는 통과, 클래스가 생기면 그대로 검사
                 .check(classes);
         noClasses().that().resideInAPackage("..aml.shared..")
                 .should().dependOnClassesThat().resideInAnyPackage("..aml.source..", "..aml.detection..", "..aml.cases..", "..aml.str..", "..aml.user..")
+                .allowEmptyShould(true)   // 아직 빈 기능 폴더는 통과, 클래스가 생기면 그대로 검사
                 .check(classes);
     }
 
@@ -51,6 +56,7 @@ class ArchitectureTest {
             noClasses().that().resideOutsideOfPackage("..aml." + f + "..")
                     .and().resideInAPackage("..aml..")
                     .should().dependOnClassesThat().resideInAPackage("..aml." + f + ".infrastructure..")
+                    .allowEmptyShould(true)
                     .check(classes);
         }
     }
@@ -59,6 +65,7 @@ class ArchitectureTest {
     void 계층_의존_방향() {
         for (String f : new String[]{"source", "detection", "cases", "str", "user"}) {
             Architectures.layeredArchitecture().consideringOnlyDependenciesInLayers()
+                    .withOptionalLayers(true)   // 아직 클래스가 없는 계층(빈 폴더)은 건너뛴다
                     .layer("api").definedBy("..aml." + f + ".api..")
                     .layer("application").definedBy("..aml." + f + ".application..")
                     .layer("domain").definedBy("..aml." + f + ".domain..")
@@ -67,6 +74,7 @@ class ArchitectureTest {
                     .whereLayer("application").mayOnlyBeAccessedByLayers("api")
                     .whereLayer("domain").mayOnlyBeAccessedByLayers("api", "application", "infrastructure")
                     .whereLayer("infrastructure").mayNotBeAccessedByAnyLayer()
+                    .allowEmptyShould(true)
                     .check(classes);
         }
     }
@@ -77,6 +85,7 @@ class ArchitectureTest {
                 .should().dependOnClassesThat().resideInAnyPackage(
                         "org.springframework.web..", "org.springframework.stereotype..",
                         "org.springframework.transaction..", "org.springframework.security..")
+                .allowEmptyShould(true)   // 아직 빈 기능 폴더는 통과, 클래스가 생기면 그대로 검사
                 .check(classes);
     }
 }
