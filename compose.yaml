@@ -1,0 +1,50 @@
+# docker compose up  → db(PostgreSQL 16) + app(Spring Boot, local 프로파일)
+# 환경변수는 같은 폴더의 .env 에서 읽는다. 변수 이름은 README 참조, 값은 노션.
+services:
+  db:
+    image: postgres:16
+    container_name: aml-db
+    environment:
+      POSTGRES_DB: aml
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # 아래 셋은 db/init/01_roles.sh 가 첫 기동 때 역할을 만들 때 쓴다
+      APP_MIGRATE_PASSWORD: ${APP_MIGRATE_PASSWORD}
+      APP_BACKEND_PASSWORD: ${APP_BACKEND_PASSWORD}
+      APP_AI_PASSWORD: ${APP_AI_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - aml-db-data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aml"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    container_name: aml-app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: aml
+      APP_MIGRATE_PASSWORD: ${APP_MIGRATE_PASSWORD}
+      APP_BACKEND_PASSWORD: ${APP_BACKEND_PASSWORD}
+      APP_AI_PASSWORD: ${APP_AI_PASSWORD}
+      DEV_USER_PASSWORD: ${DEV_USER_PASSWORD}
+      AI_BASE_URL: ${AI_BASE_URL:-http://ai:8000}
+      AI_INTERNAL_KEY: ${AI_INTERNAL_KEY}
+      AML_DATASET_DIR: /data
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data:ro
+
+volumes:
+  aml-db-data:

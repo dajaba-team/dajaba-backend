@@ -1,0 +1,121 @@
+# 공통 설정. 프로파일별 차이는 아래 --- 블록. 비밀값은 전부 환경변수(.env, 값은 노션).
+spring:
+  application:
+    name: aml
+  config:
+    import: optional:file:./.env[.properties]   # IDE 에서 바로 실행할 때 .env 를 읽는다 (compose 는 환경변수로 넘기므로 무관)
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:aml}
+    username: app_backend
+    password: ${APP_BACKEND_PASSWORD:}
+    hikari:
+      maximum-pool-size: 10
+  flyway:
+    enabled: true
+    user: app_migrate                     # DDL 은 app_migrate 만 (레퍼런스 원칙 5)
+    password: ${APP_MIGRATE_PASSWORD:}
+    schemas: ops
+    default-schema: ops
+    locations: classpath:db/migration
+  jpa:
+    hibernate:
+      ddl-auto: validate                  # 어떤 프로파일에서도 update/create 없음 (레퍼런스 7.1)
+    open-in-view: false
+    properties:
+      hibernate:
+        default_schema: ops
+        jdbc.time_zone: UTC
+  jackson:
+    property-naming-strategy: SNAKE_CASE  # 규약 0절. DTO 에 @JsonProperty 쓰지 않는다
+    default-property-inclusion: always
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      fail-on-unknown-properties: false
+
+server:
+  servlet:
+    session:
+      timeout: 30m
+      cookie:
+        name: SESSION
+        http-only: true
+        same-site: lax
+
+aml:
+  ai:
+    base-url: ${AI_BASE_URL:http://localhost:8000}
+    internal-key: ${AI_INTERNAL_KEY:}
+    timeout-seconds: 90
+    max-batch: 500
+  dataset-dir: ${AML_DATASET_DIR:./data}
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: alpha
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.team.aml: INFO
+
+---
+# local — 개발. swagger, DevUserSeeder, mock-login, CORS(5173), MockAiClient
+spring:
+  config:
+    activate:
+      on-profile: local
+aml:
+  ai:
+    mock: true                            # AI 서버 없이 고정 응답. 진짜 서버 붙이면 false
+  dev-users:
+    enabled: true
+    password: ${DEV_USER_PASSWORD:}
+  cors:
+    allowed-origin: http://localhost:5173
+logging:
+  level:
+    com.team.aml: DEBUG
+    org.springframework.security: INFO
+
+---
+# test — Testcontainers 가 datasource 를 주입한다
+spring:
+  config:
+    activate:
+      on-profile: test
+aml:
+  ai:
+    mock: true
+  dev-users:
+    enabled: false
+
+---
+# prod — swagger 끔, 쿠키 Secure, CORS 없음, 목업 없음
+spring:
+  config:
+    activate:
+      on-profile: prod
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+aml:
+  ai:
+    mock: false
+  dev-users:
+    enabled: false

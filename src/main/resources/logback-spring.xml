@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- local: 읽기 쉬운 한 줄. prod: JSON 한 줄(logstash encoder). request_id·user_id 는 MDC 에서 자동으로 붙는다 (레퍼런스 8.6) -->
+<configuration>
+    <springProfile name="local,test">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} %-5level [%X{request_id:-}] [%X{user_id:-}] %logger{30} - %msg%n</pattern>
+            </encoder>
+        </appender>
+    </springProfile>
+    <springProfile name="prod">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdcKeyName>request_id</includeMdcKeyName>
+                <includeMdcKeyName>user_id</includeMdcKeyName>
+                <includeMdcKeyName>case_no</includeMdcKeyName>
+            </encoder>
+        </appender>
+    </springProfile>
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

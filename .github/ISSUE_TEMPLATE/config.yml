@@ -1,0 +1,2 @@
+# 빈 이슈는 막고, 템플릿(기능 개발 / 버그 제보) 중 하나로만 열게 한다
+blank_issues_enabled: false

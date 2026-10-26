@@ -1,0 +1,19 @@
+# 환경변수 — 값은 노션 「다자바 환경변수」 페이지에서 관리. 절대 커밋하지 않는다
+.env
+.env.*
+
+# Gradle / build
+.gradle/
+build/
+out/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# 로컬 데이터 (원본 CSV는 리포에 넣지 않는다)
+data/
+*.log

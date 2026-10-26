@@ -1,0 +1,71 @@
+name: ✨ 기능 개발
+description: 새 기능, API, 테이블, 리팩터링 등 개발할 일을 등록합니다.
+title: "[Feat] "
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        이슈 하나 = PR 하나가 되도록 작게 쪼개 주세요. 브랜치는 `feature/{이슈번호}-{짧은설명}` (예: `feature/12-login`).
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 담당 영역
+      description: 어느 패키지 작업인가요? (여러 개면 모두 선택)
+      multiple: true
+      options:
+        - source (원천 데이터)
+        - detection (탐지·룰)
+        - cases (케이스·조사)
+        - str (STR 초안·검증)
+        - user (로그인·권한)
+        - shared (공통 코드)
+        - db (Flyway)
+        - infra (Docker·CI·설정)
+        - docs
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: 🎯 목표
+      description: 이 일이 끝나면 무엇이 가능해지나요? 한두 줄이면 충분합니다.
+      placeholder: 조사역이 케이스를 '에스컬레이션' 상태로 넘길 수 있다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: 📝 할 일
+      description: 체크리스트로 적어 주세요. PR에서 진행 상황을 체크합니다.
+      value: |
+        - [ ] 
+        - [ ] 
+        - [ ] 테스트 (정상 1 + 경계 1 + 실패 1)
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: ✅ 완료 조건
+      description: 리뷰어가 "됐다"고 판단할 기준. API면 요청/응답, DB면 테이블·컬럼을 적어 주세요.
+      placeholder: |
+        - POST /api/v1/cases/{id}/escalate → 200, status=ESCALATED
+        - 이미 종결된 케이스면 409
+
+  - type: input
+    id: flyway
+    attributes:
+      label: 🗄️ Flyway 번호 (DB 변경 시)
+      description: 팀 채팅에서 예약한 번호
+      placeholder: V005
+
+  - type: textarea
+    id: refs
+    attributes:
+      label: 📎 참조 문서 · 안건
+      placeholder: 백엔드 설계 가이드 §4 · 인터페이스 규약 v0.2 · 안건 14
