@@ -61,7 +61,7 @@ flowchart LR
     C -- 통과 --> D{④ 객체 규칙<br/>유스케이스 안}
     D -- "담당 아님" --> E403a[403 NOT_ASSIGNEE]
     D -- "승인자 = 담당 조사역" --> E409s[409 SELF_APPROVAL]
-    D -- "상태 전이 불가" --> E409[409 INVALID_TRANSITION]
+    D -- "상태 전이 불가" --> E409[409 INVALID_CASE_TRANSITION]
     D -- 통과 --> OK[200 / 201]
 
     style E401 fill:#fde7e7,stroke:#c00
