@@ -3,8 +3,8 @@
 거래 데이터에서 자금세탁 의심 거래를 룰과 AI로 찾아 조사역에게 우선순위대로 보여주고, STR(의심거래보고서) 초안을 AI가 쓴 뒤
 코드와 AI가 이중 검증해 승인까지 가는 내부 업무 시스템. Spring Boot 3 / Java 17 / PostgreSQL 16 / Flyway.
 
-설계 문서(Claude Docs): 백엔드 설계 가이드·레퍼런스, 인터페이스 규약, 계정·권한 안내, 10/27 회의 안건 — 링크는 팀 노션.
-그림은 [`docs/flows/`](docs/flows/README.md).
+설계 문서(정본)는 팀 노션: 백엔드 설계 가이드·레퍼런스, 인터페이스 규약, 계정·권한 안내, 10/27 회의 안건.
+코드 규칙·구조·기능별 요약과 리뷰 체크리스트는 [`docs/README.md`](docs/README.md), 흐름 그림은 [`docs/flows/`](docs/flows/README.md).
 
 ## 처음 받았을 때 (5분)
 
