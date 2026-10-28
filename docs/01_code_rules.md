@@ -74,7 +74,7 @@
 | # | 규칙 |
 |---|---|
 | 1 | 비밀값(DB 비밀번호, `AI_INTERNAL_KEY`, `DEV_USER_PASSWORD`)은 환경변수로만. `.env`는 커밋 금지, 값은 노션 「.env」 페이지 |
-| 2 | API 응답의 `account_no`는 **뒤 4자리만**(`****9D80`). `account_key`는 내부 키라 그대로 |
+| 2 | API 응답의 `account_no`는 **뒤 4자리만**(`****9D80`). 〔확인 필요〕 `account_key`에 계좌번호가 통째로 들어 있어서 프론트 응답에서 어떻게 할지 미결 — `03_shared.md` §9 |
 | 3 | SQL은 파라미터 바인딩만(네이티브도 `:param`). 문자열 연결로 SQL 만들면 반려. 정렬 컬럼은 화이트리스트 |
 | 4 | 모든 요청 record에 `@Valid` + `@NotNull`/`@Size`. `comment` 2,000자, `investigator_notes` 10,000자, `narrative[].text` 섹션당 5,000자 |
 | 5 | 요청 body로 사용자 ID를 받지 않아요. 현재 사용자는 `CurrentUser`에서 [가이드 §6.3] |

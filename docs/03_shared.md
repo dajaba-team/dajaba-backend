@@ -42,7 +42,7 @@
 | `NotFoundException` 하위 | 404 | 하위 클래스가 정함 (`CASE_NOT_FOUND`, `DRAFT_NOT_FOUND` …) |
 | `DomainException` 하위 전부 | **409** | 클래스 이름 UPPER_SNAKE (`INVALID_CASE_TRANSITION`, `SELF_APPROVAL` …) |
 | 낙관적 락 충돌 | 409 | `CONCURRENT_UPDATE` |
-| `AiClientException` | 502 | AI가 준 코드 그대로 |
+| `AiClientException` | 502 | AI가 준 코드 그대로. **예외:** AI 409 `GENERATION_IN_PROGRESS`는 `AiClient`가 409 `DRAFT_IN_PROGRESS`로 바꿔 보내요("생성 중" ≠ AI 장애) [10/29] |
 | 권한 없음 | 403 | `FORBIDDEN` |
 | 그 밖 | 500 | `INTERNAL_ERROR`, 메시지는 "알 수 없는 오류" 고정, 스택은 로그에만 |
 
@@ -59,7 +59,7 @@
 | 404 | `CASE_NOT_FOUND`, `DRAFT_NOT_FOUND`, `USER_NOT_FOUND`, `EVIDENCE_NOT_FOUND`, `BATCH_RUN_NOT_FOUND`, `ALERT_NOT_FOUND`, `RULE_NOT_FOUND` | 각 기능 | 〔초안〕 |
 | 409 | `INVALID_CASE_TRANSITION`, `CONCURRENT_UPDATE`, `SELF_APPROVAL`, `NARRATIVE_UNCHANGED`, `BATCH_ALREADY_DONE`, `BATCH_RUNNING` | 공통·cases·str·batch | 확정 [안건 24, 레퍼런스 §11.1] |
 | 409 | `DRAFT_NOT_VERIFIED`, `DRAFT_LOCKED`, `DRAFT_SUPERSEDED`, `DRAFT_IN_PROGRESS`, `VERIFY_IN_PROGRESS` | str | 〔초안〕 STR 명세 |
-| 409 | `GENERATION_IN_PROGRESS` | AI가 주는 409. 자동 재시도 안 함 | 확정 [안건 23] |
+| 409 | `GENERATION_IN_PROGRESS` → 프론트엔 `DRAFT_IN_PROGRESS` | AI가 주는 409. 자동 재시도 안 함, `AiClient`가 409로 그대로 전달 | 확정 [안건 23, 10/29] |
 | 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases | 〔초안〕 CASES 명세 "신규 제안" |
 | 400·409 | `DATE_OUT_OF_RANGE`, `INVALID_RULE_PARAMS`, `DATASET_NOT_LOADED`, `NO_ACTIVE_RULES`, `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
 | 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`), `AI_TIMEOUT`, `AI_BAD_RESPONSE` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3], `AI_*`는 〔초안〕 |
@@ -108,11 +108,15 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 
 **공통 동작**
 - 헤더 `X-Internal-Key`(32자 이상 난수, 환경변수), `X-Request-Id`(UUID, `ai_call_logs.request_id`와 같은 값).
-- 타임아웃 90초. MVP는 **동기**(`@Async`·큐·폴링은 고도화).
-- 4xx는 재시도 없이 `AiClientException` → 502.
-- **재시도** — **1회**, 연결 실패·타임아웃(`LLM_UNAVAILABLE`, `MODEL_UNAVAILABLE`, 연결 계열 5xx)만. 4xx·`LLM_INVALID_OUTPUT`·`LLM_BUDGET_EXCEEDED`·`GENERATION_IN_PROGRESS`는 **0회**. [규약 v0.2 §6.2 — 안건 21은 회의 미결이라 현값 유지] 〔레퍼런스 §8.5·SD 명세의 "5xx·타임아웃 1회"는 그 전 표기〕
+- **시간 한도** — 초안·검증·요약처럼 **화면에서 부르는 요청은 전체 90초**(재시도 포함, 호출마다 90초가 아님). 점수 배치는 **500건 묶음 호출 하나마다** 같은 규칙이에요(배치 전체가 90초가 아님). MVP는 **동기**(`@Async`·큐·폴링은 고도화). [10/29]
+- 4xx는 재시도 없이 `AiClientException` → 502. 단 409 `GENERATION_IN_PROGRESS`는 409 `DRAFT_IN_PROGRESS`로. [10/29]
+- **재시도** — 최대 **1회**, 그리고 **위 시간 한도 안에 남은 시간이 있을 때만**. [10/29]
+  - 다시 보내는 것: AI가 **바로 돌려준** `LLM_UNAVAILABLE`·`MODEL_UNAVAILABLE`(AI 쪽 연결 실패), 백엔드가 AI에 **연결 자체를 못 한** 경우(연결 거부 등).
+  - 다시 보내지 않는 것: **백엔드 쪽 응답 대기 타임아웃**(시간을 이미 다 썼고, AI가 아직 처리 중일 수 있음), 4xx·`LLM_INVALID_OUTPUT`·`LLM_BUDGET_EXCEEDED`·`GENERATION_IN_PROGRESS`.
+  - 대상 코드는 규약 v0.2 §6.2 그대로이고, "남은 시간 안에서만"과 "백엔드 타임아웃은 제외"를 10/29에 더했어요. 규약 문구도 다음 규약 변경 때 맞출게요. 〔레퍼런스 §8.5·SD 명세의 "5xx·타임아웃 1회"는 그 전 표기〕
 - AI 쪽 중첩 재시도 금지. [안건 21]
-- 모든 호출은 `ai_call_logs`에 한 줄(엔드포인트, 소요 ms, 상태 코드, 재시도 회차). **실패한 호출만** 요청·응답 본문 저장. [레퍼런스 §3.4]
+- 모든 호출은 `ai_call_logs`에 한 줄 — **메타데이터만**: 엔드포인트, `request_id`, 상태 코드, 에러 코드, 소요 ms, 재시도 회차, 버전, `generation_id`. **요청·응답 본문은 실패해도 저장하지 않아요.** 실패 요청에 조사 메모·보고서 본문이 들어갈 수 있어서예요. 전문은 **AI가 그 요청을 저장했을 때만** AI 쪽 `ai.generations`에서 `request_id`로 찾을 수 있어요(연결 실패·인증 거부처럼 AI가 기록 전에 끝난 요청은 전문이 없어요). [규약 v0.2 §6.4, 10/29] 〔레퍼런스 §3.4의 "실패한 호출만 본문 저장"은 그 전 안〕
+- `AiDtos`는 규약 v0.2 이전 뼈대예요. 실제 연결 전에 `draft_id`·`generation_id`·검증 요청·응답 모양으로 바꿔요(SCRUM-17).
 
 **트랜잭션 패턴 — "DB → HTTP → DB"** 네 군데 [레퍼런스 §8.4]
 1. 점수 요청: `RequestScores` (500개 묶음마다 커밋)
@@ -143,7 +147,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | 점수·케이스 생성 | **허용** — 남은 대상(미처리·실패)만 처리, 새 `BatchRun` 행 | 409 `BATCH_RUNNING` |
 
 - 점수 재시도는 별도 유형(`SCORE_RETRY`) 없이 **점수 배치 재실행**으로 해요. [안건 14·21] 〔SD 명세 v0.1의 `SCORE_RETRY`·`/score/retry` 제안은 회의 결정 이전 안〕
-- 〔확인 필요: 지금 `V004`의 partial unique 인덱스는 네 배치 전부 "성공 후 재실행 금지"라, 새 마이그레이션에서 `LOAD_DATASET`·`RULE_SCAN`으로 좁혀야 해요. SD 명세는 조건에 `RUNNING`도 넣자고 제안. `batch_type` 값도 회의 문서는 `SCORE`, 코드는 `SCORE_REQUEST` — 코드 값을 유지하는 방향. 부분 성공 상태(`PARTIAL`)와 `metrics jsonb` 컬럼 제안도 미결〕
+- 〔확인 필요: 지금 `V004`의 partial unique 인덱스는 네 배치 전부 "성공 후 재실행 금지"라, 새 마이그레이션에서 `LOAD_DATASET`·`RULE_SCAN`으로 좁혀야 해요. 적재는 원천 전체를 한 번 넣는 작업이라 **날짜와 상관없이** 성공 1회·실행 1개로 막아야 해요(적재일이 다르면 같은 키가 아님). 멈춘 `RUNNING`을 정리한 뒤 이전 작업이 늦게 끝나도 새 실행을 덮어쓰지 않는 조건도 필요해요(노션 미결 4번). SD 명세는 조건에 `RUNNING`도 넣자고 제안. `batch_type` 값도 회의 문서는 `SCORE`, 코드는 `SCORE_REQUEST` — 코드 값을 유지하는 방향. 부분 성공 상태(`PARTIAL`)와 `metrics jsonb` 컬럼 제안도 미결〕
 
 ## 7. 사람이 보는 번호 (`DisplayNumber`) [레퍼런스 §8.7]
 
@@ -164,4 +168,4 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 ## 9. 마스킹 [레퍼런스 §10-2]
 
 - API 응답의 계좌번호는 **뒤 4자리만** (`****9D80`). 응답 record에서 처리. 전체 번호는 ADMIN 내보내기에만.
-- `account_key`는 내부 키라 그대로 보내요(CASES·SD 명세 예시도 `account_key`와 마스킹된 `account_no`를 같이 보냄).
+- 〔확인 필요〕 `account_key`(`{bank_id}_{account_no}`)를 그대로 보내면 `account_no`를 마스킹해도 전체 번호가 보여요. 프론트 응답에서 빼거나 마스킹할지, 화면에서 계좌를 무엇으로 가리킬지 정해야 해요(프론트 API 계약서 SCRUM-21). 지금은 합성 데이터라 당장 위험은 없지만, 실데이터 기준으로 정해 둬요. → [노션 미결](https://app.notion.com/p/4077fbce53048094a838f49ca1bde5d4) 1번

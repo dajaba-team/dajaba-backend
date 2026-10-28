@@ -75,7 +75,7 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 | 13 | 초안 수정 | `PUT /str-drafts/{draft_id}/revisions` | ○ (담당만, ACTIVE·승인 대기 아님) | — | — |
 | 14 | 검증 | `POST /str-drafts/{draft_id}/verify` | ○ (담당만) | — | — |
 | 15 | 승인 요청 | `POST /str-drafts/{draft_id}/submit` | ○ (담당만, 현재 본문 검증 통과) | — | — |
-| 16 | 승인 대기 목록 | `GET /approvals` | — | ○ | ○ (조회만) |
+| 16 | 승인 대기 목록 | `GET /approvals` (ADMIN·APPROVER) | — | ○ | ○ (조회만) |
 | 17 | 승인 | `POST /approvals/{draft_id}/approve` | — | ○ (담당 본인 제외) | — |
 | 18 | 반려 (`reason_code` + `comment` 필수) | `POST /approvals/{draft_id}/reject` | — | ○ (담당 본인 제외) | — |
 | 19 | 데이터 적재 | `POST /admin/batches/load` | — | — | ○ |
@@ -103,7 +103,7 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 |---|---|---|---|---|
 | ① | 세션 | 쿠키가 살아 있나 | 401 `UNAUTHENTICATED` | 로그인 화면으로 |
 | ② | CSRF | 쓰기 요청 헤더가 쿠키와 같나 | 403 `CSRF_INVALID` | "다시 시도" |
-| ③ | URL 역할 | `/api/v1/admin/**` ADMIN, `/api/v1/approvals/**` APPROVER, 나머지 `/api/**` 로그인만 | 403 `FORBIDDEN` | 토스트 |
+| ③ | URL 역할 | `/api/v1/admin/**` ADMIN, `/api/v1/approvals/**`는 **메서드별** — `GET` ADMIN·APPROVER, `POST` APPROVER [10/29], 나머지 `/api/**` 로그인만 | 403 `FORBIDDEN` | 토스트 |
 | ④ | 유스케이스 | 담당인가 / 자기 승인인가 / 전이가 되나 / 남이 먼저 바꿨나 | 403 `NOT_ASSIGNEE` · 409 `SELF_APPROVAL` · 409 `INVALID_CASE_TRANSITION` · 409 `NARRATIVE_UNCHANGED` · 409 `CONCURRENT_UPDATE` | 403은 토스트, 409는 메시지 + 새로고침 (`NARRATIVE_UNCHANGED`만 "본문을 고친 뒤 다시 요청") |
 
 ①~③은 `SecurityConfig` 한 파일, ④는 각 유스케이스(객체 단위 — `case.assertAssignedTo(currentUser.id())`). 다른 사람은 `SecurityConfig`를 고칠 일이 거의 없어요.
