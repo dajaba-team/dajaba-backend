@@ -109,7 +109,7 @@
 
 - 브랜치: `feat|fix|refactor|docs|test|chore/{Jira 이슈 키}` (예: `feat/SCRUM-19`). PR 대상은 `develop`.
 - 커밋: `Gitmoji type: 작업 내용`, 명사형 끝맺음 (`✨ feat: 진짜 로그인 구현`).
-- PR: 제목·본문에 Jira 키와 링크. 템플릿 항목(Key Changes · 확인 방법 · To Reviewers · 참조한 문서 · 체크리스트) 채우기.
+- PR: 제목·본문에 Jira 키와 링크. 템플릿 항목(Jira · Key Changes · 확인 방법 · To Reviewers · 참조한 문서 · 체크리스트) 채우기.
 - **한 가지 일만, 목표 ≤ 400줄**(생성 파일 제외).
 - `TODO`엔 안건 번호: `// TODO(Open-11):`
 - 새 라이브러리는 3줄 사유(유지보수 · 무게 · 라이선스).
