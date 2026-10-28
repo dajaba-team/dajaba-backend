@@ -23,7 +23,7 @@
 3. 스테이징 비우기 → 거래 CSV `COPY … FROM STDIN`
 4. 패턴 파일 파싱(BEGIN~END 블록 = 한 사건)
 5. `INSERT INTO ops.transactions SELECT …` — 시각 파싱, `account_key` 생성, `is_self_transfer` 계산, 패턴 LEFT JOIN
-6. `accounts` → `entities`(중복 제거) → `customer_attributes`
+6. 계좌 파일을 읽어 법인을 뽑고(중복 제거), **DB에는 `entities` → `accounts` → `customer_attributes` 순서로 넣어요.** `accounts.entity_id`가 `entities`를 가리키는 필수 FK라 계좌를 먼저 넣으면 FK에 걸려요(V002). [10/29 설계 점검]
 7. 검증 쿼리 — 하나라도 다르면 실패
 8. 스테이징 비우기, `batch_runs` SUCCEEDED
 
