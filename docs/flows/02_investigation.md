@@ -43,8 +43,8 @@ sequenceDiagram
 
     opt 요약이 없을 때 (또는 새로고침 버튼)
         FE->>CAS: POST /cases/{id}/summary:refresh
-        CAS->>CAS: RefreshCaseSummary — facts 구성 (금액·건수는 코드)
-        CAS->>AI: POST /v1/cases/summary {facts} (AiClient, 트랜잭션 밖, ≤90초)
+        CAS->>AI: POST /v1/cases/summary {경보·근거 거래 ID} (AiClient, 트랜잭션 밖, ≤90초)
+        note over AI: facts는 AI가 원천을 읽어 계산 — 초안과 같은 규칙(안건 23)
         AI-->>CAS: {summary_text, model, tokens}
         CAS->>DB: INSERT case_summaries, ai_call_logs
         CAS-->>FE: 201 {summary}

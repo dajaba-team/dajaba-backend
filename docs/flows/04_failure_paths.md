@@ -95,11 +95,11 @@ sequenceDiagram
     Inv->>FE: "초안 생성"
     FE->>STRC: POST /cases/{id}/str-drafts
     STRC->>REQ: RequestStrDraft(caseId)
-    REQ->>DB: facts 읽기 (읽기만)
-    REQ->>AIC: createDraft(facts)
+    REQ->>DB: 케이스·경보·reasons 읽기 (읽기만), draft_id 선발급
+    REQ->>AIC: createDraft(draftRequest) — facts는 AI가 계산(안건 23)
     AIC->>AI: POST /v1/str/drafts (타임아웃 90초)
     alt 서버 다운
-        AI--xAIC: connection refused (재시도 2회 후)
+        AI--xAIC: connection refused (재시도 1회 후 — 안건 21 현값)
     else 90초 초과
         AI--xAIC: timeout
     else AI가 500/502 반환
