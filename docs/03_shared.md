@@ -85,7 +85,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | 문서 | springdoc, `local` 프로파일에서만 `/swagger-ui.html` |
 | 상세 응답 | 화면 하나에 요청 하나 — 케이스 상세는 경보·점수·요약·초안·이력을 한 번에, 거래 목록만 따로 페이징 |
 
-**목록 응답 모양** — `{ "items": [...], "page": 0, "size": 20, "total": 143 }`. 목록 API는 `PageResponse.from(page)`로 반환해요. 전체 페이지 수는 프론트가 `ceil(total / size)`로 계산해요. [레퍼런스 §12] 〔코드를 이 모양으로 맞추는 중 — SCRUM-39, 머지 전〕
+**목록 응답 모양** — `{ "items": [...], "page": 0, "size": 20, "total": 143 }`. 목록 API는 `PageResponse.from(page)`로 반환해요. 전체 페이지 수는 프론트가 `ceil(total / size)`로 계산해요. [레퍼런스 §12] 〔코드를 이 모양으로 맞춤 — SCRUM-39〕
 
 **시각 표기** 〔제안〕 — 감사 시각은 UTC `Z`를 붙이고, 원천 거래 시각은 시간대 없이. `01_code_rules.md` §5.
 
