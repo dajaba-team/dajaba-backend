@@ -37,6 +37,7 @@ dependencies {
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:postgresql")
     testImplementation("com.tngtech.archunit:archunit-junit5:1.3.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver")   // AiClient 단위 테스트 (SCRUM-17 D4)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
