@@ -192,4 +192,26 @@ class StrDraftTest {
         assertThat(draft.getFacts()).isEqualTo(facts());
     }
 
+    // 9: 금지 전이 — 잠긴(승인된) 초안은 대체할 수 없다
+    @Test
+    void 잠긴_초안은_대체할_수_없다() {
+        StrDraft draft = newDraft();
+        draft.lock();
+
+        assertThatThrownBy(draft::supersede)
+                .isInstanceOf(DraftLockedException.class);
+        assertThat(draft.getStatus()).isEqualTo(StrDraftStatus.LOCKED);   // 상태도 그대로
+    }
+
+    // 10: 금지 전이 — 대체된 초안은 잠글 수 없다
+    @Test
+    void 대체된_초안은_잠글_수_없다() {
+        StrDraft draft = newDraft();
+        draft.supersede();
+
+        assertThatThrownBy(draft::lock)
+                .isInstanceOf(DraftLockedException.class);
+        assertThat(draft.getStatus()).isEqualTo(StrDraftStatus.SUPERSEDED);
+    }
+
 }

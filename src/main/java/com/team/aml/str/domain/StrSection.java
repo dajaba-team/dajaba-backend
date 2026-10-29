@@ -4,5 +4,8 @@ package com.team.aml.str.domain;
 public enum StrSection {
     SUMMARY,
     WHO,
-    HOW
+    WHAT_WHEN_WHERE,
+    HOW,
+    WHY_SUSPICIOUS,
+    CONCLUSION
 }

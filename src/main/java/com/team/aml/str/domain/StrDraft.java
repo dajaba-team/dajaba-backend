@@ -72,6 +72,7 @@ public class StrDraft {
     }
     /** lock이면 거부. */
     public void lock() {
+        requireActive();
         this.status = StrDraftStatus.LOCKED;
     }
 
@@ -80,7 +81,15 @@ public class StrDraft {
      * 같은 케이스에서 초안을 다시 만들었거나, 초안이 있는 케이스가 종료될 때.
      */
     public void supersede() {
+        requireActive();
         this.status = StrDraftStatus.SUPERSEDED;
+    }
+
+    /** 금지 전이 상태 방지 */
+    public void requireActive(){
+        if (status != StrDraftStatus.ACTIVE){
+            throw new DraftLockedException(status);
+        }
     }
 
     /** 지금 본문: 수정본이 없으면 AI 원문, 있으면 현재 수정본의 "고친 후". */
