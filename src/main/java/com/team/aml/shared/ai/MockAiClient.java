@@ -27,7 +27,7 @@ public class MockAiClient implements AiClient {
     }
 
     @Override
-    public ScoresResponse scores(List<AlertPayload> alerts) {
+    public ScoresResponse scores(long batchRunId, List<AlertPayload> alerts) {
         List<ScoreResult> out = new ArrayList<>();
         for (AlertPayload a : alerts) {
             double score = 0.05 + (Math.abs(a.alertId().hashCode()) % 90) / 100.0;   // 0.05 ~ 0.94
@@ -40,7 +40,7 @@ public class MockAiClient implements AiClient {
             raw.putArray("evidence_transaction_ids");
             raw.putArray("reasons");
             out.add(new ScoreResult(a.alertId(), score, band, "OK", "mock-0.0.1",
-                    raw.get("prediction_id").asText(), raw.get("produced_at").asText(), raw));
+                    raw.get("prediction_id").asText(), raw.get("produced_at").asText(), null, raw));
         }
         return new ScoresResponse(out);
     }
@@ -48,6 +48,7 @@ public class MockAiClient implements AiClient {
     @Override
     public StrDraftResponse createDraft(StrDraftRequest request) {
         String draftId = "DRF-mock-" + UUID.randomUUID().toString().substring(0, 6);
+        String generationId = "GEN-mock-" + UUID.randomUUID().toString().substring(0, 6);
         ObjectNode facts = om.createObjectNode().put("subject_entity_id", request.caseId()).put("transaction_count", 0);
         var narrative = om.createArrayNode();
         for (String s : List.of("SUMMARY", "WHO", "WHAT_WHEN_WHERE", "HOW", "WHY_SUSPICIOUS", "CONCLUSION")) {
@@ -55,11 +56,12 @@ public class MockAiClient implements AiClient {
             sec.putArray("evidence_ids");
             narrative.add(sec);
         }
-        ObjectNode raw = om.createObjectNode().put("draft_id", draftId).put("generator_version", "mock-0.0.1")
-                .put("produced_at", Instant.now().toString());
+        ObjectNode raw = om.createObjectNode().put("draft_id", draftId).put("generation_id", generationId)
+                .put("generator_version", "mock-0.0.1").put("produced_at", Instant.now().toString());
         raw.set("facts", facts);
         raw.set("narrative", narrative);
-        return new StrDraftResponse(draftId, "mock-0.0.1", raw.get("produced_at").asText(), facts, narrative, raw);
+        return new StrDraftResponse(draftId, generationId, "mock-0.0.1", raw.get("produced_at").asText(),
+                facts, narrative, raw);
     }
 
     @Override

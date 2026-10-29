@@ -18,9 +18,14 @@ public final class AiDtos {
                                String typologyHint, String windowStart, String windowEnd, String referenceTs,
                                List<Long> transactionIds, JsonNode ruleFacts) {}
 
-    /** POST /v1/scores 응답 (규약 3절). score_band 는 백엔드가 계산할 예정(안건 2) — 그때까지 AI 값 그대로. */
+    /**
+     * POST /v1/scores 응답 항목 (규약 3절). score_band 는 백엔드가 계산할 예정(안건 2) — 그때까지 AI 값 그대로.
+     * 항목 실패는 data_quality_status="FAILED" + score=null + failure_code (4값, 아니면 null). SCORED/FAILED 판단은
+     * data_quality_status 로 — 별도 status 필드를 두지 않는다(AI 가 보내는 건 data_quality_status). [10/29 SCRUM-41]
+     */
     public record ScoreResult(String alertId, Double score, String scoreBand, String dataQualityStatus,
-                              String modelVersion, String predictionId, String producedAt, JsonNode raw) {}
+                              String modelVersion, String predictionId, String producedAt,
+                              String failureCode, JsonNode raw) {}
 
     public record ScoresResponse(List<ScoreResult> scores) {
         public ScoresResponse { if (scores == null) scores = List.of(); }
@@ -30,9 +35,9 @@ public final class AiDtos {
     public record StrDraftRequest(String caseId, JsonNode alert, JsonNode score, JsonNode entity, JsonNode customer,
                                   String investigatorNotes, JsonNode priorAlerts) {}
 
-    /** POST /v1/str/drafts 응답 (규약 5.2). narrative 원문은 raw 에, 추출 컬럼 3개만 따로. */
-    public record StrDraftResponse(String draftId, String generatorVersion, String producedAt, JsonNode facts,
-                                   JsonNode narrative, JsonNode raw) {}
+    /** POST /v1/str/drafts 응답 (규약 5.2). generation_id 는 AI 가 발급(str_drafts 에 저장). narrative 원문은 raw 에. */
+    public record StrDraftResponse(String draftId, String generationId, String generatorVersion, String producedAt,
+                                   JsonNode facts, JsonNode narrative, JsonNode raw) {}
 
     /** POST /v1/str/verify 요청 (규약 6.1). */
     public record VerifyRequest(String draftId, JsonNode facts, JsonNode narrative) {}

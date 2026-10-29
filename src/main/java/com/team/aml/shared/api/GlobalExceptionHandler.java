@@ -26,7 +26,7 @@ import java.util.Map;
  *  *NotFoundException              → 404 <CLASS_NAME>
  *  DomainException 전부            → 409 <CLASS_NAME>
  *  OptimisticLock                  → 409 CONCURRENT_UPDATE
- *  AiClientException               → 502 AI 가 준 코드 그대로
+ *  AiClientException               → e.httpStatus() (기본 502 AI 코드 그대로, 409 GENERATION_IN_PROGRESS→DRAFT_IN_PROGRESS)
  *  AccessDenied (403)              → 403 FORBIDDEN
  *  그 외                            → 500 INTERNAL_ERROR (메시지 고정, 스택은 로그에만)
  */
@@ -72,8 +72,8 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(AiClientException.class)
     public ResponseEntity<ErrorResponse> ai(AiClientException e) {
-        log.warn("ai call failed: {} - {}", e.code(), e.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+        log.warn("ai call failed: {} ({})", e.code(), e.httpStatus());   // D5: AI 응답 message 는 로그에 남기지 않는다
+        return ResponseEntity.status(e.httpStatus())
                 .body(ErrorResponse.of(e.code(), e.getMessage(), e.details()));
     }
 
