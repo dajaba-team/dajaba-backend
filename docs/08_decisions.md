@@ -34,6 +34,7 @@
 | 10/29 | AI 409 `GENERATION_IN_PROGRESS`는 프론트에 409 `DRAFT_IN_PROGRESS`로 (일괄 502 아님) | "생성 중"과 AI 장애를 화면이 구분해야 함 | 설계 피드백 5 |
 | 10/29 | `/approvals/**` 권한은 메서드별 — GET ADMIN·APPROVER, POST APPROVER (`SecurityConfig`는 SCRUM-19에서 반영) | 권한표(ADMIN 조회 가능)와 코드가 달랐음 | 설계 피드백 5, 계정·권한 16~18번 |
 | 10/29 | `ai_call_logs`는 메타데이터만, 실패해도 요청·응답 본문 저장 안 함. 전문은 AI가 그 요청을 저장했을 때만 AI 쪽에 있음 | 실패 요청에 조사 메모·본문이 들어갈 수 있음, 규약 §6.4와 맞춤 | 설계 피드백 6 |
+| 10/29 | 점수 응답은 경보별 실패 — 없는 거래 ID는 그 경보만 `FAILED`, `failure_code` 4값 중 `COMPUTE_ERROR`만 재처리. 백엔드는 `alerts.score_failure_code`, 실패 경보는 `alert_scores` 행 없음, `data_quality_status`는 `payload`. AI DB 장애는 503 `DB_UNAVAILABLE` → `AiClient` 재시도 1회 대상에 추가. 점수는 경보당 1건(이력은 AI `ai.predictions`) | 500건 중 1건 때문에 전체가 실패하면 안 됨, 다시 보내도 같은 실패는 걸러야 함 | 준혁 답(10/29 슬랙), AI SCRUM-41 |
 | 10/29 | 목록 응답은 `{items, page, size, total}` — 코드를 문서에 맞춤, `total_pages` 없음 | 문서가 전부 이 모양, 쓰는 코드가 아직 없어 지금 바꾸는 비용이 0 | 레퍼런스 §12, SCRUM-39 (머지 전) |
 
 ## 2. 문서끼리 다른 곳 — 이 docs에서 고른 것
@@ -69,14 +70,14 @@
 | 6 | 은행 ID 앞 0 | 두 파일 형식이 달라 조인이 100% 실패 vs "앞 0 보존" 문구 | 준혁 |
 | 7 | 통화 표기 | DB는 IBM 원문 이름, STR facts는 ISO 코드. 백엔드 화면·`rule_facts`는? 매핑표 관리자는? | 준혁·진희 |
 | 8 | 메모 저장 방식 | NOTE 행 vs `case_note_history` (안건 16 A/B 이름 엇갈림) | 지윤·진희 |
-| 9 | `alert_scores`·`access_logs`·`source_files` 마이그레이션 번호 | 미배정 | 준혁·진희 |
+| 9 | `alert_scores`·`access_logs`·`source_files` 마이그레이션 번호 | 미배정 — 점수 테이블·`score_failure_code`는 준혁이 V007 피해서 지정 예정(10/29) | 준혁·진희 |
 | 10 | `access_logs.action` 값 | 레퍼런스 5개 + 계정·권한의 USER_CREATED·ROLE_CHANGED·USER_DEACTIVATED | 진희 |
 | 11 | `user` 관리 API 메서드 | 계정·권한은 PATCH, 레퍼런스 §12는 "PATCH 없음" | 진희 |
 | 12 | 감사 시각 표기 | 응답에서 UTC `Z`를 붙일지 (원천 거래 시각은 시간대 없음 — 확정). 〔제안〕 붙이자 — `01_code_rules.md` §5 | 공통 |
 | 13 | "신규 제안" 에러 코드 | SD 명세 6개, CASES 명세 3개 | 진희 확인 후 반영 |
 | 14 | 적재 검증값 | 계좌 수 518,573 vs 518,581, 패턴 거래 3,209 재확인 | 준혁 |
 | 15 | 룰 세부 | R06 대체 룰, R05 수치 한도, R08 기준, 룰 스캔 날짜 범위, 섞인 통화의 `rule_facts` | 준혁·준영 |
-| 16 | 점수 공개 실패 코드(`failure_code`) | ML 규약 미확인 표 | 준혁·진희·준영 |
+| 16 | ~~점수 공개 실패 코드(`failure_code`)~~ | 10/29 준혁 확인으로 확정(§1 표). 규약 §3·§6.3은 규약 변경 요청 | 진희 |
 | 17 | 상세 화면에 현재 초안을 합치는 위치 | cases → str 의존 금지 | 지윤·채영·진희 |
 | 18 | 서식 회의 (승인 이후·PDF·7항목·열람 제한·DB 변경) | **회의 전**, 의견 칸 비어 있음 | 전원 |
 | 19 | `account_key`로 계좌번호 마스킹이 무력화됨 | 프론트 응답에서 뺄지·마스킹할지, 화면 계좌 식별자 (설계 피드백 1) | 진희·지윤·채영 |

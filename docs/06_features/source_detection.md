@@ -55,9 +55,9 @@
 
 **테이블** [레퍼런스 §3.2]
 - `rules` — `rule_id`(`R02_FAN_IN_24H`), `version`(기준값 바뀔 때마다 +1, `(rule_id, version)` unique), `name`, `typology_hint`, `params jsonb`, `is_active`. 감사 4. 끈 룰도 행은 살려 둬요(과거 경보가 가리킴).
-- `alerts` — `alert_no`(unique), `batch_run_id`, `rule_ref_id`(어느 버전의 룰), `account_key`, `entity_id`(null 가능), `window_start`, `window_end`, `reference_ts`, `rule_facts jsonb`, `batch_date`, `score_status`(PENDING/SCORED/FAILED), `case_opened`. unique `(rule_ref_id, account_key, window_start)`. 만든 뒤 바뀌는 건 `score_status`·`case_opened` 둘뿐.
+- `alerts` — `alert_no`(unique), `batch_run_id`, `rule_ref_id`(어느 버전의 룰), `account_key`, `entity_id`(null 가능), `window_start`, `window_end`, `reference_ts`, `rule_facts jsonb`, `batch_date`, `score_status`(PENDING/SCORED/FAILED), `score_failure_code`(null 가능 — FAILED일 때 AI `failure_code`, 10/29), `case_opened`. unique `(rule_ref_id, account_key, window_start)`. 만든 뒤 바뀌는 건 `score_status`·`score_failure_code`·`case_opened`뿐.
 - `alert_transactions` — 경보 ↔ 거래 N:M, 복합 PK.
-- `alert_scores` — `score`(null 가능), `threshold`(AI 추천값), `model_version`, `feature_version`, `prediction_id`, `data_quality_status`, `produced_at`, `payload jsonb`(응답 원문). **MVP는 `alert_id` UNIQUE 유지**, 다른 모델로 재채점은 고도화. [안건 2·4·5·21, ML 규약 §6.3] 〔레퍼런스·SD 명세의 "경보 하나에 점수 여러 행"은 그 전 안〕
+- `alert_scores` — `score`(null 가능), `threshold`(AI 추천값), `model_version`, `feature_version`, `prediction_id`, `produced_at`, `payload jsonb`(응답 원문 — `data_quality_status`도 여기서 읽어요, 10/29 준혁). **MVP는 `alert_id` UNIQUE 유지**, 다른 모델로 재채점은 고도화. [안건 2·4·5·21, ML 규약 §6.3] 〔레퍼런스·SD 명세의 "경보 하나에 점수 여러 행"은 그 전 안〕
 
 **룰 8개** [안건 20, 규약 §2]
 | 번호 | 룰 | 지금 |
@@ -82,8 +82,12 @@
 **룰 스캔** [레퍼런스 §11.3, SD 명세 §5 〔초안〕] — 룰 전체가 **한 트랜잭션**(하나라도 실패하면 그 실행의 경보 전부 롤백 → 다시 돌려도 두 번 생기지 않음). `alert_no`는 시퀀스, `score_status = PENDING`, `case_opened = false`. 경보 단위는 계좌 × 룰 × 하루 창(00:00:00~23:59:59) — 이름은 "24H"지만 자정에 걸친 패턴은 못 잡아요(받아들인 한계).
 
 **점수 요청** [레퍼런스 §11.1, 안건 2·4·14·21, ML 규약 §2·§3·§6]
-- 대상: 그날 `PENDING`(재실행 땐 남은 `PENDING`·`FAILED`) 경보를 **500개씩** `POST /v1/scores`. AI 호출은 트랜잭션 밖, **묶음마다 커밋**.
-- 응답 처리: 점수가 있으면 `alert_scores` 한 행 + `SCORED`. 아래는 `FAILED` — 응답에 그 `alert_id`가 없음, `score = null`, `data_quality_status = FAILED`, 묶음 호출 실패. 〔초안 — SD 명세 §6〕
+- 대상: 그날 `PENDING`(재실행 땐 남은 `PENDING`과, `FAILED` 중 `score_failure_code`가 **NULL(묶음 실패)이거나 `COMPUTE_ERROR`**인 것 — 10/29) 경보를 **500개씩** `POST /v1/scores`. AI 호출은 트랜잭션 밖, **묶음마다 커밋**.
+- 응답 처리 [10/29 준혁 확인, AI SCRUM-41]:
+  - 점수가 있으면(`OK`·`SHORT_HISTORY`·`MISSING_INPUT`) `alert_scores` 한 행 + `SCORED`. 이력 부족·일부 결측도 **실패가 아니에요**.
+  - 항목이 `FAILED`면 `score_status = FAILED` + `score_failure_code` 저장, `alert_scores` 행은 만들지 않아요. 없는 거래 ID도 그 경보만 이렇게 와요(HTTP 200, 나머지는 정상).
+  - 응답에 그 `alert_id`가 없거나 묶음 호출이 실패하면(503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`은 1회 재시도 뒤) `FAILED` + 코드 NULL. JSON 형식 오류는 요청 전체 400.
+  - `failure_code` 4값 — `TRANSACTION_NOT_FOUND`·`HISTORY_NOT_SUPPORTED`·`REQUIRED_INPUT_MISSING`은 다시 보내도 같은 결과라 재처리하지 않아요. `COMPUTE_ERROR`만 재처리.
 - **FAILED는 저위험이 아니에요.** 0점·LOW로 바꾸지 않고, 케이스 생성 대상에서 빠지고, 지우지 않아요. [안건 4]
 - `score_status`(백엔드 처리 상태)와 `data_quality_status`(AI 입력 품질: OK·SHORT_HISTORY·MISSING_INPUT·FAILED)는 **다른 값**이에요. 합치지 않아요. [ML 규약 §4]
 - **`score_band`(HIGH/MEDIUM/LOW)는 AI가 주지 않아요.** AI는 `score`와 추천 `threshold`만 주고, 등급은 **cases의 `CasePolicy`**가 계산해요. [안건 2] 〔SD 명세 §13-8의 "등급 경계는 detection"은 그 전 안〕
@@ -103,4 +107,4 @@
 
 **관리자 API** 〔초안 — SD 명세〕 룰 스캔 `POST /admin/batches/rule-scan?date=`, 점수 `POST /admin/batches/score?date=`, 경보 점검 `GET /admin/alerts`(+`/{alert_no}`, `/{alert_no}/transactions` — 열람 기록), 룰 `GET /admin/rules`·`PUT /admin/rules/{rule_id}/params`(새 버전 행 추가 + 이전 행 비활성을 한 트랜잭션, `(rule_id, version)` unique로 409).
 
-**〔확인 필요〕** 룰 스캔 날짜 범위(9/1~9/10만 일반 스캔?), 통화가 섞인 창의 `rule_facts`, 목업 점수 → 실제 모델 전환 때 재채점 방법, `typology_hint` null 허용·`rule_facts` 빈 객체 세칙(ML 규약 미확인 표), 공개 실패 코드(`failure_code`).
+**〔확인 필요〕** 룰 스캔 날짜 범위(9/1~9/10만 일반 스캔?), 통화가 섞인 창의 `rule_facts`, 목업 점수 → 실제 모델 전환 때 재채점 방법, `typology_hint` null 허용·`rule_facts` 빈 객체 세칙(ML 규약 미확인 표).
