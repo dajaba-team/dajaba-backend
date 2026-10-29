@@ -1,3 +1,9 @@
+## 🔗 Jira
+> 관련 이슈 키와 링크를 적어주세요. 브랜치 이름에도 같은 키를 써요 (`feat/SCRUM-00`).
+- [SCRUM-00](https://dajaba.atlassian.net/browse/SCRUM-00) — 이슈 제목
+
+<br>
+
 ## ⭐ Key Changes
 > 핵심 변경 사항을 적어주세요.
 1.
