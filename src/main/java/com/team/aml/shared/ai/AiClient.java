@@ -14,7 +14,7 @@ import java.util.List;
  * 재시도 1회는 HTTP 5xx 여부가 아니라 코드/원인으로 — LLM_UNAVAILABLE·MODEL_UNAVAILABLE·503 DB_UNAVAILABLE,
  * 또는 연결 거부(ConnectException)만. 그 밖의 5xx·4xx·타임아웃·409 는 재시도 없이 AiClientException (규약 6.2).
  * AI 409 GENERATION_IN_PROGRESS → 409 DRAFT_IN_PROGRESS. 호출은 트랜잭션 밖에서 (레퍼런스 8.4).
- * ai_call_logs 기록은 SCRUM-18 (지금은 메타데이터 로그만, 본문 로그 금지 — SCRUM-17 D5).
+ * 실제 HTTP 시도는 ai_call_logs 에 별도 트랜잭션으로 메타데이터만 기록한다. 본문 저장 금지, mock 은 기록하지 않는다.
  */
 public interface AiClient {
 

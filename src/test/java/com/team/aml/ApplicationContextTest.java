@@ -12,7 +12,7 @@ import org.testcontainers.utility.MountableFile;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * "빈 테스트 1개": Testcontainers PostgreSQL 16 + Flyway V001~V004 + ddl-auto=validate 로 컨텍스트가 뜨는지.
+ * "빈 테스트 1개": Testcontainers PostgreSQL 16 + Flyway V001~V004 + V007 + ddl-auto=validate 로 컨텍스트가 뜨는지.
  * 이게 통과하면 엔티티와 테이블이 맞는 것이다. Docker 가 있어야 돈다 (H2 는 쓰지 않는다 — 레퍼런스 6.3).
  */
 @Testcontainers

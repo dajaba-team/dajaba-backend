@@ -36,6 +36,9 @@
 | 10/29 | `ai_call_logs`는 메타데이터만, 실패해도 요청·응답 본문 저장 안 함. 전문은 AI가 그 요청을 저장했을 때만 AI 쪽에 있음 | 실패 요청에 조사 메모·본문이 들어갈 수 있음, 규약 §6.4와 맞춤 | 설계 피드백 6 |
 | 10/29 | 점수 응답은 경보별 실패 — 없는 거래 ID는 그 경보만 `FAILED`, 재처리는 `FAILED` 중 `score_failure_code`가 NULL(묶음 503 — 응답 자체가 없음)이거나 `COMPUTE_ERROR`인 경보만. 백엔드는 `alerts.score_failure_code`, 실패 경보는 `alert_scores` 행 없음, `data_quality_status`는 `payload`. AI DB 장애는 503 `DB_UNAVAILABLE` → `AiClient` 재시도 1회 대상에 추가. 점수는 경보당 1건(이력은 AI `ai.predictions`) | 500건 중 1건 때문에 전체가 실패하면 안 됨, 다시 보내도 같은 실패는 걸러야 함 | 준혁 답(10/29 슬랙), AI SCRUM-41 |
 | 10/29 | 목록 응답은 `{items, page, size, total}` — 코드를 문서에 맞춤, `total_pages` 없음 | 문서가 전부 이 모양, 쓰는 코드가 아직 없어 지금 바꾸는 비용이 0 | 레퍼런스 §12, SCRUM-39 |
+| 10/30 | `ai_call_logs`는 **시도 1번 = 1행**(재시도는 같은 `request_id`에 `attempt` 1·2). 본문 컬럼 없음, FK 없음, `created_at`만(베이스 클래스 상속 안 함). `target_id`는 `varchar(64)`, `target_type`은 `BATCH_RUN`·`CASE`·`DRAFT` CHECK(health는 null). `ai_version`은 엔드포인트별로 고정(`03_shared` §5 표) | `AiClient` 시그니처를 안 바꾸고 요청 DTO의 `batchRunId`·`caseId`·`draftId`에서 대상을 꺼냄 — 팀원 호출부 영향 없음 | SCRUM-18 |
+| 10/30 | `ai_call_logs` 기록은 **별도 트랜잭션**(`REQUIRES_NEW`, 별도 빈)으로, AI 응답을 받은 **호출 스레드에서**. 기록이 실패해도 AI 결과·예외는 그대로(호출부에서 삼킴) | 바깥 작업이 롤백돼도 실패 행이 남아야 함(`flows/04`), 커밋 때 예외는 프록시 밖으로 나옴 | SCRUM-18 |
+| 10/30 | V007(`ai_call_logs`)은 PR을 지금 열고, **머지는 V005·V006 뒤** | 번호가 낮은 파일이 나중에 들어오면 이미 V007이 적용된 DB에서 Flyway가 기동을 거부함 | SCRUM-18, `05_flyway` §3 |
 
 ## 2. 문서끼리 다른 곳 — 이 docs에서 고른 것
 
@@ -55,6 +58,7 @@
 | 요약 갱신 경로 | `POST /cases/{id}/summary:refresh` [계정·권한] | `POST /cases/{case_no}/refresh-summary` [CASES 명세 v0.5] | B 〔초안〕 |
 | 메모 경로 | `POST /cases/{id}/notes` [계정·권한] | `PUT /cases/{case_no}/notes` [CASES 명세] | B 〔초안〕 |
 | 마이그레이션 번호 | V007 `alert_scores` [레퍼런스 §7.3] | V007 `ai_call_logs` [README, WBS] | B |
+| `ai_call_logs` 본문·대상 | `request_body`·`response_body`(실패만), `target_id bigint` [레퍼런스 §3.4] | 본문 컬럼 없음, `target_id varchar(64)` [10/29, SCRUM-18] | B 〔레퍼런스 §3.4 수정 요청〕 |
 
 ## 3. 미결 — 정해야 하는 것
 
