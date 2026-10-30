@@ -7,10 +7,7 @@ import com.team.aml.user.domain.User;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -228,6 +225,29 @@ class StrDraftTest {
         assertThatThrownBy(draft::lock)
                 .isInstanceOf(DraftLockedException.class);
         assertThat(draft.getStatus()).isEqualTo(StrDraftStatus.SUPERSEDED);
+    }
+
+    // 11: AI 원문 단락이 섹션마다 한 번씩이 아니면 초안을 만들지 않는다
+    @Test
+    void 단락이_섹션마다_한_번씩이_아니면_초안을_만들지_않는다() {
+        List<NarrativeSection> missing = aiNarrative().subList(1, StrSection.values().length); // SUMMARY 빠짐
+
+        List<NarrativeSection> duplicated = new ArrayList<>(aiNarrative());
+        duplicated.add(new NarrativeSection(StrSection.WHO, "비밀 문장", List.of(1L)));       // WHO 두 번
+
+        List<NarrativeSection> swapped = new ArrayList<>(aiNarrative());
+        swapped.set(0, new NarrativeSection(StrSection.WHO, "비밀 문장", List.of(1L)));       // 개수는 맞는데 SUMMARY 대신 WHO
+
+        for (List<NarrativeSection> bad : List.of(missing, duplicated, swapped)) {
+            assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), bad))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .message()
+                    .doesNotContain("문장");   // 오류 메시지에 본문 글자를 넣지 않는다
+        }
+        assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), missing))
+                .hasMessageContaining("SUMMARY");
+        assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), duplicated))
+                .hasMessageContaining("WHO");
     }
 
 }
