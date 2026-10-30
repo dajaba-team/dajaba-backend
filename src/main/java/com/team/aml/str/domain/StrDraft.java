@@ -2,8 +2,10 @@ package com.team.aml.str.domain;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Arrays;
 
 /** STR 초안. 상태는 메서드로만 바뀐다(setter 없음). JPA 매핑은 D4에 붙인다. */
 public class StrDraft {
@@ -25,17 +27,37 @@ public class StrDraft {
         this.currentRevision = StrRevision.aiOriginal(aiNarrative); // 수정본 1번 = AI 원문
     }
 
-    public static StrDraft create(Long caseId, String generationId, JsonNode facts,
-                                  List<NarrativeSection> aiNarrative) {
-        return new StrDraft(caseId, generationId, facts, aiNarrative);
-    }
-
     public Long getCaseId() { return caseId; }
     public String getGenerationId() { return generationId; }
     public StrDraftStatus getStatus() { return status; }
     public StrRevision getCurrentRevision() { return currentRevision; }
     public JsonNode getFacts() { return facts.deepCopy(); } // 사실값. 복사본을 돌려준다 — 밖에서 바꿔도 초안의 숫자는 그대로.
 
+    public static StrDraft create(Long caseId, String generationId, JsonNode facts,
+                                  List<NarrativeSection> aiNarrative) {
+        requireEachSectionOnce(aiNarrative);          // ← 만들기 전에 먼저 검사
+        return new StrDraft(caseId, generationId, facts, aiNarrative);
+    }
+
+    /** 섹션마다 정확히 한 번. 오류 메시지에는 개수와 섹션 이름만 넣고 본문 글자는 넣지 않는다. */
+    private static void requireEachSectionOnce(List<NarrativeSection> narrative) {
+        Map<StrSection, Integer> counts = new EnumMap<>(StrSection.class);
+        for (NarrativeSection n : narrative) {
+            counts.merge(n.section(), 1, Integer::sum);   // 섹션별로 몇 번 나왔나 센다
+        }
+        List<StrSection> missing = Arrays.stream(StrSection.values())
+                .filter(s -> !counts.containsKey(s))       // 한 번도 안 나온 섹션
+                .toList();
+        List<StrSection> duplicated = counts.entrySet().stream()
+                .filter(e -> e.getValue() > 1)              // 두 번 이상 나온 섹션
+                .map(Map.Entry::getKey)
+                .toList();
+        if (!missing.isEmpty() || !duplicated.isEmpty()) {
+            throw new IllegalArgumentException("AI 원문 단락은 " + StrSection.values().length
+                    + "개가 각각 한 번씩이어야 한다 (받은 개수 " + narrative.size()
+                    + ", 빠짐 " + missing + ", 중복 " + duplicated + ")");
+        }
+    }
     /**
      * 본문 수정. 고친 단락(단락 이름 → 새 문장)과 수정자를 받아 새 수정본을 만든다.
      * facts는 인자에 없다 — 숫자는 못 고친다.
