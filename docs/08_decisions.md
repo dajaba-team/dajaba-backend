@@ -36,6 +36,7 @@
 | 10/29 | `ai_call_logs`는 메타데이터만, 실패해도 요청·응답 본문 저장 안 함. 전문은 AI가 그 요청을 저장했을 때만 AI 쪽에 있음 | 실패 요청에 조사 메모·본문이 들어갈 수 있음, 규약 §6.4와 맞춤 | 설계 피드백 6 |
 | 10/29 | 점수 응답은 경보별 실패 — 없는 거래 ID는 그 경보만 `FAILED`, 재처리는 `FAILED` 중 `score_failure_code`가 NULL(묶음 503 — 응답 자체가 없음)이거나 `COMPUTE_ERROR`인 경보만. 백엔드는 `alerts.score_failure_code`, 실패 경보는 `alert_scores` 행 없음, `data_quality_status`는 `payload`. AI DB 장애는 503 `DB_UNAVAILABLE` → `AiClient` 재시도 1회 대상에 추가. 점수는 경보당 1건(이력은 AI `ai.predictions`) | 500건 중 1건 때문에 전체가 실패하면 안 됨, 다시 보내도 같은 실패는 걸러야 함 | 준혁 답(10/29 슬랙), AI SCRUM-41 |
 | 10/29 | 목록 응답은 `{items, page, size, total}` — 코드를 문서에 맞춤, `total_pages` 없음 | 문서가 전부 이 모양, 쓰는 코드가 아직 없어 지금 바꾸는 비용이 0 | 레퍼런스 §12, SCRUM-39 |
+| 10/30 | `flows/02`·`flows/05`·`04_auth_user`를 미결 8·11·17, 서식 안건 4 결정에 맞춤 — 상세+현재 초안은 str 조회 유스케이스가 조합(REPEATABLE READ), `case_history` action 동사형, 사용자 관리 `POST /admin/users/{id}/{동사}`, STR 본문 열람은 담당 조사역·승인자만 | 요구사항 정의서를 노션과 대조하다 리포 문서가 옛 내용으로 남은 곳이 나옴 | 백엔드 미결 10/30, 계정·권한 안내 v0.2 |
 
 ## 2. 문서끼리 다른 곳 — 이 docs에서 고른 것
 
