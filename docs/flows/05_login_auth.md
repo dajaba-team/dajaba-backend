@@ -18,7 +18,7 @@ sequenceDiagram
     SEC->>DB: users where login_id (is_active=true)
     alt 없음 / 비밀번호 불일치 / 비활성
         SEC->>DB: access_logs LOGIN_FAIL (user_id null 가능)
-        SEC-->>FE: 401 {code: LOGIN_FAILED}  ⟵ 사유 구분 안 함
+        SEC-->>FE: 401 {error: {code: LOGIN_FAILED, message, details}}  ⟵ 사유 구분 안 함
     else 일치 (BCrypt 12)
         SEC->>SEC: 기존 세션 있으면 끊음 (maximumSessions 1)
         SEC->>DB: access_logs LOGIN_OK
@@ -39,7 +39,7 @@ sequenceDiagram
 
     note over U,DB: 30분 무활동 후
     FE->>SEC: GET /api/v1/cases
-    SEC-->>FE: 401 {code: UNAUTHENTICATED}
+    SEC-->>FE: 401 {error: {code: UNAUTHENTICATED, message, details}}
     FE->>FE: 로그인 화면으로 (현재 경로 기억)
 
     U->>FE: 로그아웃
@@ -52,16 +52,17 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    R[요청] --> A{① 세션 있나}
+    R[요청] --> A{"① 세션 있나"}
     A -- 없음/만료 --> E401[401 UNAUTHENTICATED]
-    A -- 있음 --> B{② CSRF 토큰<br/>쓰기 요청만}
+    A -- 있음 --> B{"② CSRF 토큰<br/>쓰기 요청만"}
     B -- 불일치 --> E403c[403 CSRF_INVALID]
-    B -- 일치 --> C{③ URL 역할<br/>SecurityConfig}
-    C -- "/admin/** 인데 ADMIN 아님<br/>/approvals/** 인데 APPROVER 아님" --> E403[403 FORBIDDEN]
-    C -- 통과 --> D{④ 객체 규칙<br/>유스케이스 안}
+    B -- 일치 --> C{"③ URL 역할<br/>SecurityConfig"}
+    C -- "/admin/** 인데 ADMIN 아님<br/>GET /approvals/** 인데 ADMIN·APPROVER 아님<br/>POST /approvals/** 인데 APPROVER 아님" --> E403[403 FORBIDDEN]
+    C -- 통과 --> D{"④ 객체 규칙<br/>유스케이스 안"}
     D -- "담당 아님" --> E403a[403 NOT_ASSIGNEE]
     D -- "승인자 = 담당 조사역" --> E409s[409 SELF_APPROVAL]
     D -- "상태 전이 불가" --> E409[409 INVALID_CASE_TRANSITION]
+    D -- "남이 먼저 바꿈 (버전 다름)" --> E409c[409 CONCURRENT_UPDATE]
     D -- 통과 --> OK[200 / 201]
 
     style E401 fill:#fde7e7,stroke:#c00
@@ -70,8 +71,11 @@ flowchart LR
     style E403a fill:#fde7e7,stroke:#c00
     style E409 fill:#fff2cc,stroke:#b80
     style E409s fill:#fff2cc,stroke:#b80
+    style E409c fill:#fff2cc,stroke:#b80
     style OK fill:#e5f4e4,stroke:#383
 ```
+
+③의 `/approvals/**`는 메서드별이에요 — GET은 ADMIN·APPROVER, POST는 APPROVER (10/29, `SecurityConfig`는 SCRUM-19). 에러 응답은 전부 `{"error": {"code", "message", "details"}}` 한 모양이에요(레퍼런스 8.2, `03_shared` §2).
 
 프론트 행동 세 줄: **401** → 로그인 화면(경로 기억) · **403** → "권한이 없어요" 토스트, 화면 유지(버튼은 애초에 권한 표대로 숨김) · **409** → 메시지 표시 + 화면 새로고침(남이 먼저 바꾼 경우).
 
@@ -94,14 +98,16 @@ sequenceDiagram
     note over Adm,FE: 초기 비밀번호는 관리자가 직원에게 직접 전달. 첫 로그인 변경 강제는 고도화
 
     Adm->>FE: 역할 변경 (조사역 → 승인자)
-    FE->>USR: PATCH /api/v1/admin/users/{id}/role {role}
+    FE->>USR: POST /api/v1/admin/users/{id}/change-role {role}
     USR->>DB: UPDATE users.role, access_logs ROLE_CHANGED (before→after)
     USR->>USR: 그 사용자의 세션 끊기 (다음 요청부터 새 역할)
     USR-->>FE: 200
 
     Adm->>FE: 비활성화 (퇴사)
-    FE->>USR: PATCH /api/v1/admin/users/{id}/deactivate
+    FE->>USR: POST /api/v1/admin/users/{id}/deactivate
     USR->>DB: UPDATE is_active=false, access_logs USER_DEACTIVATED
     USR->>USR: 세션 끊기
     note over USR,DB: 삭제는 없다 — case_history·approvals가 user_id를 가리키므로
 ```
+
+상태 변경은 `POST /admin/users/{id}/{동사}`만 쓰고 **PATCH는 없어요**(레퍼런스 §12, 미결 11, 10/30) — `change-role` · `deactivate` · `activate` · `reset-password`. 동사 이름은 프론트 API 계약서(SCRUM-21)에서 확정해요.
