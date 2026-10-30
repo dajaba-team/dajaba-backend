@@ -11,7 +11,7 @@ public class StrDraft {
     private final Long caseId;                    // 케이스는 객체가 아니라 번호로만
     private final String generationId;            // AI 생성 번호 (23번)
     private final JsonNode facts;                 // 숫자. 아무도 못 고친다
-    private final List<NarrativeSection> aiNarrative; // AI 원문
+    //private final List<NarrativeSection> aiNarrative; // AI 원문
     private StrDraftStatus status;
     private StrRevision currentRevision;          // 없으면 현재 본문 = AI 원문
     private static final int MAX_SECTION_LENGTH = 5_000;
@@ -20,9 +20,9 @@ public class StrDraft {
         this.caseId = caseId;
         this.generationId = generationId;
         this.facts = facts.deepCopy();
-        this.aiNarrative = List.copyOf(aiNarrative);
+        //this.aiNarrative = List.copyOf(aiNarrative);
         this.status = StrDraftStatus.ACTIVE;
-        this.currentRevision = null;
+        this.currentRevision = StrRevision.aiOriginal(aiNarrative); // 수정본 1번 = AI 원문
     }
 
     public static StrDraft create(Long caseId, String generationId, JsonNode facts,
@@ -46,7 +46,7 @@ public class StrDraft {
         }
         validateTexts(editedTexts);                 // ← 맨 먼저. 통과해야 아래로 간다
 
-        int nextNo = (currentRevision == null) ? 1 : currentRevision.getRevisionNo() + 1;
+        int nextNo = currentRevision.nextNo();      // 처음 고치면 2번
         List<NarrativeSection> before = currentBody();
         List<NarrativeSection> after = applyEdits(before, editedTexts);
 
@@ -94,7 +94,7 @@ public class StrDraft {
 
     /** 지금 본문: 수정본이 없으면 AI 원문, 있으면 현재 수정본의 "고친 후". */
     public List<NarrativeSection> currentBody() {
-        return (currentRevision == null) ? aiNarrative : currentRevision.getAfter();
+        return currentRevision.getAfter();
     }
 
     /** before를 복사하되, 고친 단락은 문장(text)만 새 것으로 바꾼다. 근거 번호는 그대로. */

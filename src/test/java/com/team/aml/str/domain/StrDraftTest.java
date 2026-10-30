@@ -3,6 +3,7 @@ package com.team.aml.str.domain;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.team.aml.user.domain.User;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
@@ -60,19 +61,34 @@ class StrDraftTest {
         assertThat(draft.getStatus()).isEqualTo(StrDraftStatus.ACTIVE);
         assertThat(draft.getCaseId()).isEqualTo(CASE_ID);
         assertThat(draft.getGenerationId()).isEqualTo(GENERATION_ID);
-        assertThat(draft.getCurrentRevision()).isNull();   // 수정본이 없으면 현재 본문 = AI 원문
+        assertThat(draft.currentBody()).isEqualTo(aiNarrative());   // 안 고쳤으면 현재 본문 = AI 원문
+    }
+
+    // 1-추가: 수정본 1번 = AI 원문
+    @Test
+    void 새_초안은_수정본_1번으로_AI_원문을_가진다() {
+        StrDraft draft = newDraft();
+
+        StrRevision original = draft.getCurrentRevision();
+
+        assertThat(original.getRevisionNo()).isEqualTo(1);
+        assertThat(original.isAiOriginal()).isTrue();
+        assertThat(original.getAfter()).isEqualTo(aiNarrative());   // 1번의 "고친 후" = AI 원문
+        assertThat(original.getBefore()).isEmpty();                 // 그 앞은 없다
+        assertThat(original.getEditedSections()).isEmpty();         // 사람이 고친 단락 없음
+        assertThat(original.getRevisedBy()).isEqualTo(User.SYSTEM_ID); // 작성자 SYSTEM(1)
     }
 
     // 2
     @Test
-    void revise하면_수정본_1번이_생기고_한번_더_하면_2번이_생긴다() {
+    void revise하면_수정본_2번이_생기고_한번_더_하면_3번이_생긴다() {
         StrDraft draft = newDraft();
 
         StrRevision first = draft.revise(Map.of(StrSection.HOW, "고친 HOW"), INVESTIGATOR);
         StrRevision second = draft.revise(Map.of(StrSection.WHO, "고친 WHO"), INVESTIGATOR);
 
-        assertThat(first.getRevisionNo()).isEqualTo(1);
-        assertThat(second.getRevisionNo()).isEqualTo(2);
+        assertThat(first.getRevisionNo()).isEqualTo(2);
+        assertThat(second.getRevisionNo()).isEqualTo(3);
         assertThat(draft.getCurrentRevision()).isSameAs(second);
         assertThat(second.getRevisedBy()).isEqualTo(INVESTIGATOR);
         assertThat(second.getEditedSections()).containsExactly(StrSection.WHO);
@@ -80,14 +96,14 @@ class StrDraftTest {
 
     // 3
     @Test
-    void 두번째_수정본의_고치기_전은_첫번째_수정본의_고친_후다() {
+    void 세번째_수정본의_고치기_전은_두번째_수정본의_고친_후다() {
         StrDraft draft = newDraft();
 
         StrRevision first = draft.revise(Map.of(StrSection.HOW, "고친 HOW"), INVESTIGATOR);
         StrRevision second = draft.revise(Map.of(StrSection.WHO, "고친 WHO"), INVESTIGATOR);
 
-        assertThat(first.getBefore()).isEqualTo(aiNarrative());           // 1번의 before = AI 원문
-        assertThat(second.getBefore()).isEqualTo(first.getAfter());       // 2번의 before = 1번의 after
+        assertThat(first.getBefore()).isEqualTo(aiNarrative());           // 2번의 before = 1번의 after = AI 원문
+        assertThat(second.getBefore()).isEqualTo(first.getAfter());       // 3번의 before = 2번의 after
         assertThat(section(second.getAfter(), StrSection.HOW).text()).isEqualTo("고친 HOW"); // 앞 수정이 유지됨
     }
 
@@ -136,7 +152,7 @@ class StrDraftTest {
 
         // 경계: 정확히 5,000자는 통과. 앞의 거부된 시도는 수정본 번호를 쓰지 않았다.
         StrRevision ok = draft.revise(Map.of(StrSection.HOW, "가".repeat(5_000)), INVESTIGATOR);
-        assertThat(ok.getRevisionNo()).isEqualTo(1);
+        assertThat(ok.getRevisionNo()).isEqualTo(2);
     }
 
     // 6
