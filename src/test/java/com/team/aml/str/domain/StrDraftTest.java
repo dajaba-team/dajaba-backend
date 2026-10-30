@@ -250,4 +250,50 @@ class StrDraftTest {
                 .hasMessageContaining("WHO");
     }
 
+    // 12: AI가 섹션 순서를 섞어 보내도 본문은 StrSection 순서로 저장된다
+    @Test
+    void AI_원문_단락_순서가_섞여_와도_섹션_순서로_저장한다() {
+        List<NarrativeSection> reversed = new ArrayList<>(aiNarrative());
+        Collections.reverse(reversed);                                          // CONCLUSION, …, SUMMARY
+
+        StrDraft draft = StrDraft.create(CASE_ID, GENERATION_ID, facts(), reversed);
+
+        assertThat(draft.currentBody()).isEqualTo(aiNarrative());              // 순서까지 같다
+        StrRevision rev = draft.revise(Map.of(StrSection.HOW, "고친 HOW"), INVESTIGATOR);
+        assertThat(rev.getAfter())
+                .extracting(NarrativeSection::section)
+                .containsExactly(StrSection.values());                         // 고친 뒤에도 그대로
+    }
+
+    // 14: 단락 이름이 null이면 거부, 수정자가 null이면 거부. 거부된 시도는 수정본 번호를 쓰지 않는다
+    @Test
+    void 단락_이름이나_수정자가_null이면_revise를_거부한다() {
+        StrDraft draft = newDraft();
+        Map<StrSection, String> nullSection = new HashMap<>();
+        nullSection.put(null, "고친 문장");
+
+        assertThatThrownBy(() -> draft.revise(nullSection, INVESTIGATOR))
+                .isInstanceOf(InvalidSectionTextException.class);
+        assertThatThrownBy(() -> draft.revise(Map.of(StrSection.HOW, "고친 HOW"), null))
+                .isInstanceOf(NullPointerException.class);
+
+        assertThat(draft.getCurrentRevision().getRevisionNo()).isEqualTo(1);
+    }
+
+    // 13: AI 원문도 고친 문장과 같은 규칙 — 비었거나 5,000자를 넘으면 초안을 만들지 않는다
+    @Test
+    void AI_원문_단락이_비었거나_5000자를_넘으면_초안을_만들지_않는다() {
+        for (String bad : List.of("", "   ", "가".repeat(5_001))) {
+            List<NarrativeSection> narrative = aiNarrative().stream()
+                    .map(n -> n.section() == StrSection.HOW
+                            ? new NarrativeSection(n.section(), bad, n.evidenceIds())
+                            : n)
+                    .toList();
+
+            assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), narrative))
+                    .isInstanceOf(InvalidSectionTextException.class)
+                    .hasMessageContaining("HOW");
+        }
+    }
+
 }
