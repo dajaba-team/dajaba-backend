@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 
 import java.net.ConnectException;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,6 +30,22 @@ class WebClientAiClientTest {
     private final ObjectMapper om = new ObjectMapper().setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
     private MockWebServer server;
     private WebClientAiClient client;
+    private final RecordingWriter writer = new RecordingWriter();
+
+    private static class RecordingWriter extends AiCallLogWriter {
+        final List<AiCallLog> rows = new ArrayList<>();
+        boolean fail;
+        final Thread caller = Thread.currentThread();
+
+        RecordingWriter() { super(null); }
+
+        @Override
+        public void write(AiCallLog log) {
+            assertThat(Thread.currentThread()).isSameAs(caller);
+            rows.add(log);
+            if (fail) throw new RuntimeException("기록 실패");
+        }
+    }
 
     @BeforeEach
     void setUp() throws Exception {
@@ -50,7 +68,7 @@ class WebClientAiClientTest {
         var props = new AmlProperties(
                 new AmlProperties.Ai(baseUrl, "test-internal-key-0123456789abcd", timeoutSeconds, 500, false),
                 null, null, null);
-        return new WebClientAiClient(wc, props, om);
+        return new WebClientAiClient(wc, props, om, writer);
     }
 
     private static MockResponse json(int code, String body) {
@@ -137,6 +155,7 @@ class WebClientAiClientTest {
                     assertThat(e.httpStatus()).isEqualTo(502);
                 });
         assertThat(server.getRequestCount()).isEqualTo(1);   // 재시도 안 함
+        assertThat(writer.rows).extracting(AiCallLog::getStatusCode).containsExactly(500);
     }
 
     @Test
@@ -149,6 +168,7 @@ class WebClientAiClientTest {
                     assertThat(e.httpStatus()).isEqualTo(502);
                 });
         assertThat(server.getRequestCount()).isEqualTo(1);   // 4xx 는 재시도 안 함
+        assertThat(writer.rows).extracting(AiCallLog::getStatusCode).containsExactly(400);
     }
 
     @Test
@@ -225,6 +245,89 @@ class WebClientAiClientTest {
 
         assertThatThrownBy(() -> dead.createDraft(draftReq()))
                 .isInstanceOfSatisfying(AiClientException.class,
-                        e -> assertThat(e.code()).isEqualTo("AI_UNAVAILABLE"));
+                        e -> {
+                            assertThat(e.code()).isEqualTo("AI_UNAVAILABLE");
+                            assertThat(e.httpStatus()).isEqualTo(502);
+                        });
+        assertThat(writer.rows).extracting(AiCallLog::getAttempt).containsExactly((short) 1, (short) 2);
+        assertThat(writer.rows).extracting(AiCallLog::getStatusCode).containsOnlyNulls();
+        assertThat(writer.rows).extracting(AiCallLog::getErrorCode).containsOnly("AI_UNAVAILABLE");
+        assertThat(writer.rows.get(0).getRequestId()).isEqualTo(writer.rows.get(1).getRequestId());
     }
+
+    @Test
+    void 정상_초안_메타데이터와_요청id를_기록한다() throws Exception {
+        server.enqueue(json(200, """
+                {"draft_id":"D1","generation_id":"G1","generation_meta":{"prompt_version":"P1"}}
+                """));
+        client.createDraft(draftReq());
+        assertThat(writer.rows).hasSize(1);
+        AiCallLog row = writer.rows.get(0);
+        assertThat(row.getAttempt()).isEqualTo((short) 1);
+        assertThat(row.getStatusCode()).isEqualTo(200);
+        assertThat(row.getErrorCode()).isNull();
+        assertThat(row.getGenerationId()).isEqualTo("G1");
+        assertThat(row.getAiVersion()).isEqualTo("P1");
+        assertThat(row.getEndpoint()).isEqualTo("/v1/str/drafts");
+        assertThat(row.getTargetType()).isEqualTo("CASE");
+        assertThat(row.getTargetId()).isEqualTo(draftReq().caseId());
+        assertThat(row.getRequestId()).isEqualTo(server.takeRequest().getHeader("X-Request-Id"));
+        assertThat(row.getDurationMs()).isNotNegative();
+        assertThat(row.getCreatedAt()).isNotNull();
+    }
+
+    @Test
+    void 경계_503_뒤_성공은_같은_요청id로_두_행이다() throws Exception {
+        server.enqueue(json(503, "{\"code\":\"LLM_UNAVAILABLE\"}"));
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));
+        client.createDraft(draftReq());
+        assertThat(writer.rows).extracting(AiCallLog::getAttempt).containsExactly((short) 1, (short) 2);
+        assertThat(writer.rows).extracting(AiCallLog::getStatusCode).containsExactly(503, 200);
+        assertThat(writer.rows).extracting(AiCallLog::getErrorCode).containsExactly("LLM_UNAVAILABLE", null);
+        String requestId = server.takeRequest().getHeader("X-Request-Id");
+        assertThat(server.takeRequest().getHeader("X-Request-Id")).isEqualTo(requestId);
+        assertThat(writer.rows).extracting(AiCallLog::getRequestId).containsOnly(requestId);
+        assertThat(writer.rows.get(0).getAiVersion()).isNull();
+        assertThat(writer.rows.get(0).getGenerationId()).isNull();
+    }
+
+    @Test
+    void 실패_응답_시간초과는_상태없이_한_행이다() {
+        client = newClient(server.url("/").toString(), 1);
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}").setBodyDelay(2, TimeUnit.SECONDS));
+        assertThatThrownBy(() -> client.createDraft(draftReq()))
+                .isInstanceOfSatisfying(AiClientException.class, e -> {
+                    assertThat(e.code()).isEqualTo("AI_TIMEOUT");
+                    assertThat(e.httpStatus()).isEqualTo(502);
+                });
+        assertThat(writer.rows).hasSize(1);
+        assertThat(writer.rows.get(0).getStatusCode()).isNull();
+        assertThat(writer.rows.get(0).getErrorCode()).isEqualTo("AI_TIMEOUT");
+    }
+
+    @Test
+    void 실패_기록_실패가_성공과_AI예외를_바꾸지_않는다() {
+        writer.fail = true;
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));
+        assertThat(client.createDraft(draftReq()).draftId()).isEqualTo("D1");
+        server.enqueue(json(409, "{\"code\":\"GENERATION_IN_PROGRESS\"}"));
+        assertThatThrownBy(() -> client.createDraft(draftReq()))
+                .isInstanceOfSatisfying(AiClientException.class, e -> {
+                    assertThat(e.code()).isEqualTo("DRAFT_IN_PROGRESS");
+                    assertThat(e.httpStatus()).isEqualTo(409);
+                });
+        assertThat(writer.rows).extracting(AiCallLog::getStatusCode).containsExactly(200, 409);
+    }
+
+    @Test
+    void 정상_점수는_배치id와_scoring_meta_모델버전을_기록한다() {
+        server.enqueue(json(200, "{\"scores\":[],\"scoring_meta\":{\"model_version\":\"M1\"}}"));
+        client.scores(7L, List.of(alert("A1")));
+        assertThat(writer.rows).hasSize(1);
+        AiCallLog row = writer.rows.get(0);
+        assertThat(row.getTargetType()).isEqualTo("BATCH_RUN");
+        assertThat(row.getTargetId()).isEqualTo("7");
+        assertThat(row.getAiVersion()).isEqualTo("M1");
+    }
+
 }

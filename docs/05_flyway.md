@@ -44,7 +44,7 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 |---|---|---|---|---|
 | V005 | detection — `rules`(+ 룰 8개 행), `alerts`, `alert_transactions`, `alert_no_seq` | 준혁 | W2 | 같음 |
 | V006 | cases — `cases`, `case_history`, `case_summaries`, `case_no_seq` | 지윤 | W2 | 같음 |
-| V007 | `ai_call_logs` (`generation_id` 포함) | 진희 (SCRUM-18) | W2 | `create_alert_scores` |
+| V007 | `ai_call_logs` (`generation_id` 포함) — **PR, 머지는 V005·V006 뒤**. FK 없이 혼자 적용됨 | 진희 (SCRUM-18) | W2 | `create_alert_scores` |
 | V008 | str — `str_drafts`, `str_revisions`, `verification_results` + `cases.current_draft_id` FK | 채영 | W2 | 같음 (W3) |
 | V009 | `approvals` (`reason_code`, `narrative_sha256` 포함) | 채영 | W2 | 같음 (W4) |
 | 미배정 | `alert_scores` | 준혁 | W3 | V007 |
