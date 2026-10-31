@@ -89,6 +89,11 @@ class CaseStatusTest {
     }
 
     @Test
+    void APPROVED에서_모의_제출하면_REPORTED() {
+        assertAllowed(APPROVED, REPORTED);
+    }
+
+    @Test
     void PENDING_APPROVAL에서_반려하면_REJECTED() {
         assertAllowed(PENDING_APPROVAL, REJECTED);
     }
@@ -161,9 +166,15 @@ class CaseStatusTest {
     // ── 끝 상태 ──────────────────────────────────────────────
 
     @ParameterizedTest
-    @EnumSource(CaseStatus.class)
-    void APPROVED에서는_어디로도_못_간다(CaseStatus to) {
+    @EnumSource(value = CaseStatus.class, names = "REPORTED", mode = EnumSource.Mode.EXCLUDE)
+    void APPROVED에서는_REPORTED_말고는_못_간다(CaseStatus to) {
         assertForbidden(APPROVED, to);
+    }
+
+    @ParameterizedTest
+    @EnumSource(CaseStatus.class)
+    void REPORTED에서는_어디로도_못_간다(CaseStatus to) {
+        assertForbidden(REPORTED, to);
     }
 
     @ParameterizedTest
@@ -173,14 +184,14 @@ class CaseStatusTest {
     }
 
     @Test
-    void 끝_상태는_APPROVED와_CLOSED_둘뿐이다() {
+    void 끝_상태는_REPORTED와_CLOSED_둘뿐이다() {
         assertThat(Set.of(values()).stream().filter(CaseStatus::isTerminal))
-                .containsExactlyInAnyOrder(APPROVED, CLOSED);
+                .containsExactlyInAnyOrder(REPORTED, CLOSED);
     }
 
     // ── 전체 표 ──────────────────────────────────────────────
 
-    /** 8×8 전부 확인: 위 허용 12개 말고는 모두 거부. 새 화살표를 몰래 추가하면 여기서 깨진다. */
+    /** 9×9 전부 확인: 위 허용 13개 말고는 모두 거부. 새 화살표를 몰래 추가하면 여기서 깨진다. */
     @Test
     void 허용_표_밖의_전이는_모두_거부한다() {
         Set<String> allowed = Set.of(
@@ -189,6 +200,7 @@ class CaseStatusTest {
                 "ESCALATED>DRAFTED", "ESCALATED>CLOSED",
                 "DRAFTED>DRAFTED", "DRAFTED>PENDING_APPROVAL", "DRAFTED>CLOSED",
                 "PENDING_APPROVAL>APPROVED", "PENDING_APPROVAL>REJECTED",
+                "APPROVED>REPORTED",
                 "REJECTED>DRAFTED", "REJECTED>CLOSED");   // REJECTED 는 반려 코드가 맞을 때만
 
         for (CaseStatus from : values()) {

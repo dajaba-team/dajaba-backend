@@ -4,8 +4,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 케이스 상태 8개. 전이 가능 여부는 이 enum 한 곳에서만 판단한다 (docs/06_features/cases.md 전이 표).
- * APPROVED·CLOSED 는 끝 상태 — MVP 에서 재개하지 않는다.
+ * 케이스 상태 9개. 전이 가능 여부는 이 enum 한 곳에서만 판단한다 (docs/06_features/cases.md 전이 표).
+ * REPORTED·CLOSED 는 끝 상태 — MVP 에서 재개하지 않는다.
  */
 public enum CaseStatus {
     OPEN,              // 생성 완료, 담당자 없음
@@ -14,6 +14,7 @@ public enum CaseStatus {
     DRAFTED,           // 초안 연결됨
     PENDING_APPROVAL,  // 승인자 검토 대기
     APPROVED,          // 내부 승인 완료 (기관 제출 완료가 아님)
+    REPORTED,          // 모의 제출 완료 (API 12-2, APPROVED → REPORTED)
     REJECTED,          // 반려 — 다음 행동은 RejectionReasonCode 가 가른다
     CLOSED;            // 사유를 남겨 종결
 
@@ -24,7 +25,8 @@ public enum CaseStatus {
             ESCALATED, Set.of(DRAFTED, CLOSED),
             DRAFTED, Set.of(DRAFTED, PENDING_APPROVAL, CLOSED),
             PENDING_APPROVAL, Set.of(APPROVED, REJECTED),
-            APPROVED, Set.of(),
+            APPROVED, Set.of(REPORTED),
+            REPORTED, Set.of(),
             REJECTED, Set.of(DRAFTED, CLOSED),
             CLOSED, Set.of());
 

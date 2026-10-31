@@ -333,6 +333,21 @@ class CaseTest {
     }
 
     @Test
+    void 보완_반려가_아니면_reopenDraft는_409이고_이력이_남지_않는다() {
+        Case e = escalated();
+        int before = e.getHistories().size();
+
+        assertThatThrownBy(() -> e.reopenDraft(INVESTIGATOR))
+                .isInstanceOf(InvalidCaseTransitionException.class);
+        assertThat(e.getStatus()).isEqualTo(ESCALATED);
+        assertThat(e.getHistories()).hasSize(before);
+
+        Case d = drafted();
+        assertThatThrownBy(() -> d.reopenDraft(INVESTIGATOR))
+                .isInstanceOf(InvalidCaseTransitionException.class);
+    }
+
+    @Test
     void 보완_반려는_새_초안으로_재생성해도_DRAFTED가_되고_반려코드가_지워진다() {
         Case c = rejected(NEED_REVISION);
 
