@@ -46,13 +46,14 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 | 만료 | 401이 오면 로그인 화면, 경로 기억 | **30분 무활동** → 401 `UNAUTHENTICATED` |
 | 로그아웃 | `POST /api/v1/auth/logout` | 세션 무효화, 쿠키 삭제, LOGOUT |
 
-- **동시 세션 1개** (`maximumSessions(1)`) — 두 번째 로그인이 먼저 것을 끊어요.
+- **동시 세션 1개** (`maximumSessions(1)`) — 두 번째 로그인이 먼저 것을 끊어요. 끊긴 세션의 다음 요청은 401 `UNAUTHENTICATED`(같은 JSON 모양). 단 쓰기 요청에 CSRF 토큰이 없으면 CSRF 검사가 먼저라 403 `CSRF_INVALID`. 같은 사람인지는 사용자 id로만 봐요(역할이 바뀌어도 이전 세션이 끊김).
+- 로그인 본문은 `application/json`만(그 밖은 400 — 로그인 CSRF 방지), 4KB·`login_id` 64자·비밀번호 128자까지. 입력한 `login_id`·비밀번호는 로그에 남기지 않아요.
 - **CSRF 켬.** `CookieCsrfTokenRepository.withHttpOnlyFalse()`.
 - **CORS** — `local` 프로파일에서만 `localhost:5173` 하나를 `allowCredentials(true)`. `*`는 어디에도 없음. 프론트는 `withCredentials: true`.
 - 쿠키 `Secure`는 `prod`에서만. 세션 저장소는 서버 메모리(재시작하면 모두 로그아웃 — 받아들임).
 - 로그인 성공·실패 기록은 `shared/security`의 성공·실패 핸들러에서 남겨요. [레퍼런스 §3.4]
 - 로그인 5회 실패 잠금은 MVP 제외(기록만). [계정·권한 §3]
-- 지금은 `POST /api/v1/auth/mock-login?login_id=`(local 전용, 비밀번호 안 봄)이 있어요. **진짜 로그인이 머지되는 PR에서 `MockLoginController`를 지워요.** 다른 사람 코드는 `CurrentUser`만 쓰니까 안 바뀌어요. [README]
+- 로그인은 `shared/security`의 JSON 로그인 필터(`JsonLoginFilter`)가 받고, `JsonLoginConfigurer`로 등록해 세션 ID 교체·동시 세션 1개·세션 저장·CSRF 토큰 교체가 Spring 전략으로 걸려요. users는 `user/infrastructure/DbUserDetailsService`가 읽고, 비활성·SYSTEM은 없는 ID와 같은 401이에요. 목업 로그인(`MockLoginController`)은 SCRUM-19에서 지웠어요. [SCRUM-19]
 
 ## 4. 권한 표 [계정·권한 §4]
 
