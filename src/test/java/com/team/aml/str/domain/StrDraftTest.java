@@ -3,13 +3,11 @@ package com.team.aml.str.domain;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.team.aml.user.domain.User;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -60,19 +58,34 @@ class StrDraftTest {
         assertThat(draft.getStatus()).isEqualTo(StrDraftStatus.ACTIVE);
         assertThat(draft.getCaseId()).isEqualTo(CASE_ID);
         assertThat(draft.getGenerationId()).isEqualTo(GENERATION_ID);
-        assertThat(draft.getCurrentRevision()).isNull();   // 수정본이 없으면 현재 본문 = AI 원문
+        assertThat(draft.currentBody()).isEqualTo(aiNarrative());   // 안 고쳤으면 현재 본문 = AI 원문
+    }
+
+    // 1-추가: 수정본 1번 = AI 원문
+    @Test
+    void 새_초안은_수정본_1번으로_AI_원문을_가진다() {
+        StrDraft draft = newDraft();
+
+        StrRevision original = draft.getCurrentRevision();
+
+        assertThat(original.getRevisionNo()).isEqualTo(1);
+        assertThat(original.isAiOriginal()).isTrue();
+        assertThat(original.getAfter()).isEqualTo(aiNarrative());   // 1번의 "고친 후" = AI 원문
+        assertThat(original.getBefore()).isEmpty();                 // 그 앞은 없다
+        assertThat(original.getEditedSections()).isEmpty();         // 사람이 고친 단락 없음
+        assertThat(original.getRevisedBy()).isEqualTo(User.SYSTEM_ID); // 작성자 SYSTEM(1)
     }
 
     // 2
     @Test
-    void revise하면_수정본_1번이_생기고_한번_더_하면_2번이_생긴다() {
+    void revise하면_수정본_2번이_생기고_한번_더_하면_3번이_생긴다() {
         StrDraft draft = newDraft();
 
         StrRevision first = draft.revise(Map.of(StrSection.HOW, "고친 HOW"), INVESTIGATOR);
         StrRevision second = draft.revise(Map.of(StrSection.WHO, "고친 WHO"), INVESTIGATOR);
 
-        assertThat(first.getRevisionNo()).isEqualTo(1);
-        assertThat(second.getRevisionNo()).isEqualTo(2);
+        assertThat(first.getRevisionNo()).isEqualTo(2);
+        assertThat(second.getRevisionNo()).isEqualTo(3);
         assertThat(draft.getCurrentRevision()).isSameAs(second);
         assertThat(second.getRevisedBy()).isEqualTo(INVESTIGATOR);
         assertThat(second.getEditedSections()).containsExactly(StrSection.WHO);
@@ -80,14 +93,14 @@ class StrDraftTest {
 
     // 3
     @Test
-    void 두번째_수정본의_고치기_전은_첫번째_수정본의_고친_후다() {
+    void 세번째_수정본의_고치기_전은_두번째_수정본의_고친_후다() {
         StrDraft draft = newDraft();
 
         StrRevision first = draft.revise(Map.of(StrSection.HOW, "고친 HOW"), INVESTIGATOR);
         StrRevision second = draft.revise(Map.of(StrSection.WHO, "고친 WHO"), INVESTIGATOR);
 
-        assertThat(first.getBefore()).isEqualTo(aiNarrative());           // 1번의 before = AI 원문
-        assertThat(second.getBefore()).isEqualTo(first.getAfter());       // 2번의 before = 1번의 after
+        assertThat(first.getBefore()).isEqualTo(aiNarrative());           // 2번의 before = 1번의 after = AI 원문
+        assertThat(second.getBefore()).isEqualTo(first.getAfter());       // 3번의 before = 2번의 after
         assertThat(section(second.getAfter(), StrSection.HOW).text()).isEqualTo("고친 HOW"); // 앞 수정이 유지됨
     }
 
@@ -136,7 +149,7 @@ class StrDraftTest {
 
         // 경계: 정확히 5,000자는 통과. 앞의 거부된 시도는 수정본 번호를 쓰지 않았다.
         StrRevision ok = draft.revise(Map.of(StrSection.HOW, "가".repeat(5_000)), INVESTIGATOR);
-        assertThat(ok.getRevisionNo()).isEqualTo(1);
+        assertThat(ok.getRevisionNo()).isEqualTo(2);
     }
 
     // 6
@@ -212,6 +225,75 @@ class StrDraftTest {
         assertThatThrownBy(draft::lock)
                 .isInstanceOf(DraftLockedException.class);
         assertThat(draft.getStatus()).isEqualTo(StrDraftStatus.SUPERSEDED);
+    }
+
+    // 11: AI 원문 단락이 섹션마다 한 번씩이 아니면 초안을 만들지 않는다
+    @Test
+    void 단락이_섹션마다_한_번씩이_아니면_초안을_만들지_않는다() {
+        List<NarrativeSection> missing = aiNarrative().subList(1, StrSection.values().length); // SUMMARY 빠짐
+
+        List<NarrativeSection> duplicated = new ArrayList<>(aiNarrative());
+        duplicated.add(new NarrativeSection(StrSection.WHO, "비밀 문장", List.of(1L)));       // WHO 두 번
+
+        List<NarrativeSection> swapped = new ArrayList<>(aiNarrative());
+        swapped.set(0, new NarrativeSection(StrSection.WHO, "비밀 문장", List.of(1L)));       // 개수는 맞는데 SUMMARY 대신 WHO
+
+        for (List<NarrativeSection> bad : List.of(missing, duplicated, swapped)) {
+            assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), bad))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .message()
+                    .doesNotContain("문장");   // 오류 메시지에 본문 글자를 넣지 않는다
+        }
+        assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), missing))
+                .hasMessageContaining("SUMMARY");
+        assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), duplicated))
+                .hasMessageContaining("WHO");
+    }
+
+    // 12: AI가 섹션 순서를 섞어 보내도 본문은 StrSection 순서로 저장된다
+    @Test
+    void AI_원문_단락_순서가_섞여_와도_섹션_순서로_저장한다() {
+        List<NarrativeSection> reversed = new ArrayList<>(aiNarrative());
+        Collections.reverse(reversed);                                          // CONCLUSION, …, SUMMARY
+
+        StrDraft draft = StrDraft.create(CASE_ID, GENERATION_ID, facts(), reversed);
+
+        assertThat(draft.currentBody()).isEqualTo(aiNarrative());              // 순서까지 같다
+        StrRevision rev = draft.revise(Map.of(StrSection.HOW, "고친 HOW"), INVESTIGATOR);
+        assertThat(rev.getAfter())
+                .extracting(NarrativeSection::section)
+                .containsExactly(StrSection.values());                         // 고친 뒤에도 그대로
+    }
+
+    // 14: 단락 이름이 null이면 거부, 수정자가 null이면 거부. 거부된 시도는 수정본 번호를 쓰지 않는다
+    @Test
+    void 단락_이름이나_수정자가_null이면_revise를_거부한다() {
+        StrDraft draft = newDraft();
+        Map<StrSection, String> nullSection = new HashMap<>();
+        nullSection.put(null, "고친 문장");
+
+        assertThatThrownBy(() -> draft.revise(nullSection, INVESTIGATOR))
+                .isInstanceOf(InvalidSectionTextException.class);
+        assertThatThrownBy(() -> draft.revise(Map.of(StrSection.HOW, "고친 HOW"), null))
+                .isInstanceOf(NullPointerException.class);
+
+        assertThat(draft.getCurrentRevision().getRevisionNo()).isEqualTo(1);
+    }
+
+    // 13: AI 원문도 고친 문장과 같은 규칙 — 비었거나 5,000자를 넘으면 초안을 만들지 않는다
+    @Test
+    void AI_원문_단락이_비었거나_5000자를_넘으면_초안을_만들지_않는다() {
+        for (String bad : List.of("", "   ", "가".repeat(5_001))) {
+            List<NarrativeSection> narrative = aiNarrative().stream()
+                    .map(n -> n.section() == StrSection.HOW
+                            ? new NarrativeSection(n.section(), bad, n.evidenceIds())
+                            : n)
+                    .toList();
+
+            assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), narrative))
+                    .isInstanceOf(InvalidSectionTextException.class)
+                    .hasMessageContaining("HOW");
+        }
     }
 
 }
