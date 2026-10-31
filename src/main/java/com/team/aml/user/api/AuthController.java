@@ -8,8 +8,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * /api/v1/auth — me 만 여기. logout 은 SecurityConfig 의 logout 설정이 처리(POST /api/v1/auth/logout → 204).
- * 진짜 login(POST /api/v1/auth/login, BCrypt 검사)은 W2 에 추가. 그때까지 local 은 MockLoginController.
+ * /api/v1/auth — me 만 여기. login·logout 은 SecurityConfig 의 필터가 처리
+ * (POST /api/v1/auth/login → JsonLoginFilter, POST /api/v1/auth/logout → 204).
  */
 @Tag(name = "auth")
 @RestController

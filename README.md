@@ -17,7 +17,7 @@ docker compose up --build
 open http://localhost:8080/swagger-ui.html
 ```
 
-swagger에서 **`POST /api/v1/auth/mock-login?login_id=inv01`** → 200, 그 다음 **`GET /api/v1/auth/me`** → 200 이면 준비 끝.
+swagger에서 **`POST /api/v1/auth/login`** 본문 `{"login_id": "inv01", "password": "<DEV_USER_PASSWORD 값>"}` → 200, 그 다음 **`GET /api/v1/auth/me`** → 200 이면 준비 끝.
 앱 없이 DB만 띄우고 IDE에서 돌리려면 `docker compose up db` 후 `SPRING_PROFILES_ACTIVE=local ./gradlew bootRun` (환경변수는 .env 내용을 IDE 실행 설정에).
 
 ### .env 변수 이름 (값은 노션)
@@ -45,15 +45,15 @@ DB를 완전히 초기화하려면 `docker compose down -v` (볼륨 삭제 → �
 | shared/security | `SecurityConfig`(세션·CSRF·URL 역할), `CurrentUser`, `SessionAuditorAware`, 401/403 JSON, `request_id` MDC | 진짜 |
 | shared/batch | `BatchRun`, `BatchRunRepository`, 409 예외 2개 | 안건 14 반영 |
 | shared/ai | `AiClient` 인터페이스, DTO 틀, `MockAiClient`(local/test), 기동 시 health | WebClient 구현은 W3 |
-| user | `User`, `Role`, `UserRepository`, `GetMe`, `AuthController(/me)`, `DevUserSeeder`, **`MockLoginController`(local 전용)** | 진짜 login은 W2 |
+| user | `User`, `Role`, `UserRepository`, `GetMe`, `AuthController(/me)`, `DbUserDetailsService`(로그인 때 users 읽기), `DevUserSeeder` | 진짜 (SCRUM-19) |
 | 테스트 | `ArchitectureTest`(ArchUnit, DB 없이), `ApplicationContextTest`(Testcontainers, Docker 필요) | |
 | 자료 | `src/test/resources/fixtures/ibm_small/`(축소본 — 지금은 합성 샘플), `tools/fixture/`, `docs/flows/` | |
 
-### 로그인이 목업인 범위
+### 로그인 방법
 
-`POST /api/v1/auth/mock-login?login_id=…` 만 가짜다 — **비밀번호를 안 본다.** 그 뒤는 전부 진짜: 세션 쿠키 `SESSION`, CSRF(`XSRF-TOKEN` 쿠키 → `X-XSRF-TOKEN` 헤더),
-같은 계정 동시 세션 1개, 30분 만료, `GET /auth/me`, `POST /auth/logout`, 401/403 JSON. local 프로파일에서만 등록되고 prod에는 없다.
-W2에 `POST /api/v1/auth/login`(BCrypt 검사 + access_logs)이 들어오면 `MockLoginController`를 지운다. 그때 준혁·지윤·채영 코드는 바뀌지 않는다 — 전부 `CurrentUser`로 사용자를 꺼내기 때문.
+`POST /api/v1/auth/login` 본문 `{"login_id", "password"}` — 개발 계정은 `admin`·`inv01`·`apr01`·`inv02`, 비밀번호는 `.env`의 `DEV_USER_PASSWORD`(값은 노션, local 프로파일에서 `DevUserSeeder`가 만든다).
+성공 200 `{id, login_id, display_name, role}`, 실패 401 `LOGIN_FAILED`(없는 ID·틀린 비밀번호·비활성 모두 같은 응답). 그 뒤: 세션 쿠키 `SESSION`, CSRF(`XSRF-TOKEN` 쿠키 → `X-XSRF-TOKEN` 헤더),
+같은 계정 동시 세션 1개, 30분 만료, `GET /auth/me`, `POST /auth/logout`(204), 401/403 JSON. 다른 사람 코드는 전부 `CurrentUser`로 사용자를 꺼낸다.
 
 프론트: `axios` 에 `withCredentials: true`. 쓰기 요청은 `XSRF-TOKEN` 쿠키 값을 `X-XSRF-TOKEN` 헤더로(axios 기본 동작). swagger에서는 오른쪽 위 Authorize에 쿠키 값을 붙여 넣는다.
 
