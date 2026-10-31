@@ -89,19 +89,21 @@ class CaseMigrationIsolatedTest {
             rejected(c, "23503", "update ops.cases set alert_id=-1 where id=" + caseId);
             rejected(c, "23503", "update ops.cases set assignee_id=-1 where id=" + caseId);
             rejected(c, "23503", "update ops.cases set updated_by=-1 where id=" + caseId);
-            rejected(c, "23503", "insert into ops.case_history(case_id,action,to_status,created_by) "
-                    + "values (-1,'OPEN','OPEN',1)");
+            rejected(c, "23503", "insert into ops.case_history(case_id,action,to_status,case_version_before,created_by) "
+                    + "values (-1,'OPEN','OPEN',0,1)");
         }
     }
 
     @Test
     void acceptsEightStatusesAndRejectsUnknownValuesAndNegativeVersion() throws Exception {
-        try (var c = backend(); var statement = c.prepareStatement("update ops.cases set status=? where id=?")) {
+        try (var c = backend(); var statement = c.prepareStatement(
+                "update ops.cases set status=?, rejection_reason_code=? where id=?")) {
             long id = newCase(c);
             for (String status : List.of("OPEN", "REVIEWING", "ESCALATED", "DRAFTED", "PENDING_APPROVAL",
                     "APPROVED", "REJECTED", "CLOSED")) {
                 statement.setString(1, status);
-                statement.setLong(2, id);
+                statement.setString(2, status.equals("REJECTED") ? "NEED_REVISION" : null);
+                statement.setLong(3, id);
                 assertThat(statement.executeUpdate()).isEqualTo(1);
             }
             for (String assignment : List.of("status='UNKNOWN'", "version=-1", "close_reason='UNKNOWN'",
@@ -112,15 +114,34 @@ class CaseMigrationIsolatedTest {
     }
 
     @Test
+    void rejectionReasonCodeExistsOnlyWhileRejected() throws Exception {
+        try (var c = backend()) {
+            long id = newCase(c);
+            rejected(c, "23514", "update ops.cases set status='REJECTED' where id=" + id);
+            rejected(c, "23514", "update ops.cases set rejection_reason_code='NEED_REVISION' where id=" + id);
+            for (String code : List.of("NEED_REVISION", "NOT_REPORTABLE")) {
+                update(c,"update ops.cases set status='REJECTED', rejection_reason_code='"
+                        + code + "' where id=" + id);
+            }
+            // 반려 뒤 DRAFTED·CLOSED로 갈 때 현재 코드는 지워야 한다.
+            rejected(c, "23514", "update ops.cases set status='DRAFTED' where id=" + id);
+            update(c,
+                    "update ops.cases set status='CLOSED', rejection_reason_code=null where id=" + id);
+        }
+    }
+
+    @Test
     void storesFullNoteAndExplicitEmptyNoteButRejectsNullNote() throws Exception {
         try (var c = backend(); var insert = c.prepareStatement("""
-                insert into ops.case_history(case_id,action,to_status,investigator_notes,created_by)
-                values (?,'NOTE','OPEN',?,1) returning id
+                insert into ops.case_history(case_id,action,to_status,investigator_notes,case_version_before,created_by)
+                values (?,'NOTE','OPEN',?,?,1) returning id
                 """)) {
             long id = newCase(c);
+            long version = 0;
             for (String note : List.of("조사 메모\n전체 내용".repeat(500), "")) {
                 insert.setLong(1, id);
                 insert.setString(2, note);
+                insert.setLong(3, version++);
                 try (var row = insert.executeQuery()) {
                     row.next();
                     try (var query = c.prepareStatement("select investigator_notes from ops.case_history where id=?")) {
@@ -132,26 +153,50 @@ class CaseMigrationIsolatedTest {
                     }
                 }
             }
-            rejected(c, "23514", "insert into ops.case_history(case_id,action,to_status,created_by) "
-                    + "values (" + id + ",'NOTE','OPEN',1)");
+            rejected(c, "23514", "insert into ops.case_history(case_id,action,to_status,case_version_before,created_by) "
+                    + "values (" + id + ",'NOTE','OPEN',9,1)");
+            // 같은 version의 두 번째 메모 저장은 막고, 같은 version의 다른 이력은 허용한다.
+            rejected(c, "23505", "insert into ops.case_history(case_id,action,to_status,investigator_notes,"
+                    + "case_version_before,created_by) values (" + id + ",'NOTE','OPEN','중복',0,1)");
+            update(c,"insert into ops.case_history(case_id,action,to_status,"
+                    + "case_version_before,created_by) values (" + id + ",'ASSIGN','REVIEWING',0,1)");
+            rejected(c, "23502", "insert into ops.case_history(case_id,action,to_status,created_by) "
+                    + "values (" + id + ",'ASSIGN','REVIEWING',1)");
+        }
+    }
+
+    @Test
+    void storesReasonCodeOnHistory() throws Exception {
+        try (var c = backend()) {
+            long id = newCase(c);
+            for (String code : List.of("NEED_REVISION", "NOT_REPORTABLE", "FALSE_POSITIVE", "DUPLICATE", "NO_ACTION")) {
+                update(c,"insert into ops.case_history(case_id,action,from_status,to_status,"
+                        + "reason_code,case_version_before,created_by) values (" + id
+                        + ",'REJECT','PENDING_APPROVAL','REJECTED','" + code + "',0,1)");
+            }
+            rejected(c, "23514", "insert into ops.case_history(case_id,action,to_status,reason_code,"
+                    + "case_version_before,created_by) values (" + id + ",'CLOSE','CLOSED','UNKNOWN',0,1)");
         }
     }
 
     @Test
     void retainsSummarySnapshotsAndAllowsRegenerationOfSameInput() throws Exception {
         try (var c = backend(); var insert = c.prepareStatement("""
-                insert into ops.case_summaries(case_id,summary,generator_version,produced_at,
-                    input_snapshot,input_sha256,payload,created_by)
-                values (?,'요약','test-v1',now(),?::jsonb,?,'{}',1)
+                insert into ops.case_summaries(case_id,generator_version,produced_at,
+                    input_snapshot,input_sha256,based_on_case_version,payload,created_by)
+                values (?,'test-v1',now(),?::jsonb,?,3,'{"summary_lines":["요약"]}',1)
                 """)) {
             long id = newCase(c);
             insert.setLong(1, id);
-            insert.setString(2, "{\"investigator_notes\":\"원문\"}");
+            insert.setString(2, "{\"case_no\":\"CASE-2022-000057\",\"alert\":{},\"evidence_transaction_ids\":[4721,4722]}");
             insert.setString(3, "a".repeat(64));
             assertThat(insert.executeUpdate()).isEqualTo(1);
             assertThat(insert.executeUpdate()).isEqualTo(1);
             assertThat(number(c, "select count(*) from ops.case_summaries where case_id=" + id
-                    + " and input_snapshot->>'investigator_notes'='원문'")).isEqualTo(2);
+                    + " and input_snapshot->'evidence_transaction_ids' = '[4721,4722]'::jsonb")).isEqualTo(2);
+            rejected(c, "23514", "insert into ops.case_summaries(case_id,generator_version,produced_at,input_snapshot,"
+                    + "input_sha256,based_on_case_version,payload,created_by) values (" + id
+                    + ",'test-v1',now(),'{}','" + "a".repeat(64) + "',-1,'{}',1)");
             insert.setString(3, "invalid-hash");
             assertThatThrownBy(insert::executeUpdate).isInstanceOfSatisfying(SQLException.class,
                     e -> assertThat(e.getSQLState()).isEqualTo("23514"));
@@ -200,6 +245,12 @@ class CaseMigrationIsolatedTest {
         try (var statement = c.createStatement(); var row = statement.executeQuery(sql)) {
             row.next();
             return row.getLong(1);
+        }
+    }
+
+    static void update(Connection c, String sql) throws SQLException {
+        try (var statement = c.createStatement()) {
+            assertThat(statement.executeUpdate(sql)).isEqualTo(1);
         }
     }
 
