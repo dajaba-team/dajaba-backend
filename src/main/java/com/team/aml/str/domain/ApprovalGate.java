@@ -14,17 +14,17 @@ public class ApprovalGate {
     public static void requireVerified(StrDraft draft, VerificationResult verification) {
         draft.requireActive(); // 잠김·대체된 초안은 검증 이전에 거부
 
-        if (verification == null) {                                                 // ← 추가
+        if (verification == null) {
             throw new DraftNotVerifiedException("검증 기록 없음");
         }
-        if (!draft.getGenerationId().equals(verification.getGenerationId())) {      // ← 추가
+        if (!draft.getGenerationId().equals(verification.getGenerationId())) {
             throw new DraftNotVerifiedException("다른 초안의 검증");
         }
         if (!NarrativeHash.of(draft.currentBody()).equals(verification.getNarrativeSha256())) {
             throw new DraftNotVerifiedException("검증 뒤에 본문이 바뀜");
         }
 
-        if (!verification.isPassed()) {                                          // ← 추가
+        if (!verification.isPassed()) {
             throw new DraftNotVerifiedException("검증 결과 " + verification.getStatus());
         }
     }
