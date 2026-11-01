@@ -164,6 +164,24 @@ class SourceSchemaTest {
     }
 
     @Test
+    void 백엔드_계정은_거래_파일을_COPY할_수_있다() throws Exception {
+        try (Connection c = backend(); Statement statement = c.createStatement()) {
+            statement.execute("truncate table ops.transactions_staging");
+            c.unwrap(PGConnection.class).getCopyAPI().copyIn("""
+                    copy ops.transactions_staging(
+                        timestamp_text, from_bank, from_account, to_bank, to_account, amount_received,
+                        receiving_currency, amount_paid, payment_currency, payment_format, is_laundering)
+                    from stdin with (format csv)""",
+                    new StringReader("2022/09/01 00:20,010,A1,020,B1,1.00,Euro,1.00,Euro,ACH,0\n"));
+
+            try (ResultSet result = statement.executeQuery("select count(*) from ops.transactions_staging")) {
+                result.next();
+                assertThat(result.getLong(1)).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
     void AI_계정은_원천만_읽고_source_files는_읽지_못한다() throws Exception {
         try (Connection c = connect("app_ai", "ai"); Statement statement = c.createStatement()) {
             statement.executeQuery("select count(*) from ops.transactions");
