@@ -66,9 +66,13 @@ management:
 logging:
   level:
     com.team.aml: INFO
+    # Spring 을 상속한 로그인 클래스는 로거 이름이 우리 패키지라 com.team.aml: DEBUG(local)를 따라간다.
+    # 그러면 Spring 의 "사용자 못 찾음" 디버그에 입력한 login_id 원문이 찍힌다 → 모든 프로필에서 INFO 고정 (SCRUM-19)
+    com.team.aml.shared.security.AppLoginProvider: INFO
+    com.team.aml.shared.security.JsonLoginFilter: INFO
 
 ---
-# local — 개발. swagger, DevUserSeeder, mock-login, CORS(5173), MockAiClient
+# local — 개발. swagger, DevUserSeeder, CORS(5173), MockAiClient
 spring:
   config:
     activate:
