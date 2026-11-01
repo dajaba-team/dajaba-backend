@@ -76,4 +76,12 @@
 
 **str에 주는 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`, `AttachDraftToCase`, `ReopenCaseDraft`, `SubmitCaseForApproval`, `ApproveCase`, `RejectCase`, `CloseCase`. Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
 
-**〔확인 필요〕** 상세 화면에 "현재 초안"을 합치는 위치(cases → str 의존 금지라 상위 조합 계층 필요 — 권장은 str 조회 유스케이스가 조합. 같은 시점 보장은 한 SQL·REPEATABLE READ·조합 후 버전 재확인 중 하나로, 기본 READ COMMITTED에선 한 트랜잭션만으로는 부족 — 노션 미결 17번), 메모·요약을 편집할 수 있는 상태 범위, 화면 집계 규칙(유입은 받은 금액, 유출은 보낸 금액, 자기계좌 제외 — STR facts와 같은 규칙인지). AI facts는 **같은 법인의 다른 계좌**와 오간 거래를 `internal`로 따로 빼서 입출금에 넣지 않아요(dajaba-AI `docs/str/04_facts.md`). 그래서 같은 경보라도 화면과 STR 숫자가 다를 수 있어요 — 각 숫자가 무엇을 포함하는지 이름·설명을 정하고, 같은 법인 계좌 간 이체·복수 통화 사례로 같이 확인해요.
+**〔확인 필요〕** 상세 화면에 "현재 초안"을 합치는 위치(cases → str 의존 금지라 상위 조합 계층 필요 — 권장은 str 조회 유스케이스가 조합. 같은 시점 보장은 한 SQL·REPEATABLE READ·조합 후 버전 재확인 중 하나로, 기본 READ COMMITTED에선 한 트랜잭션만으로는 부족 — 노션 미결 17번), 메모·요약을 편집할 수 있는 상태 범위.
+
+**화면 집계 규칙** 〔초안 — 미결 22 결정(10/30)·진희 STR 숫자 설명(11/1)에 대한 지윤 답〕
+- **대상** — 조사 대상 계좌 하나 기준, **경보에 걸린 거래(`alert_transactions`, scope=EVIDENCE)만** 세요. 경보 밖 기간 내 거래(CONTEXT)는 목록으로만 보여 주고 합계에 섞지 않아요(10/27 안건 7: evidence/context 분리). STR facts와 대상이 같아요.
+- **금액** — 입금 = `amount_received`·`currency_received`, 출금 = `amount_paid`·`currency_paid`. STR과 같은 기준이라 환전 거래에서도 금액이 어긋나지 않아요.
+- **통화** — 통화별로 따로 합계. 합치거나 환산하지 않아요.
+- **빼는 거래** — 자기 계좌끼리(`is_self_transfer = true`) 오간 거래만 빼요. 같은 법인의 다른 계좌와 오간 거래는 **화면 입출금에 들어가요**(STR은 `internal`로 따로 뺌). 그래서 이름을 화면 "입금(자기계좌 제외)", STR "입금(같은 법인 계좌 제외)"로 구분해요.
+- **대상 계좌가 끼지 않은 경보 거래**(CYCLE 중간 경로 등) — 입금도 출금도 아니라 합계에 넣지 않아요. 목록에는 보여요.
+- 그래서 같은 법인 계좌 간 이동이 0건이면 입금·출금 건수·금액은 화면과 STR이 같아야 해요. 축소본 사례 비교(지윤·준혁·진희)로 확인할 것.
