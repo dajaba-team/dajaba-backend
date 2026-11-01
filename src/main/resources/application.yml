@@ -24,7 +24,6 @@ spring:
     properties:
       hibernate:
         default_schema: ops
-        jdbc.time_zone: UTC
   jackson:
     property-naming-strategy: SNAKE_CASE  # 규약 0절. DTO 에 @JsonProperty 쓰지 않는다
     default-property-inclusion: always
