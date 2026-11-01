@@ -8,9 +8,9 @@
 
 **하는 일** — 점수 높은 경보를 사람이 조사하는 업무(케이스)로 만들고, 담당자·근거·메모·상태·이력을 관리해요. 탐지와 STR 사이를 잇는 곳이에요. **HIGH 경보 하나당 케이스 최대 하나.** [CASES 문서 §1, 레퍼런스 §3.3]
 
-**상태 8개 + 반려 코드** [가이드 §4, 안건 11·24]
+**상태 9개 + 반려 코드** [가이드 §4, 안건 11·24]
 
-`OPEN · REVIEWING · ESCALATED · DRAFTED · PENDING_APPROVAL · APPROVED · REJECTED · CLOSED` (`APPROVED`·`CLOSED`는 끝). 반려 이유는 상태를 늘리지 않고 **별도 값** `rejection_reason_code`(`NEED_REVISION`·`NOT_REPORTABLE`)로 둬요. 〔초안: REJECTED일 때 필수, 다른 상태에선 null — CASES 명세 §2.1, 지우는 시점은 STR과 공유 필요〕
+`OPEN · REVIEWING · ESCALATED · DRAFTED · PENDING_APPROVAL · APPROVED · REPORTED · REJECTED · CLOSED` (`REPORTED`·`CLOSED`는 끝). `APPROVED`는 내부 승인 완료이고, 모의 제출(API 12-2)을 거쳐 `REPORTED`가 돼요. 반려 이유는 상태를 늘리지 않고 **별도 값** `rejection_reason_code`(`NEED_REVISION`·`NOT_REPORTABLE`)로 둬요. 〔초안: REJECTED일 때 필수, 다른 상태에선 null — CASES 명세 §2.1, 지우는 시점은 STR과 공유 필요〕
 
 **전이 표** (확정) [가이드 §4, 레퍼런스 §5.1, 안건 11·24]
 | 현재 → 결과 | 메서드 | 누가 | 조건 |
@@ -24,12 +24,13 @@
 | DRAFTED → DRAFTED | `attachDraft` | str → cases | 재생성, 이전 초안 SUPERSEDED |
 | DRAFTED → PENDING_APPROVAL | `submitForApproval` | 담당 조사역 (str 진행) | **현재 본문**의 검증 통과 |
 | PENDING_APPROVAL → APPROVED | `approve` | APPROVER | 담당 ≠ 승인자, 초안 LOCKED 같은 트랜잭션 |
+| APPROVED → REPORTED | `report` 〔메서드는 API 12-2 구현 때 추가〕 | APPROVER | 모의 제출 `POST /approvals/{draft_id}/report` |
 | PENDING_APPROVAL → REJECTED | `reject(code, comment)` | APPROVER | 코드·사유 필수 |
 | REJECTED → DRAFTED | `reopenDraft` | 담당 조사역 (str 진행) | `NEED_REVISION`만. 수정본·새 초안 저장과 같은 트랜잭션 |
 | ESCALATED·DRAFTED → CLOSED | `close` | 담당 조사역 | 사유 필수. 초안 있으면 str 유스케이스가 SUPERSEDED와 같은 트랜잭션 |
 | REJECTED → CLOSED | `close` | 담당 조사역 (str 진행) | `NOT_REPORTABLE`만. 종료 사유에 반려 코드 |
 
-**금지** — OPEN → ESCALATED, PENDING_APPROVAL → CLOSED, `NEED_REVISION` 반려 건 종료, `NOT_REPORTABLE` 반려 건 수정·재생성, APPROVED·CLOSED 재개. 전부 409 `INVALID_CASE_TRANSITION`. 전이 가능 여부는 `CaseStatus` enum 한 곳, 전이 때마다 `case_history` 한 행. 반려 뒤 이동 검사는 **cases의 반려 코드 값만** 봐요(approvals는 이력). [가이드 §4, 안건 24]
+**금지** — OPEN → ESCALATED, PENDING_APPROVAL → CLOSED, `NEED_REVISION` 반려 건 종료, `NOT_REPORTABLE` 반려 건 수정·재생성, APPROVED에서 REPORTED 말고 다른 곳으로 이동, REPORTED·CLOSED 재개. 전부 409 `INVALID_CASE_TRANSITION`. 전이 가능 여부는 `CaseStatus` enum 한 곳, 전이 때마다 `case_history` 한 행. 반려 뒤 이동 검사는 **cases의 반려 코드 값만** 봐요(approvals는 이력). [가이드 §4, 안건 24]
 
 **상태 말고 검사하는 것** [가이드 §4.3, 레퍼런스 §5.2]
 | 언제 | 검사 | 예외 |
