@@ -1,6 +1,7 @@
 package com.team.aml.source.domain;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.Immutable;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -8,6 +9,7 @@ import java.time.Instant;
 
 /** 원본 파일 한 건. 같은 파일 판단 기준은 파일명이 아니라 SHA-256이다 (안건 1). */
 @Entity
+@Immutable
 @Table(name = "source_files")
 public class SourceFile {
 
