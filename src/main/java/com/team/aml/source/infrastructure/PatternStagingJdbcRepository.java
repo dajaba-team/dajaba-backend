@@ -27,7 +27,7 @@ public class PatternStagingJdbcRepository implements PatternStagingRepository {
             and t.payment_currency = p.payment_currency and t.payment_format = p.payment_format
             and t.is_laundering = p.is_laundering""";
 
-    /** 거래 LEFT JOIN용. 키가 같은 패턴 행이 있어도 거래 행 수가 늘지 않는다. */
+    /** SCRUM-44 거래 적재의 LEFT JOIN용. 키가 같은 패턴 행이 있어도 거래 행 수가 늘지 않는다. */
     static final String DISTINCT_PATTERNS = """
             select distinct on (%1$s) pattern_type, pattern_id, %1$s
             from ops.patterns_staging
