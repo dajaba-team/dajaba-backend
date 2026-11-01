@@ -1,18 +1,22 @@
 package com.team.aml.shared.security;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.team.aml.shared.config.AmlProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.ExceptionTranslationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.session.HttpSessionEventPublisher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -22,17 +26,19 @@ import java.util.List;
 /**
  * 세션 쿠키 + CSRF + URL 역할 규칙 (레퍼런스 9.3). 두 사람은 이 파일을 고칠 일이 거의 없다.
  *
- * 지금 상태(W1 뼈대): 인증 "절차"만 목업이다.
- *  - local 프로파일에서 POST /api/v1/auth/mock-login?login_id=inv01 이 비밀번호 없이 세션을 만든다 (user/api/MockLoginController).
- *  - 그 뒤는 전부 진짜: 세션 쿠키, CSRF, maximumSessions(1), 30분 만료, /auth/me, /auth/logout, 401/403 JSON.
- *  - 진짜 로그인(POST /auth/login, BCrypt 검사, access_logs LOGIN_OK/FAIL)은 W2 에 진희가 붙인다. 그때 바뀌는 건 로그인 한 줄뿐.
+ * 로그인: POST /api/v1/auth/login {login_id, password} (JsonLoginFilter, SCRUM-19).
+ *  - users 를 읽는 건 user/infrastructure/DbUserDetailsService, BCrypt(12) 비교는 AppLoginProvider(Spring Dao 그대로).
+ *  - 성공 200 {id, login_id, display_name, role}, 실패 401 LOGIN_FAILED(사유 숨김), 본문 누락 400 INVALID_REQUEST.
+ *  - 필터는 JsonLoginConfigurer 로 등록해 세션 ID 교체·maximumSessions(1)·세션 저장·CSRF 토큰 교체가 Spring 전략으로 걸린다.
+ *  - 세션 쿠키, CSRF, 30분 만료, /auth/me, /auth/logout(204), 401/403 JSON.
  *
  * URL 규칙:
- *  /api/v1/auth/login, /auth/mock-login, /actuator/health, swagger → 누구나
- *  /api/v1/admin/**                                               → ADMIN
- *  /api/v1/approvals/**                                           → APPROVER
- *  /api/**                                                        → 로그인만
- *  그 외                                                          → 거부
+ *  /api/v1/auth/login, /actuator/health, swagger → 누구나
+ *  /api/v1/admin/**                              → ADMIN
+ *  GET  /api/v1/approvals/**                     → ADMIN·APPROVER (10/29)
+ *  POST /api/v1/approvals/**                     → APPROVER
+ *  /api/**                                       → 로그인만
+ *  그 외                                         → 거부
  * "담당 케이스만" 같은 객체 규칙은 여기서 못 막는다 → 유스케이스 안에서 (NotAssigneeException 403, SelfApprovalException 409).
  */
 @Configuration
@@ -42,11 +48,13 @@ public class SecurityConfig {
     private final JsonAuthHandlers handlers;
     private final CurrentUser currentUser;
     private final AmlProperties props;
+    private final ObjectMapper om;
 
-    public SecurityConfig(JsonAuthHandlers handlers, CurrentUser currentUser, AmlProperties props) {
+    public SecurityConfig(JsonAuthHandlers handlers, CurrentUser currentUser, AmlProperties props, ObjectMapper om) {
         this.handlers = handlers;
         this.currentUser = currentUser;
         this.props = props;
+        this.om = om;
     }
 
     @Bean
@@ -54,37 +62,42 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder(12);
     }
 
-    /**
-     * 기본 인메모리 사용자("Using generated security password" 경고) 생성을 막는다.
-     * W2 진짜 로그인에서 users 테이블을 읽는 구현(DbUserDetailsService)으로 교체한다. 지금은 아무도 못 찾는다 — 로그인은 mock-login 뿐.
-     */
+    /** 세션 만료·무효화를 SessionRegistry 에 알린다 — 없으면 maximumSessions 가 이미 끝난 세션도 센다. */
     @Bean
-    public UserDetailsService userDetailsService() {
-        return username -> { throw new UsernameNotFoundException("W2 에 DbUserDetailsService 로 교체"); };
+    public HttpSessionEventPublisher httpSessionEventPublisher() {
+        return new HttpSessionEventPublisher();
     }
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, UserDetailsService users, PasswordEncoder encoder) throws Exception {
         CsrfTokenRequestAttributeHandler csrfHandler = new CsrfTokenRequestAttributeHandler();
         csrfHandler.setCsrfRequestAttributeName(null); // 토큰을 매 응답에 쿠키로 내보낸다 (axios 가 읽는다)
+        AuthenticationManager login = new ProviderManager(new AppLoginProvider(users, encoder));
 
         http
+            .authenticationManager(login)
             .csrf(c -> c
                 .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                 .csrfTokenRequestHandler(csrfHandler)
-                .ignoringRequestMatchers("/api/v1/auth/login", "/api/v1/auth/mock-login"))   // 로그인 전에는 토큰이 없다
+                .ignoringRequestMatchers(JsonLoginConfigurer.LOGIN_URL))   // 로그인 전에는 토큰이 없다
             .cors(c -> c.configurationSource(corsSource()))
             .authorizeHttpRequests(a -> a
-                .requestMatchers("/api/v1/auth/login", "/api/v1/auth/mock-login", "/actuator/health").permitAll()
+                .requestMatchers(JsonLoginConfigurer.LOGIN_URL, "/actuator/health").permitAll()
                 .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/v1/approvals/**").hasAnyRole("ADMIN", "APPROVER")
                 .requestMatchers("/api/v1/approvals/**").hasRole("APPROVER")
                 .requestMatchers("/api/**").authenticated()
                 .anyRequest().denyAll())
-            .sessionManagement(s -> s.maximumSessions(1))   // 같은 계정 두 브라우저면 먼저 것이 끊긴다
+            .sessionManagement(s -> s
+                .maximumSessions(1)                              // 같은 계정 두 브라우저면 먼저 것이 끊긴다
+                .expiredSessionStrategy(handlers.expiredSession()))
             .exceptionHandling(e -> e
                 .authenticationEntryPoint(handlers.entryPoint())
                 .accessDeniedHandler(handlers.accessDenied()))
+            .with(new JsonLoginConfigurer<>(om), l -> l
+                .successHandler(handlers.loginSuccess())
+                .failureHandler(handlers.loginFailure()))
             .logout(l -> l
                 .logoutUrl("/api/v1/auth/logout")
                 .deleteCookies("SESSION")

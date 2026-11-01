@@ -43,4 +43,6 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // CI는 UTC라 시간대 버그가 드러나지 않는다. KST로 돌려 ts가 9시간 밀리는 회귀를 잡는다.
+    systemProperty("user.timezone", "Asia/Seoul")
 }
