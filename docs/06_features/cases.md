@@ -24,7 +24,7 @@
 | DRAFTED → DRAFTED | `attachDraft` | str → cases | 재생성, 이전 초안 SUPERSEDED |
 | DRAFTED → PENDING_APPROVAL | `submitForApproval` | 담당 조사역 (str 진행) | **현재 본문**의 검증 통과 |
 | PENDING_APPROVAL → APPROVED | `approve` | APPROVER | 담당 ≠ 승인자, 초안 LOCKED 같은 트랜잭션 |
-| APPROVED → REPORTED | `report` 〔메서드는 API 12-2 구현 때 추가〕 | APPROVER | 모의 제출 `POST /approvals/{draft_id}/report` |
+| APPROVED → REPORTED | `report` 〔메서드는 API 12-2 구현 때 추가〕 | APPROVER | 승인 완료 건만. 제출 기록·Case REPORTED·이력 같은 트랜잭션(str 진행) |
 | PENDING_APPROVAL → REJECTED | `reject(code, comment)` | APPROVER | 코드·사유 필수 |
 | REJECTED → DRAFTED | `reopenDraft` | 담당 조사역 (str 진행) | `NEED_REVISION`만. 수정본·새 초안 저장과 같은 트랜잭션 |
 | ESCALATED·DRAFTED → CLOSED | `close` | 담당 조사역 | 사유 필수. 초안 있으면 str 유스케이스가 SUPERSEDED와 같은 트랜잭션 |
@@ -36,7 +36,7 @@
 | 언제 | 검사 | 예외 |
 |---|---|---|
 | 승인 요청 | 현재 본문을 검증했고 `passed = true` | `DraftNotVerifiedException` |
-| 승인 | 승인자 ≠ 담당, 역할 APPROVER | `SelfApprovalException`, `NotApproverException` |
+| 승인 | 승인자 ≠ 담당, 역할 APPROVER | `SelfApprovalException`, `NotApproverException` (403 — ForbiddenException 상속, SCRUM-67) |
 | 종료·반려 | 사유가 비어 있지 않음 | `CommentRequiredException` 〔초안: CASES 명세는 사유 누락을 400으로 바꾸는 안〕 |
 | 보완 반려 뒤 재요청 | 본문 해시 ≠ 반려 당시 해시 (새 `draft_id`는 제외) | `NarrativeUnchangedException` (str `ApprovalGate`) |
 
