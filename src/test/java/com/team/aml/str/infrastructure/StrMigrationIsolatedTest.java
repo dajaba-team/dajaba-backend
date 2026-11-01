@@ -20,8 +20,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * V008 단독 계약 검증. V005·V006이 아직 develop에 없어서 ops.cases는 V008이 참조하는 칸만 테스트 DB에 만든다.
- * V006이 develop에 들어오면 stub 대신 실제 V005·V006 파일을 복사하도록 바꾼다. 전체 경로는 ApplicationContextTest가 맡는다.
+ * V008 계약 검증. develop에 있는 V008보다 낮은 번호 파일을 전부 적용한 뒤 V008을 적용한다.
+ * V006이 아직 없으면 V008이 참조하는 칸만 가진 ops.cases를 만든다. V006이 들어오면 이 stub은 저절로 빠지고 실제 V006 위에서 돈다.
  */
 @Testcontainers
 class StrMigrationIsolatedTest {
@@ -29,6 +29,7 @@ class StrMigrationIsolatedTest {
     @TempDir static Path migrations;
     static Flyway flyway;
     static final String HASH = "a".repeat(64);
+    static final String V008 = "V008__create_str_tables.sql";
 
     @Container
     static PostgreSQLContainer<?> db = new PostgreSQLContainer<>("postgres:16")
@@ -41,20 +42,19 @@ class StrMigrationIsolatedTest {
 
     @BeforeAll
     static void migrate() throws Exception {
-        for (String name : List.of("V001__create_schemas_and_roles.sql", "V002__create_source_tables.sql",
-                "V003__create_users.sql", "V004__create_batch_runs.sql")) {
-            copyMigration(name);
-        }
+        List<Path> earlier = migrationsBefore(8.0);                 // V001 ~ V006(있으면)까지 실제 파일
+        for (Path f : earlier) Files.copy(f, migrations.resolve(f.getFileName()));
         flyway = Flyway.configure().dataSource(db.getJdbcUrl(), "app_migrate", "migrate")
                 .schemas("ops").defaultSchema("ops")
                 .locations("filesystem:" + migrations).load();
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(earlier.size());
+
         try (var c = DriverManager.getConnection(db.getJdbcUrl(), "app_migrate", "migrate");
              var s = c.createStatement()) {
-            // V006 대신: V008이 참조하는 칸만
-            s.execute("create table ops.cases (id bigint generated always as identity primary key, current_draft_id bigint)");
+            // V006이 아직 없을 때만: V008이 참조하는 칸만
+            s.execute("create table if not exists ops.cases (id bigint generated always as identity primary key, current_draft_id bigint)");
         }
-        copyMigration("V008__create_str_tables.sql");
+        Files.copy(migrationFile(V008), migrations.resolve(V008));
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
         flyway.validate();
     }
@@ -78,8 +78,7 @@ class StrMigrationIsolatedTest {
             long caseId = newCase(c);
             long draftId = newRequest(c, caseId);
 
-            rejected(c, "23505", "insert into ops.str_draft_requests(draft_id, case_id, request_snapshot, requested_by) "
-                    + "values (nextval('ops.str_draft_id_seq')," + caseId + ",'{}',1)");          // 진행 중 하나 더
+            rejected(c, "23505", insertRequestSql("nextval('ops.str_draft_id_seq')", caseId));   // 진행 중 하나 더
             rejected(c, "23514", "update ops.str_draft_requests set status='SUCCEEDED' where draft_id=" + draftId); // 끝난 시각 없음
             rejected(c, "23514", "update ops.str_draft_requests set status='DONE', finished_at=now() where draft_id=" + draftId);
 
@@ -90,17 +89,20 @@ class StrMigrationIsolatedTest {
 
     // 3
     @Test
-    void 초안은_요청_기록이_있어야_하고_케이스마다_사용_중인_초안은_하나다() throws Exception {
+    void 초안은_같은_케이스의_요청으로만_만들고_케이스마다_사용_중인_초안은_하나다() throws Exception {
         try (var c = backend()) {
-            long caseId = newCase(c);
-            rejected(c, "23503", insertDraftSql(999_999, caseId));                           // 요청 기록 없는 번호
+            long caseA = newCase(c);
+            long caseB = newCase(c);
+            rejected(c, "23503", insertDraftSql(999_999, caseA));                            // 요청 기록 없는 번호
 
-            long first = newDraft(c, caseId);
-            long second = newRequest(c, caseId);
-            rejected(c, "23505", insertDraftSql(second, caseId));                            // ACTIVE 두 개
+            long requestOfA = finishedRequest(c, caseA);
+            rejected(c, "23503", insertDraftSql(requestOfA, caseB));                         // A의 요청으로 B의 초안
+            exec(c, insertDraftSql(requestOfA, caseA));
 
-            exec(c, "update ops.str_drafts set status='SUPERSEDED' where id=" + first);
-            exec(c, insertDraftSql(second, caseId));                                         // 대체 뒤에는 된다
+            long second = finishedRequest(c, caseA);
+            rejected(c, "23505", insertDraftSql(second, caseA));                             // ACTIVE 두 개
+            exec(c, "update ops.str_drafts set status='SUPERSEDED' where id=" + requestOfA);
+            exec(c, insertDraftSql(second, caseA));                                          // 대체 뒤에는 된다
 
             rejected(c, "23514", "update ops.str_drafts set status='UNKNOWN' where id=" + second);
             rejected(c, "23514", "update ops.str_drafts set suspicion_level_branch=0 where id=" + second);
@@ -122,61 +124,95 @@ class StrMigrationIsolatedTest {
 
     // 5
     @Test
-    void 수정본과_검증_결과는_추가만_된다() throws Exception {
+    void 수정본은_추가만_되고_현재_수정본은_그_초안의_것이어야_한다() throws Exception {
         try (var c = backend()) {
-            long draftId = newDraft(c, newCase(c));
-            long rev1 = number(c, insertRevisionSql(draftId, 1) + " returning id");          // 1번 = AI 원문
-            exec(c, "update ops.str_drafts set current_revision_id=" + rev1 + " where id=" + draftId);
+            long draftA = newDraft(c, newCase(c));
+            long draftB = newDraft(c, newCase(c));
+            long revA = number(c, insertRevisionSql(draftA, 1) + " returning id");           // 1번 = AI 원문
+            long revB = number(c, insertRevisionSql(draftB, 1) + " returning id");
 
-            rejected(c, "23505", insertRevisionSql(draftId, 1));                             // 같은 번호
-            rejected(c, "23514", insertRevisionSql(draftId, 0));                             // 0번 없음
-            rejected(c, "42501", "update ops.str_revisions set narrative_after='[]' where id=" + rev1);
-            rejected(c, "42501", "delete from ops.str_revisions where id=" + rev1);
+            rejected(c, "23503", "update ops.str_drafts set current_revision_id=" + revB + " where id=" + draftA); // 남의 수정본
+            exec(c, "update ops.str_drafts set current_revision_id=" + revA + " where id=" + draftA);
 
-            exec(c, insertVerificationSql("v-append", draftId, HASH, "PASSED"));
-            rejected(c, "42501", "update ops.verification_results set status='CODE_FAILED' where draft_id=" + draftId);
-            rejected(c, "42501", "delete from ops.verification_results where draft_id=" + draftId);
+            rejected(c, "23505", insertRevisionSql(draftA, 1));                              // 같은 번호
+            rejected(c, "23514", insertRevisionSql(draftA, 0));                              // 0번 없음
+            rejected(c, "42501", "update ops.str_revisions set narrative_after='[]' where id=" + revA);
+            rejected(c, "42501", "delete from ops.str_revisions where id=" + revA);
         }
     }
 
     // 6
     @Test
-    void 검증_결과는_해시_모양과_상태_값을_지키고_passed는_status에서_나온다() throws Exception {
+    void 검증_결과는_그_초안의_generation_id로만_저장되고_추가만_된다() throws Exception {
         try (var c = backend()) {
-            long draftId = newDraft(c, newCase(c));
-            rejected(c, "23514", insertVerificationSql("v-upper", draftId, HASH.toUpperCase(), "PASSED"));
-            rejected(c, "23514", insertVerificationSql("v-status", draftId, HASH, "OK"));
+            long draftA = newDraft(c, newCase(c));
+            long draftB = newDraft(c, newCase(c));
 
-            exec(c, insertVerificationSql("v-old", draftId, HASH, "PASSED"));
-            rejected(c, "23505", insertVerificationSql("v-old", draftId, HASH, "PASSED"));   // 같은 verification_id
-            exec(c, insertVerificationSql("v-new", draftId, HASH, "LLM_FAILED"));             // 같은 본문 재검증
+            rejected(c, "23503", insertVerificationSql("v-other", draftA, "g-" + draftB, HASH, "PASSED", "2026-11-03T01:12:00Z"));
+            exec(c, insertVerificationSql("v-own", draftA, "g-" + draftA, HASH, "PASSED", "2026-11-03T01:12:00Z"));
 
-            assertThat(text(c, "select passed::text from ops.verification_results where verification_id='v-old'")).isEqualTo("true");
-            assertThat(text(c, "select passed::text from ops.verification_results where verification_id='v-new'")).isEqualTo("false");
-            // 같은 초안·같은 해시는 최신이 먼저 (11/1 규칙에 쓰는 조회)
-            assertThat(text(c, "select verification_id from ops.verification_results where draft_id=" + draftId
-                    + " and narrative_sha256='" + HASH + "' order by created_at desc, id desc limit 1")).isEqualTo("v-new");
+            rejected(c, "42501", "update ops.verification_results set status='CODE_FAILED' where draft_id=" + draftA);
+            rejected(c, "42501", "delete from ops.verification_results where draft_id=" + draftA);
         }
     }
 
     // 7
     @Test
-    void cases의_current_draft_id는_있는_초안만_가리킨다() throws Exception {
+    void 검증_결과는_해시_모양과_상태_값을_지키고_최신은_AI_검증_시각으로_정한다() throws Exception {
         try (var c = backend()) {
-            long caseId = newCase(c);
-            long draftId = newDraft(c, caseId);
-            exec(c, "update ops.cases set current_draft_id=" + draftId + " where id=" + caseId);
-            rejected(c, "23503", "update ops.cases set current_draft_id=-1 where id=" + caseId);
+            long draftId = newDraft(c, newCase(c));
+            String gen = "g-" + draftId;
+            rejected(c, "23514", insertVerificationSql("v-upper", draftId, gen, HASH.toUpperCase(), "PASSED", "2026-11-03T01:12:00Z"));
+            rejected(c, "23514", insertVerificationSql("v-status", draftId, gen, HASH, "OK", "2026-11-03T01:12:00Z"));
+
+            exec(c, insertVerificationSql("v-new", draftId, gen, HASH, "PASSED", "2026-11-03T01:12:00Z"));
+            rejected(c, "23505", insertVerificationSql("v-new", draftId, gen, HASH, "PASSED", "2026-11-03T01:12:00Z")); // 같은 verification_id
+            exec(c, insertVerificationSql("v-old", draftId, gen, HASH, "LLM_FAILED", "2026-11-03T01:00:00Z"));          // 늦게 저장된 예전 결과
+
+            assertThat(text(c, "select passed::text from ops.verification_results where verification_id='v-new'")).isEqualTo("true");
+            assertThat(text(c, "select passed::text from ops.verification_results where verification_id='v-old'")).isEqualTo("false");
+            assertThat(text(c, "select verification_id from ops.verification_results where draft_id=" + draftId
+                    + " and narrative_sha256='" + HASH + "' order by produced_at desc, id desc limit 1")).isEqualTo("v-new");
+        }
+    }
+
+    // 8
+    @Test
+    void cases의_current_draft_id는_같은_케이스의_초안만_가리킨다() throws Exception {
+        try (var c = backend()) {
+            long caseA = newCase(c);
+            long caseB = newCase(c);
+            long draftA = newDraft(c, caseA);
+            long draftB = newDraft(c, caseB);
+
+            rejected(c, "23503", "update ops.cases set current_draft_id=" + draftB + " where id=" + caseA);   // 남의 초안
+            rejected(c, "23503", "update ops.cases set current_draft_id=-1 where id=" + caseA);               // 없는 초안
+            exec(c, "update ops.cases set current_draft_id=" + draftA + " where id=" + caseA);
         }
     }
 
     // ---- 도우미 ----
 
-    static void copyMigration(String name) throws Exception {
-        try (var input = StrMigrationIsolatedTest.class.getResourceAsStream("/db/migration/" + name)) {
-            if (input == null) throw new IllegalStateException("Missing migration: " + name);
-            Files.copy(input, migrations.resolve(name));
+    /** src/main/resources/db/migration 에서 버전이 limit 보다 낮은 .sql 파일 (V004_1 → 4.1). */
+    static List<Path> migrationsBefore(double limit) throws Exception {
+        Path dir = Path.of(StrMigrationIsolatedTest.class.getResource("/db/migration").toURI());
+        try (var files = Files.list(dir)) {
+            return files.filter(p -> p.getFileName().toString().matches("V\\d+(_\\d+)?__.*\\.sql"))
+                    .filter(p -> version(p) < limit)
+                    .sorted()
+                    .toList();
         }
+    }
+
+    static double version(Path p) {
+        String name = p.getFileName().toString();
+        return Double.parseDouble(name.substring(1, name.indexOf("__")).replace('_', '.'));
+    }
+
+    static Path migrationFile(String name) throws Exception {
+        var url = StrMigrationIsolatedTest.class.getResource("/db/migration/" + name);
+        if (url == null) throw new IllegalStateException("Missing migration: " + name);
+        return Path.of(url.toURI());
     }
 
     private static Connection backend() throws SQLException {
@@ -189,16 +225,25 @@ class StrMigrationIsolatedTest {
 
     private static long newRequest(Connection c, long caseId) throws SQLException {
         long draftId = number(c, "select nextval('ops.str_draft_id_seq')");
-        exec(c, "insert into ops.str_draft_requests(draft_id, case_id, request_snapshot, requested_by) values ("
-                + draftId + "," + caseId + ",'{}',1)");
+        exec(c, insertRequestSql(String.valueOf(draftId), caseId));
+        return draftId;
+    }
+
+    private static long finishedRequest(Connection c, long caseId) throws SQLException {
+        long draftId = newRequest(c, caseId);
+        exec(c, "update ops.str_draft_requests set status='SUCCEEDED', finished_at=now() where draft_id=" + draftId);
         return draftId;
     }
 
     private static long newDraft(Connection c, long caseId) throws SQLException {
-        long draftId = newRequest(c, caseId);
-        exec(c, "update ops.str_draft_requests set status='SUCCEEDED', finished_at=now() where draft_id=" + draftId);
+        long draftId = finishedRequest(c, caseId);
         exec(c, insertDraftSql(draftId, caseId));
         return draftId;
+    }
+
+    private static String insertRequestSql(String draftIdExpr, long caseId) {
+        return "insert into ops.str_draft_requests(draft_id, case_id, request_snapshot, created_by, updated_by) values ("
+                + draftIdExpr + "," + caseId + ",'{}',1,1)";
     }
 
     private static String insertDraftSql(long draftId, long caseId) {
@@ -212,11 +257,12 @@ class StrMigrationIsolatedTest {
                 + "values (" + draftId + "," + revisionNo + ",'[]','[]',1)";
     }
 
-    private static String insertVerificationSql(String verificationId, long draftId, String hash, String status) {
+    private static String insertVerificationSql(String verificationId, long draftId, String generationId,
+                                                String hash, String status, String producedAt) {
         return "insert into ops.verification_results(verification_id, draft_id, generation_id, revision_no, "
                 + "narrative_sha256, status, verifier_version, produced_at, payload, created_by) values ('"
-                + verificationId + "'," + draftId + ",'g-" + draftId + "',1,'" + hash + "','" + status
-                + "','verify-test','2026-11-03T01:12:00Z','{}',1)";
+                + verificationId + "'," + draftId + ",'" + generationId + "',1,'" + hash + "','" + status
+                + "','verify-test','" + producedAt + "','{}',1)";
     }
 
     private static void exec(Connection c, String sql) throws SQLException {
