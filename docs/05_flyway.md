@@ -48,7 +48,7 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 |---|---|---|---|---|---|
 | V004_1 | source — `source_files` + `transaction_id` 자동 발급(`generated always as identity`) + `accounts.bank_country` (안건 1, 10/30 #개발 합의) | 준혁 | 적재 전 | PR #21 | — |
 | V004_2 | `ai_call_logs` (`generation_id` 포함) | 진희 (SCRUM-18) | W2 | PR #9 | V010 (`create_log_tables`) |
-| V004_3 | `access_logs` (진짜 로그인과 함께) | 진희 (SCRUM-19 B) | W2 | PR (SCRUM-19 B) | V010 (`create_log_tables`) |
+| V004_3 | `access_logs` (진짜 로그인과 함께) | 진희 (SCRUM-19 B) | W2 | PR #27 (SCRUM-19 B) | V010 (`create_log_tables`) |
 | V005 | detection — `rules`(+ 룰 8개 행), `alerts`, `alert_transactions`, `alert_no_seq` | 준혁 | W2 | 예약 | 같음 |
 | V005_1 | `alert_scores` | 준혁 | W3 (11/3) | 예약 | V007 |
 | V006 | cases — `cases`, `case_history`, `case_summaries`, `case_no_seq` (`REPORTED` CHECK 포함) | 지윤 | W2 | 예약 | 같음 |
