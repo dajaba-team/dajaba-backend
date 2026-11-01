@@ -19,6 +19,8 @@ import java.io.IOException;
  */
 class JsonLoginFilter extends UsernamePasswordAuthenticationFilter {
 
+    static final String LOGIN_ID_ATTEMPTED = JsonLoginFilter.class.getName() + ".loginIdAttempted";
+
     record LoginRequest(String loginId, String password) {}
 
     /** JSON 이 아니거나 본문이 없거나 크거나 필드가 비었다 → 실패 핸들러가 400 INVALID_REQUEST 로 (401 LOGIN_FAILED 와 구분). */
@@ -47,6 +49,7 @@ class JsonLoginFilter extends UsernamePasswordAuthenticationFilter {
             byte[] raw = req.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
             if (raw.length > MAX_BODY_BYTES) throw new InvalidLoginRequest();
             body = om.readValue(raw, LoginRequest.class);
+            req.setAttribute(LOGIN_ID_ATTEMPTED, body == null ? null : body.loginId());
         } catch (IOException | InvalidMediaTypeException e) {
             throw new InvalidLoginRequest();
         }
