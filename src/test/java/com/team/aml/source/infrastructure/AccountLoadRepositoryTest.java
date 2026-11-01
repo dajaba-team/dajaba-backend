@@ -147,6 +147,13 @@ class AccountLoadRepositoryTest {
                 Arguments.of("필드 수 부족", HEADER + "\nBank,1,SECRET1\n"),
                 Arguments.of("필드 수 초과", HEADER + "\nBank,1,SECRET1,E9,Corporation #9,x\n"),
                 Arguments.of("계좌번호 누락", HEADER + "\nBank,1,,E9,Corporation #9\n"),
+                Arguments.of("계좌번호 빈 문자열", HEADER + "\nBank,1,\"\",E9,Corporation #9\n"),
+                Arguments.of("은행 ID 공백", HEADER + "\nBank,   ,A9,E9,Corporation #9\n"),
+                Arguments.of("법인 ID 빈 문자열", HEADER + "\nBank,1,A9,\"\",Corporation #9\n"),
+                Arguments.of("법인 이름 공백", HEADER + "\nBank,1,A9,E9,\"  \"\n"),
+                Arguments.of("계좌 소유자 충돌", HEADER + "\nBank,1,A9,E8,Corporation #8\nBank,1,A9,E9,Corporation #9\n"),
+                Arguments.of("앞 0만 다른 계좌의 소유자 충돌",
+                        HEADER + "\nBank,1,A9,E8,Corporation #8\nBank,001,A9,E9,Corporation #9\n"),
                 Arguments.of("모르는 법인 유형", HEADER + "\nBank,1,A9,E9,SECRET Trust #9\n"),
                 Arguments.of("법인 이름 충돌", HEADER + "\nBank,1,A8,E9,Corporation #8\nBank,1,A9,E9,Corporation #9\n"));
     }

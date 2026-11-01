@@ -1,7 +1,8 @@
 package com.team.aml.source.domain;
 
 /** COPY 직후 스테이징 검증 결과. 건수만 담는다. */
-public record AccountStagingCheck(long rowCount, long missingRequired, long unknownEntityTypes, long entityNameConflicts) {
+public record AccountStagingCheck(long rowCount, long missingRequired, long unknownEntityTypes,
+                                  long entityNameConflicts, long accountOwnerConflicts) {
 
     public void requireValid() {
         if (rowCount == 0) {
@@ -15,6 +16,9 @@ public record AccountStagingCheck(long rowCount, long missingRequired, long unkn
         }
         if (entityNameConflicts > 0) {
             throw new AccountFileFormatException("이름이 여러 개인 법인 " + entityNameConflicts + "건");
+        }
+        if (accountOwnerConflicts > 0) {
+            throw new AccountFileFormatException("소유자가 여러 명인 계좌 " + accountOwnerConflicts + "건");
         }
     }
 }

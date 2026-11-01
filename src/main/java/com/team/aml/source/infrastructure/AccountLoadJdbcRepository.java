@@ -29,16 +29,22 @@ public class AccountLoadJdbcRepository implements AccountLoadRepository {
             'Italy', 'Japan', 'Latvia', 'Lithuania', 'Luxembourg', 'Malta', 'Mexico', 'Netherlands',
             'Portugal', 'Russia', 'Saudi Arabia', 'Slovakia', 'Slovenia', 'Spain', 'Switzerland', 'UK'""";
 
+    /** CSV의 ""는 NULL이 아니라 빈 문자열이므로 공백까지 함께 검사한다. */
     private static final String CHECK = """
             select count(*) as row_count,
-                   count(*) filter (where bank_id is null or account_number is null
-                                       or entity_id is null or entity_name is null) as missing_required,
-                   count(*) filter (where %s not in ('Corporation', 'Partnership', 'Sole Proprietorship',
-                                                     'Individual', 'Country', 'Direct')) as unknown_entity_types,
+                   count(*) filter (where nullif(btrim(bank_id), '') is null
+                                       or nullif(btrim(account_number), '') is null
+                                       or nullif(btrim(entity_id), '') is null
+                                       or nullif(btrim(entity_name), '') is null) as missing_required,
+                   count(*) filter (where %1$s not in ('Corporation', 'Partnership', 'Sole Proprietorship',
+                                                       'Individual', 'Country', 'Direct')) as unknown_entity_types,
                    (select count(*) from (
                         select entity_id from ops.accounts_staging
-                        group by entity_id having count(distinct entity_name) > 1) c) as entity_name_conflicts
-            from ops.accounts_staging""".formatted(ENTITY_PREFIX);
+                        group by entity_id having count(distinct entity_name) > 1) c) as entity_name_conflicts,
+                   (select count(*) from (
+                        select %2$s, account_number from ops.accounts_staging
+                        group by 1, 2 having count(distinct entity_id) > 1) c) as account_owner_conflicts
+            from ops.accounts_staging""".formatted(ENTITY_PREFIX, normalizedBankId("bank_id"));
 
     private static final String INSERT_ENTITIES = """
             insert into ops.entities(entity_id, entity_name, entity_type)
@@ -100,7 +106,8 @@ public class AccountLoadJdbcRepository implements AccountLoadRepository {
     public AccountStagingCheck checkStaging() {
         return jdbc.queryForObject(CHECK, (rs, rowNum) -> new AccountStagingCheck(
                 rs.getLong("row_count"), rs.getLong("missing_required"),
-                rs.getLong("unknown_entity_types"), rs.getLong("entity_name_conflicts")));
+                rs.getLong("unknown_entity_types"), rs.getLong("entity_name_conflicts"),
+                rs.getLong("account_owner_conflicts")));
     }
 
     @Override
