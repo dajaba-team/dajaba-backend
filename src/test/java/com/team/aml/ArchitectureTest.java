@@ -7,6 +7,8 @@ import com.tngtech.archunit.library.Architectures;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 /**
@@ -86,6 +88,14 @@ class ArchitectureTest {
                         "org.springframework.web..", "org.springframework.stereotype..",
                         "org.springframework.transaction..", "org.springframework.security..")
                 .allowEmptyShould(true)   // 아직 빈 기능 폴더는 통과, 클래스가 생기면 그대로 검사
+                .check(classes);
+    }
+
+    @Test
+    void 로그인_기록은_security_만_부른다() {   // SCRUM-19 — 팀원은 AccessLogWriter 의 열람 메서드만
+        classes().that().haveFullyQualifiedName("com.team.aml.shared.audit.LoginAccessLogWriter")
+                .should().onlyHaveDependentClassesThat()
+                .resideInAnyPackage("..aml.shared.security..", "..aml.shared.audit..")
                 .check(classes);
     }
 }

@@ -182,7 +182,26 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 - `request_id`·`user_id`를 MDC에 넣어 모든 로그에 붙여요. AI 호출 땐 같은 값을 `X-Request-Id`로 보내서 AI 로그와 짝을 맞춰요.
 - 로그 금지 항목은 `01_code_rules.md` §6.
 
-## 9. 마스킹 [레퍼런스 §10-2]
+## 9. 열람 기록 (`access_logs`) [레퍼런스 §3.4, 계정·권한 §1, 코드 `shared/audit`·`V004_3`, SCRUM-19]
+
+누가 언제 무엇을 봤는지 남겨요. **AOP로 자동 기록하지 않고, 조회 유스케이스가 한 줄로 직접 불러요**(레퍼런스 §3.4).
+
+| 언제 | 누가 부르나 | 한 줄 |
+|---|---|---|
+| 케이스 상세 | cases `GetCaseDetail` | `accessLog.view(TargetType.CASE, caseId)` |
+| 경보 상세 | detection (붙일 때) | `accessLog.view(TargetType.ALERT, alertId)` |
+| STR 초안 본문 | str 초안 상세 | `accessLog.strView(draftId)` |
+| 확정본 PDF | str PDF 다운로드 | `accessLog.pdfDownload(draftId)` |
+| ADMIN 내보내기 | 내보내기 유스케이스 | `accessLog.export(type, id)` |
+
+- `AccessLogWriter`(`shared/audit`)를 주입받아 부르기만 해요. **사용자는 `CurrentUser`, IP는 지금 요청**에서 Writer가 꺼내요 — 호출부는 넘기지 않아요. action 문자열을 밖에서 넣는 메서드는 없어요.
+- 기록은 **별도 트랜잭션**(`REQUIRES_NEW`)이라 `@Transactional(readOnly = true)` 조회 안에서 불러도 저장돼요. 조회가 뒤에서 실패해도 "열람 시도" 기록은 남아요.
+- **열람 기록 저장이 실패하면 예외를 그대로 올려서 조회도 실패해요(기록 없는 열람 금지).** 반대로 로그인·로그아웃 기록은 실패해도 응답은 그대로이고 경고 로그만 남겨요. [11/2 진희]
+- 로그인·로그아웃 기록(`LOGIN_OK`·`LOGIN_FAIL`·`LOGOUT`)은 `shared/security`만 쓰는 `LoginAccessLogWriter`가 남겨요(ArchUnit으로 막음). 팀원 코드는 부를 일이 없어요.
+- 추가만 — `app_backend`는 UPDATE·DELETE 권한이 없어요. 비밀번호는 어디에도 저장·로그하지 않아요.
+- action 10개와 로그인 기록 규칙은 `04_auth_user.md` §1·§3. 권한이 없어 403이 난 시도는 아직 안 남겨요(미결 30).
+
+## 10. 마스킹 [레퍼런스 §10-2]
 
 - API 응답의 계좌번호는 **뒤 4자리만** (`****9D80`). 응답 record에서 처리. 전체 번호는 ADMIN 내보내기에만.
 - 〔확인 필요〕 `account_key`(`{bank_id}_{account_no}`)를 그대로 보내면 `account_no`를 마스킹해도 전체 번호가 보여요. 프론트 응답에서 빼거나 마스킹할지, 화면에서 계좌를 무엇으로 가리킬지 정해야 해요(프론트 API 계약서 SCRUM-21). 지금은 합성 데이터라 당장 위험은 없지만, 실데이터 기준으로 정해 둬요. → [노션 미결](https://app.notion.com/p/4077fbce53048094a838f49ca1bde5d4) 1번
