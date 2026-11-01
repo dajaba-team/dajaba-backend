@@ -1,4 +1,4 @@
--- V007: ai_call_logs (레퍼런스 3.4). 코드 소속은 shared/ai (SCRUM-18).
+-- V004_2: ai_call_logs (레퍼런스 3.4, 11/1 V007에서 옮김). 코드 소속은 shared/ai (SCRUM-18).
 -- HTTP 시도마다 메타데이터만 기록한다. 본문·FK·created_by 없이 created_at 만 (10/29 결정).
 
 create table ops.ai_call_logs (

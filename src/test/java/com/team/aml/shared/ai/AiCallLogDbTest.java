@@ -1,6 +1,7 @@
 package com.team.aml.shared.ai;
 
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -79,10 +80,16 @@ class AiCallLogDbTest {
     }
 
     @Test
-    void 경계_V007은_외래키없이_독립_적용된다() {
+    void 경계_ai_call_logs는_외래키없이_독립_적용된다() {
         assertThat(Arrays.stream(flyway.info().applied())
-                .map(m -> Integer.parseInt(m.getVersion().getVersion())).toList())
-                .containsSubsequence(1, 2, 3, 4, 7);
+                .map(m -> m.getVersion()).toList())
+                .containsSubsequence(
+                        MigrationVersion.fromVersion("1"),
+                        MigrationVersion.fromVersion("2"),
+                        MigrationVersion.fromVersion("3"),
+                        MigrationVersion.fromVersion("4"),
+                        MigrationVersion.fromVersion("4.1"),
+                        MigrationVersion.fromVersion("4.2"));
         assertThat(jdbc.queryForObject("""
                 select count(*) from information_schema.table_constraints
                 where table_schema = 'ops' and table_name = 'ai_call_logs' and constraint_type = 'FOREIGN KEY'
