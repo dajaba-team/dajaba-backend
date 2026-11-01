@@ -27,9 +27,10 @@
 **`ApprovalGate`가 막는 여섯 경우** [STR 문서, 레퍼런스 §6.1 ②]
 1. 지금 본문 해시와 같은 검증이 없음(검증 뒤에 고침) → `DraftNotVerifiedException`
 2. 그 검증이 불통과이거나 `VERIFY_UNAVAILABLE` → `DraftNotVerifiedException`
+   - 1·2번 공통: 같은 초안(`generation_id`)·같은 본문 해시의 검증이 여럿이면 **가장 최근 것만** 인정 — 그게 PASSED가 아니면 409 `DRAFT_NOT_VERIFIED`. 요청 `verification_id`가 그 최신과 다르면 같은 409. 평가자 점수가 매번 같지 않아서 다시 돌려 좋은 결과만 고르는 것을 막음 [백엔드 #22 리뷰 11/1]. 구현은 W4 `SubmitForApproval`
 3. 다른 초안(`generation_id`)의 검증 → 거부
 4. 보완 요청 반려 뒤 본문이 반려 당시와 같음 → 409 `NARRATIVE_UNCHANGED`
-5. 승인자가 담당 본인 → `SelfApprovalException` / 승인자 역할 아님 → `NotApproverException`
+5. 승인자가 담당 본인 → `SelfApprovalException` / 승인자 역할 아님 → `NotApproverException` (403 NOT_APPROVER — ForbiddenException 상속, SCRUM-67)
 6. 케이스가 승인 대기가 아니거나 초안이 ACTIVE가 아님 → 거부
 
 **API** 〔초안 — STR 명세〕
