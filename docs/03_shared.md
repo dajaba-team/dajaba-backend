@@ -128,7 +128,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   | `/v1/scores` | `BATCH_RUN` / `batchRunId` | `scoring_meta.model_version` |
   | `/v1/str/drafts` | `CASE` / `caseId` | `generation_meta.prompt_version` |
   | `/v1/str/verify` | `DRAFT` / `draftId` | `verifier_version` |
-  | `/v1/cases/summary` | `CASE` / `caseId` | `prompt_version` |
+  | `/v1/cases/summary` | `CASE` / `caseId` | `generation_meta.prompt_version` |
   | `/v1/health` | null / null | null |
 
   모델 이름·`feature_version` 같은 나머지 버전은 저장하지 않아요. `generation_id`·`request_id`로 AI 쪽 기록에서 찾아요.

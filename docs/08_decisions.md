@@ -62,7 +62,7 @@
 | 요약 갱신 경로 | `POST /cases/{id}/summary:refresh` [계정·권한] | `POST /cases/{case_no}/refresh-summary` [CASES 명세 v0.5] | B 〔초안〕 |
 | 메모 경로 | `POST /cases/{id}/notes` [계정·권한] | `PUT /cases/{case_no}/notes` [CASES 명세] | B 〔초안〕 |
 | 마이그레이션 번호 | V007 `alert_scores` [레퍼런스 §7.3] | V007 `ai_call_logs` [README, WBS] | B → 11/2 SCRUM-56에서 `ai_call_logs`를 V004_2로 옮김, V007 비움 (§1 표) |
-| `ai_call_logs` 본문·대상 | `request_body`·`response_body`(실패만), `target_id bigint` [레퍼런스 §3.4] | 본문 컬럼 없음, `target_id varchar(64)` [10/29, SCRUM-18] | B 〔레퍼런스 §3.4 수정 요청〕 |
+| `ai_call_logs` 본문·대상 | `request_body`·`response_body`(실패만), `target_id bigint` [레퍼런스 §3.4] | 본문 컬럼 없음, `target_id varchar(64)` [10/29, SCRUM-18] | B — 레퍼런스 §3.4 반영됨(10/30) |
 
 ## 3. 미결 — 정해야 하는 것
 
@@ -96,6 +96,8 @@
 | 24 | STR 수정 길이 | 백엔드 5,000자 vs AI 검증 스키마 1,200자 — 생성 1,200 / 수정본 검증 5,000 분리, 글자 수 기준 통일 | 채영·진희 |
 | 25 | `revision_no` | 규약·AI는 1 = AI 원문, STR 명세는 원문 `null` — 규약대로 맞추기 | 채영·진희 |
 | 26 | 경로형 경보 `paths` 계약 | 합집합 = `transaction_ids`·R04 3홉(백엔드·ML) vs 부분집합·길이 제한 없음(AI) — 400과 UNVERIFIED 경계 정하기 | 준혁·진희·준영 |
+| 28 | health 응답 버전 필드 | 백엔드 `HealthResponse`는 `generator_version`을 읽는데 AI `/v1/health`는 `server_version`·`model_version`·`feature_version`·`retrieval_version`을 줌 → 기동 로그에 null. SCRUM-17 코드라 SCRUM-22(BE↔AI 연결)에서 맞춤 (11/1 SCRUM-18 점검) | 진희(SCRUM-22) |
+| 29 | `ai_call_logs` drafts 대상 | 지금 `CASE`/`caseId`인데 안건 23 이후 백엔드가 `draft_id`를 먼저 발급함 → `AiDtos`를 규약 v0.2 모양으로 바꿀 때(SCRUM-22) `DRAFT`/`draft_id`로 갈지 정함 (11/1 SCRUM-18 점검) | 진희(SCRUM-22) |
 
 ## 4. 이 docs 자체에 대한 결정
 

@@ -227,7 +227,7 @@ public class WebClientAiClient implements AiClient {
                 case "/v1/scores" -> text(body.path("scoring_meta"), "model_version");
                 case "/v1/str/drafts" -> text(body.path("generation_meta"), "prompt_version");
                 case "/v1/str/verify" -> text(body, "verifier_version");
-                case "/v1/cases/summary" -> text(body, "prompt_version");
+                case "/v1/cases/summary" -> text(body.path("generation_meta"), "prompt_version");
                 default -> null;
             };
             writer.write(AiCallLog.create(path, requestId, attempt, status, errorCode, durationMs,

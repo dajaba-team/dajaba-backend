@@ -330,4 +330,14 @@ class WebClientAiClientTest {
         assertThat(row.getAiVersion()).isEqualTo("M1");
     }
 
+    @Test
+    void 정상_요약은_generation_meta의_prompt_version을_기록한다() {   // AI SummaryResponse.generation_meta (11/1 점검)
+        server.enqueue(json(200, "{\"summary\":\"S\",\"generation_meta\":{\"prompt_version\":\"p-1\"}}"));
+        client.caseSummary(new CaseSummaryRequest("C1", null, null, null, null));
+        assertThat(writer.rows).hasSize(1);
+        AiCallLog row = writer.rows.get(0);
+        assertThat(row.getEndpoint()).isEqualTo("/v1/cases/summary");
+        assertThat(row.getAiVersion()).isEqualTo("p-1");
+    }
+
 }
