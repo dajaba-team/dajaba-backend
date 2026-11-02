@@ -53,7 +53,8 @@ public class TransactionLoadJdbcRepository implements TransactionLoadRepository 
                              and amount_paid::numeric <> round(amount_paid::numeric, %3$d) then 1 else 0 end), 0) as amounts_rounded
             from ops.transactions_staging""";
 
-    // TODO(안건 19): 월요일에 실제 적재 테스트 결과로 금액 numeric(18,2) 수정 여부를 정한다. 지금은 소수 2자리를 넘으면 반올림된다.
+    // TODO(안건 19): 11/2 numeric(20,6)으로 변경 결정, V005_2에서 바꾼다. 그 전에는 소수 2자리를 넘으면 반올림된다.
+    // transaction_id는 generated always라 열 목록에서 뺀다. 값을 넣으면 DB가 거부한다 (안건 1).
     private static final String INSERT = """
             insert into ops.transactions(
                 ts, from_bank_id, from_bank_id_raw, from_account_no, from_account_key,
