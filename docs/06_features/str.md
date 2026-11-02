@@ -15,6 +15,7 @@
 **확정** [안건 9·17·23·24, 규약 §5]
 - **`facts`는 AI가 계산**해요. 백엔드는 거래 목록·facts를 보내지 않아요. 초안 요청 필드: `draft_id`, `case_no`, `alert`(규약 2절 경보), `evidence_transaction_ids`(**= `alert.transaction_ids` 전체**), `reasons`(점수 응답 그대로), `prior_alert_count`, `investigator_notes`, `reporting_institution`. [안건 23, 규약 §5.1] 〔STR 명세 예시의 `alert` 필드·`evidence` 부분집합 표기는 규약 원문을 따라 맞출 것〕
 - **`draft_id`는 백엔드가 AI 호출 전에 먼저 발급**(시퀀스). 재전송은 같은 `draft_id`, 새 초안은 새 `draft_id`. `generation_id`는 AI가 발급해서 돌려주고 `str_drafts`에 저장. AI가 같은 `draft_id`를 처리 중이면 409 `GENERATION_IN_PROGRESS` — **자동 재시도 안 하고** "생성 중"으로 표시.
+- `StrDraft`·`StrDraftRequest`는 shared `AssignedIdEntity` 상속, id는 `ops.str_draft_id_seq`에서 받은 값을 생성자로 넣어요(`str_draft_requests`는 `@AttributeOverride`로 `draft_id`). [SCRUM-68, `03_shared` §1]
 - 초안 생성은 **ESCALATED · DRAFTED · REJECTED(보완 요청)**에서만. 에스컬레이션은 **별도 버튼**이고 초안 생성 요청 안에서 하지 않아요. [10/23 확정, 가이드 §5.1]
 - **생성과 검증은 별도 버튼.** 초안 직후 자동 검증 없음. [안건 17]
 - 수정은 섹션 `text`만. `facts`·`evidence_ids`는 요청에 와도 무시하고 서버가 관리. 저장 한 번 = `str_revisions` 한 행(전·후 본문). 섹션당 5,000자, 빈 섹션 금지.
