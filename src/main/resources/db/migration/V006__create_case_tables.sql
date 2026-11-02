@@ -55,10 +55,11 @@ create table ops.case_history (
     created_by           bigint       not null references ops.users(id),
     -- 생성(OPEN) 행만 이전 상태가 없다
     constraint case_history_from_status_ck check ((action = 'OPEN') = (from_status is null)),
-    constraint case_history_reason_code_ck check (
-        (action = 'REJECT' and reason_code in ('NEED_REVISION','NOT_REPORTABLE'))
-        or (action = 'CLOSE' and reason_code in ('FALSE_POSITIVE','DUPLICATE','NO_ACTION'))
-        or (action not in ('REJECT','CLOSE') and reason_code is null))
+    -- case 로 나눠 NULL 이 섞여도 결과가 true/false 로만 나오게 한다 (OR 로 묶으면 NULL 이 CHECK 를 통과한다)
+    constraint case_history_reason_code_ck check (case
+        when action = 'REJECT' then reason_code is not null and reason_code in ('NEED_REVISION','NOT_REPORTABLE')
+        when action = 'CLOSE'  then reason_code is not null and reason_code in ('FALSE_POSITIVE','DUPLICATE','NO_ACTION')
+        else reason_code is null end)
 );
 -- 케이스 이력 화면(API-11·15): 케이스별·종류별 최신순.
 create index case_history_case_action_idx on ops.case_history (case_id, action, created_at desc, id desc);

@@ -6,6 +6,7 @@ import com.team.aml.cases.domain.CaseHistoryAction;
 import com.team.aml.cases.domain.CaseHistoryRepository;
 import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.cases.domain.CaseStatus;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.jdbc.JdbcConnectionDetails;
@@ -70,6 +71,17 @@ class CaseSchemaDbTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactionManager;
 
+    private long inv;      // 조사역 A (users FK 대상)
+    private long inv2;     // 조사역 B
+    private String INV;    // SQL 문자열용
+
+    @BeforeEach
+    void users() {
+        inv = user("t_inv01");
+        inv2 = user("t_inv02");
+        INV = String.valueOf(inv);
+    }
+
     // ── 매핑 ──────────────────────────────────────────────────
 
     @Test
@@ -105,19 +117,19 @@ class CaseSchemaDbTest {
 
         tx().executeWithoutResult(s -> {
             Case c = cases.findById(id).orElseThrow();
-            c.assign(7L, 7L);
+            c.assign(inv, inv);
             save(c);
         });
 
         Case loaded = cases.findById(id).orElseThrow();
         assertThat(loaded.getStatus()).isEqualTo(CaseStatus.REVIEWING);
-        assertThat(loaded.getAssigneeId()).isEqualTo(7L);
+        assertThat(loaded.getAssigneeId()).isEqualTo(inv);
         assertThat(loaded.getVersion()).isEqualTo(1L);
         assertThat(histories.findByCaseIdOrderByIdAsc(id))
                 .extracting(CaseHistory::getAction, CaseHistory::getCaseVersionBefore, CaseHistory::getCreatedBy)
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(CaseHistoryAction.OPEN, 0L, SYSTEM),
-                        org.assertj.core.groups.Tuple.tuple(CaseHistoryAction.ASSIGN, 0L, 7L));
+                        org.assertj.core.groups.Tuple.tuple(CaseHistoryAction.ASSIGN, 0L, inv));
     }
 
     @Test
@@ -127,14 +139,14 @@ class CaseSchemaDbTest {
 
         tx().executeWithoutResult(s -> {
             Case c = cases.findById(id).orElseThrow();
-            c.assign(7L, 7L);
+            c.assign(inv, inv);
             save(c);
         });
 
-        stale.assign(8L, 8L);
+        stale.assign(inv2, inv2);
         assertThatThrownBy(() -> tx().executeWithoutResult(s -> cases.save(stale)))
                 .isInstanceOf(ObjectOptimisticLockingFailureException.class);
-        assertThat(cases.findById(id).orElseThrow().getAssigneeId()).isEqualTo(7L);
+        assertThat(cases.findById(id).orElseThrow().getAssigneeId()).isEqualTo(inv);
     }
 
     // ── 제약 ──────────────────────────────────────────────────
@@ -153,15 +165,15 @@ class CaseSchemaDbTest {
     void 실패_상태와_맞지_않는_담당자_초안_반려코드_종결사유는_거부된다() throws SQLException {
         try (Connection c = backend(); Statement st = c.createStatement()) {
             // 상태 · 담당자 · 초안 · 반려 코드 · 종결 사유
-            assertCheck(st, "'OPEN'", "7", "null", "null", "null");                      // OPEN 인데 담당자
+            assertCheck(st, "'OPEN'", INV, "null", "null", "null");                      // OPEN 인데 담당자
             assertCheck(st, "'REVIEWING'", "null", "null", "null", "null");              // 배정됐는데 담당자 없음
-            assertCheck(st, "'REVIEWING'", "7", "300", "null", "null");                  // 상신 전인데 초안
-            assertCheck(st, "'DRAFTED'", "7", "null", "null", "null");                   // DRAFTED 인데 초안 없음
-            assertCheck(st, "'REJECTED'", "7", "300", "null", "null");                   // REJECTED 인데 반려 코드 없음
-            assertCheck(st, "'DRAFTED'", "7", "300", "'NEED_REVISION'", "null");         // REJECTED 아닌데 반려 코드
-            assertCheck(st, "'CLOSED'", "7", "null", "null", "null");                    // CLOSED 인데 종결 사유 없음
-            assertCheck(st, "'REVIEWING'", "7", "null", "null", "'NO_ACTION'");          // CLOSED 아닌데 종결 사유
-            assertCheck(st, "'UNKNOWN'", "7", "null", "null", "null");                   // 없는 상태
+            assertCheck(st, "'REVIEWING'", INV, "300", "null", "null");                  // 상신 전인데 초안
+            assertCheck(st, "'DRAFTED'", INV, "null", "null", "null");                   // DRAFTED 인데 초안 없음
+            assertCheck(st, "'REJECTED'", INV, "300", "null", "null");                   // REJECTED 인데 반려 코드 없음
+            assertCheck(st, "'DRAFTED'", INV, "300", "'NEED_REVISION'", "null");         // REJECTED 아닌데 반려 코드
+            assertCheck(st, "'CLOSED'", INV, "null", "null", "null");                    // CLOSED 인데 종결 사유 없음
+            assertCheck(st, "'REVIEWING'", INV, "null", "null", "'NO_ACTION'");          // CLOSED 아닌데 종결 사유
+            assertCheck(st, "'UNKNOWN'", INV, "null", "null", "null");                   // 없는 상태
         }
     }
 
@@ -169,14 +181,14 @@ class CaseSchemaDbTest {
     void 경계_9개_상태가_모두_저장된다() throws SQLException {
         try (Connection c = backend(); Statement st = c.createStatement()) {
             st.executeUpdate(insertCase(caseNo(), newAlert(), "'OPEN'", "null", "null", "null", "null"));
-            st.executeUpdate(insertCase(caseNo(), newAlert(), "'REVIEWING'", "7", "null", "null", "null"));
-            st.executeUpdate(insertCase(caseNo(), newAlert(), "'ESCALATED'", "7", "null", "null", "null"));
-            st.executeUpdate(insertCase(caseNo(), newAlert(), "'DRAFTED'", "7", "300", "null", "null"));
-            st.executeUpdate(insertCase(caseNo(), newAlert(), "'PENDING_APPROVAL'", "7", "300", "null", "null"));
-            st.executeUpdate(insertCase(caseNo(), newAlert(), "'APPROVED'", "7", "300", "null", "null"));
-            st.executeUpdate(insertCase(caseNo(), newAlert(), "'REPORTED'", "7", "300", "null", "null"));
-            st.executeUpdate(insertCase(caseNo(), newAlert(), "'REJECTED'", "7", "300", "'NOT_REPORTABLE'", "null"));
-            st.executeUpdate(insertCase(caseNo(), newAlert(), "'CLOSED'", "7", "300", "null", "'DUPLICATE'"));
+            st.executeUpdate(insertCase(caseNo(), newAlert(), "'REVIEWING'", INV, "null", "null", "null"));
+            st.executeUpdate(insertCase(caseNo(), newAlert(), "'ESCALATED'", INV, "null", "null", "null"));
+            st.executeUpdate(insertCase(caseNo(), newAlert(), "'DRAFTED'", INV, "300", "null", "null"));
+            st.executeUpdate(insertCase(caseNo(), newAlert(), "'PENDING_APPROVAL'", INV, "300", "null", "null"));
+            st.executeUpdate(insertCase(caseNo(), newAlert(), "'APPROVED'", INV, "300", "null", "null"));
+            st.executeUpdate(insertCase(caseNo(), newAlert(), "'REPORTED'", INV, "300", "null", "null"));
+            st.executeUpdate(insertCase(caseNo(), newAlert(), "'REJECTED'", INV, "300", "'NOT_REPORTABLE'", "null"));
+            st.executeUpdate(insertCase(caseNo(), newAlert(), "'CLOSED'", INV, "300", "null", "'DUPLICATE'"));
         }
     }
 
@@ -204,7 +216,7 @@ class CaseSchemaDbTest {
     @Test
     void 실패_같은_version의_메모는_한_번만() throws SQLException {
         long caseId = jdbc.queryForObject(
-                insertCase(caseNo(), newAlert(), "'REVIEWING'", "7", "null", "null", "null") + " returning id", Long.class);
+                insertCase(caseNo(), newAlert(), "'REVIEWING'", INV, "null", "null", "null") + " returning id", Long.class);
         try (Connection c = backend(); Statement st = c.createStatement()) {
             st.executeUpdate(insertNote(caseId, 3));
             assertSqlState("23505", () -> st.executeUpdate(insertNote(caseId, 3)));
@@ -256,6 +268,16 @@ class CaseSchemaDbTest {
         Case saved = cases.save(c);
         histories.saveAll(saved.takePendingHistories());
         return saved.getId();
+    }
+
+    /** 테스트 사용자 (있으면 그대로). */
+    private long user(String loginId) {
+        return jdbc.queryForObject("""
+                insert into ops.users (login_id, display_name, role, created_by, updated_by)
+                values (?, ?, 'INVESTIGATOR', 1, 1)
+                on conflict (login_id) do update set display_name = excluded.display_name
+                returning id
+                """, Long.class, loginId, loginId);
     }
 
     private static String caseNo() {
