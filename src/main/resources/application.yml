@@ -95,6 +95,8 @@ spring:
   config:
     activate:
       on-profile: test
+  flyway:
+    locations: classpath:db/migration,classpath:db/test-migration   # 테스트 전용 테이블(V9000~)은 test 에서만 (SCRUM-68)
 aml:
   ai:
     mock: true
