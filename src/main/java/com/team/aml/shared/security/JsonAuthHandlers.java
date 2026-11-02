@@ -1,8 +1,11 @@
 package com.team.aml.shared.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.team.aml.shared.audit.LoginAccessLogWriter;
 import com.team.aml.shared.api.ErrorResponse;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.InternalAuthenticationServiceException;
 import org.springframework.security.web.AuthenticationEntryPoint;
@@ -24,13 +27,17 @@ import java.io.IOException;
 @Component
 public class JsonAuthHandlers {
 
+    private static final Logger log = LoggerFactory.getLogger(JsonAuthHandlers.class);
+    private final LoginAccessLogWriter accessLog;
+
     /** 로그인 성공 응답 — GET /auth/me(GetMe.Result)와 같은 모양. shared 는 user 를 모르므로 따로 둔다. */
     record LoginResult(Long id, String loginId, String displayName, String role) {}
 
     private final ObjectMapper om;
 
-    public JsonAuthHandlers(ObjectMapper om) {
+    public JsonAuthHandlers(ObjectMapper om, LoginAccessLogWriter accessLog) {
         this.om = om;
+        this.accessLog = accessLog;
     }
 
     public AuthenticationEntryPoint entryPoint() {
@@ -45,6 +52,11 @@ public class JsonAuthHandlers {
     public AuthenticationSuccessHandler loginSuccess() {
         return (req, res, auth) -> {
             AppUserDetails me = (AppUserDetails) auth.getPrincipal();
+            try {
+                accessLog.loginOk(me.userId(), req.getRemoteAddr());
+            } catch (RuntimeException e) {
+                log.warn("access log write failed action={}", "LOGIN_OK");
+            }
             write(res, 200, new LoginResult(me.userId(), me.loginId(), me.displayName(), me.role()));
         };
     }
@@ -56,6 +68,11 @@ public class JsonAuthHandlers {
             } else if (ex instanceof InternalAuthenticationServiceException) {   // DB 장애 등 — 로그인 실패로 숨기지 않는다
                 write(res, 500, ErrorResponse.of("INTERNAL_ERROR", "알 수 없는 오류"));
             } else {
+                try {
+                    accessLog.loginFail((String) req.getAttribute(JsonLoginFilter.LOGIN_ID_ATTEMPTED), req.getRemoteAddr());
+                } catch (RuntimeException e) {
+                    log.warn("access log write failed action={}", "LOGIN_FAIL");
+                }
                 write(res, 401, ErrorResponse.of("LOGIN_FAILED", "아이디 또는 비밀번호가 맞지 않습니다"));
             }
         };

@@ -1,7 +1,10 @@
 package com.team.aml.shared.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.team.aml.shared.audit.LoginAccessLogWriter;
 import com.team.aml.shared.config.AmlProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -45,16 +48,21 @@ import java.util.List;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(SecurityConfig.class);
+    private final LoginAccessLogWriter accessLog;
+
     private final JsonAuthHandlers handlers;
     private final CurrentUser currentUser;
     private final AmlProperties props;
     private final ObjectMapper om;
 
-    public SecurityConfig(JsonAuthHandlers handlers, CurrentUser currentUser, AmlProperties props, ObjectMapper om) {
+    public SecurityConfig(JsonAuthHandlers handlers, CurrentUser currentUser, AmlProperties props, ObjectMapper om,
+                          LoginAccessLogWriter accessLog) {
         this.handlers = handlers;
         this.currentUser = currentUser;
         this.props = props;
         this.om = om;
+        this.accessLog = accessLog;
     }
 
     @Bean
@@ -101,7 +109,16 @@ public class SecurityConfig {
             .logout(l -> l
                 .logoutUrl("/api/v1/auth/logout")
                 .deleteCookies("SESSION")
-                .logoutSuccessHandler((req, res, auth) -> res.setStatus(204)))
+                .logoutSuccessHandler((req, res, auth) -> {
+                    if (auth != null && auth.getPrincipal() instanceof AppUserDetails me) {
+                        try {
+                            accessLog.logout(me.userId(), req.getRemoteAddr());
+                        } catch (RuntimeException e) {
+                            log.warn("access log write failed action={}", "LOGOUT");
+                        }
+                    }
+                    res.setStatus(204);
+                }))
             .formLogin(f -> f.disable())
             .httpBasic(b -> b.disable())
             .addFilterAfter(new UserIdMdcFilter(currentUser), ExceptionTranslationFilter.class);

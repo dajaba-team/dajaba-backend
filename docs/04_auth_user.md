@@ -17,7 +17,20 @@
 
 - `users` 컬럼: `id`, `login_id`(유일), `password_hash`(BCrypt strength 12), `display_name`, `role`, `is_active`, 감사 4. 이메일·전화 없음.
 - `id = 1`은 `SYSTEM`(배치용, 로그인 불가, `password_hash` null) — `V003`에서 넣어요.
-- `access_logs.action`은 **10개**예요 — `VIEW`, `EXPORT`, `LOGIN_OK`, `LOGIN_FAIL`, `LOGOUT`, `USER_CREATED`, `ROLE_CHANGED`, `USER_DEACTIVATED`, STR 본문 열람, PDF 다운로드(마지막 두 개 이름은 SCRUM-19에서). 권한이 없어 403이 난 시도도 남겨요. [미결 10, 서식 안건 4, 10/30]
+- `access_logs.action`은 **10개**예요. [미결 10, 서식 안건 4, 10/30 · 이름 확정 SCRUM-19]
+
+  | action | 언제 | `target_type` / `target_id` | 누가 남기나 |
+  |---|---|---|---|
+  | `VIEW` | 케이스·경보·사용자 상세 열람 | `CASE`·`ALERT`·`USER` / 그 id | 조회 유스케이스 → `AccessLogWriter.view` |
+  | `STR_VIEW` | STR 초안 본문 열람 | `STR_DRAFT` / `draft_id` | str → `strView` |
+  | `PDF_DOWNLOAD` | 확정본 PDF 다운로드 | `STR_DRAFT` / `draft_id` | str → `pdfDownload` |
+  | `EXPORT` | ADMIN 내보내기 | 대상 / id | `export` |
+  | `LOGIN_OK` | 로그인 성공 | — | `shared/security` |
+  | `LOGIN_FAIL` | 로그인 실패(**401만** — 400 형식 오류는 안 남김). **있는 아이디여도 `user_id`는 null**, `login_id_attempted`(입력값 앞 64자)만 | — | `shared/security` |
+  | `LOGOUT` | 로그아웃 | — | `shared/security` |
+  | `USER_CREATED`·`ROLE_CHANGED`·`USER_DEACTIVATED` | 사용자 관리 | `USER` / id | W4 사용자 관리 (값만 있음) |
+
+  권한이 없어 403이 난 시도는 아직 안 남겨요 — 어떤 action으로 남길지 미결 30.
 
 ## 2. 역할 세 개 — 한 사람에 하나 [계정·권한 §2, 레퍼런스 §9.2]
 
@@ -40,7 +53,7 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 | 단계 | 프론트 | 서버 |
 |---|---|---|
 | 로그인 | `POST /api/v1/auth/login` `{login_id, password}` | BCrypt 비교 → `SESSION`(HttpOnly) + `XSRF-TOKEN` 쿠키 + `{id, login_id, display_name, role}`. `access_logs` LOGIN_OK |
-| 실패 | 메시지 한 가지 | 401 `LOGIN_FAILED` — 없는 ID·틀린 비밀번호·비활성 **모두 같은 응답**. `access_logs` LOGIN_FAIL (`login_id_attempted` 기록) |
+| 실패 | 메시지 한 가지 | 401 `LOGIN_FAILED` — 없는 ID·틀린 비밀번호·비활성 **모두 같은 응답**. `access_logs` LOGIN_FAIL (`login_id_attempted` 기록, 400 형식 오류는 기록 안 함) |
 | 이후 요청 | 쓰기 요청(POST/PUT/PATCH/DELETE)에 `X-XSRF-TOKEN` 헤더 (axios 기본) | 세션 → CSRF → URL 역할 순서로 확인 |
 | 새로고침 | `GET /api/v1/auth/me`로 역할 다시 받기. localStorage에 역할 저장 안 함 | `{id, login_id, display_name, role}` |
 | 만료 | 401이 오면 로그인 화면, 경로 기억 | **30분 무활동** → 401 `UNAUTHENTICATED` |
@@ -48,6 +61,7 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 
 - **동시 세션 1개** (`maximumSessions(1)`) — 두 번째 로그인이 먼저 것을 끊어요. 끊긴 세션의 다음 요청은 401 `UNAUTHENTICATED`(같은 JSON 모양). 단 쓰기 요청에 CSRF 토큰이 없으면 CSRF 검사가 먼저라 403 `CSRF_INVALID`. 같은 사람인지는 사용자 id로만 봐요(역할이 바뀌어도 이전 세션이 끊김).
 - 로그인 본문은 `application/json`만(그 밖은 400 — 로그인 CSRF 방지), 4KB·`login_id` 64자·비밀번호 128자까지. 입력한 `login_id`·비밀번호는 로그에 남기지 않아요.
+- 로그인·로그아웃 기록은 **별도 트랜잭션**으로 남기고, 기록이 실패해도 로그인·로그아웃 응답은 그대로예요(경고 로그만, `login_id` 없이). **열람 기록(`VIEW`·`STR_VIEW`·`PDF_DOWNLOAD`·`EXPORT`)은 반대로, 저장이 실패하면 조회도 실패해요**(기록 없는 열람 금지, `03_shared.md` §9). IP는 `request.getRemoteAddr()` 그대로(프록시 헤더는 믿지 않음). [SCRUM-19]
 - **CSRF 켬.** `CookieCsrfTokenRepository.withHttpOnlyFalse()`.
 - **CORS** — `local` 프로파일에서만 `localhost:5173` 하나를 `allowCredentials(true)`. `*`는 어디에도 없음. 프론트는 `withCredentials: true`.
 - 쿠키 `Secure`는 `prod`에서만. 세션 저장소는 서버 메모리(재시작하면 모두 로그아웃 — 받아들임).

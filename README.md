@@ -39,10 +39,11 @@ DB를 완전히 초기화하려면 `docker compose down -v` (볼륨 삭제 → �
 | 묶음 | 파일 | 상태 |
 |---|---|---|
 | 폴더 구조 | `com.team.aml.{source,detection,cases,str,user,shared}` × `domain/application/infrastructure/api` | 각 폴더 `package-info.java`에 담당·들어갈 클래스 적어 둠 |
-| DB | `db/init/01_roles.sh`(역할 3개·스키마 2개), Flyway `V001`~`V004` (권한, 원천 4개+스테이징, users+SYSTEM, batch_runs), `V004_1`(source_files), `V004_2`(ai_call_logs) | 레퍼런스 3절 그대로. `ddl-auto=validate` |
-| shared/domain | `BaseEntity`(감사 4), `CreatedOnlyEntity`, `DomainException`, `NotFoundException`, `ForbiddenException`(403 부모, SCRUM-67), `DisplayNumber` | |
+| DB | `db/init/01_roles.sh`(역할 3개·스키마 2개), Flyway `V001`~`V004` (권한, 원천 4개+스테이징, users+SYSTEM, batch_runs), `V004_1`(source_files), `V004_2`(ai_call_logs), `V004_3`(access_logs) | 레퍼런스 3절 그대로. `ddl-auto=validate` |
+| shared/domain | `AuditedEntity`(감사 4, SCRUM-68), `BaseEntity`(+ 자동 id), `AssignedIdEntity`(+ 미리 받은 id, SCRUM-68), `CreatedOnlyEntity`, `DomainException`, `NotFoundException`, `ForbiddenException`(403 부모, SCRUM-67), `DisplayNumber` | |
 | shared/api | `GlobalExceptionHandler`(8.2 에러 JSON), `ErrorResponse`, `PageResponse` | |
 | shared/security | `SecurityConfig`(세션·CSRF·URL 역할), `CurrentUser`, `SessionAuditorAware`, 401/403 JSON, `request_id` MDC | 진짜 |
+| shared/audit | `AccessLogWriter`(열람 기록 한 줄 — `view`·`strView`·`pdfDownload`·`export`), `LoginAccessLogWriter`(로그인·로그아웃, security 전용), `AccessLog` | 진짜 (SCRUM-19) |
 | shared/batch | `BatchRun`, `BatchRunRepository`, 409 예외 2개 | 안건 14 반영 |
 | shared/ai | `AiClient` 인터페이스, DTO 틀, `MockAiClient`(local/test), 기동 시 health, `AiCallLog`·`AiCallLogWriter`(시도마다 1행, 메타데이터만) | 진짜 (SCRUM-17·18) |
 | user | `User`, `Role`, `UserRepository`, `GetMe`, `AuthController(/me)`, `DbUserDetailsService`(로그인 때 users 읽기), `DevUserSeeder` | 진짜 (SCRUM-19) |
