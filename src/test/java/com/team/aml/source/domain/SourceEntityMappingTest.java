@@ -22,7 +22,7 @@ class SourceEntityMappingTest {
 
     @Test
     void 원천_엔티티는_읽기_전용이고_setter가_없다() {
-        for (Class<?> type : List.of(Transaction.class, Account.class, LegalEntity.class, CustomerAttributes.class)) {
+        for (Class<?> type : List.of(Transaction.class, Account.class, LegalEntity.class, CustomerAttributes.class, SourceFile.class)) {
             assertThat(type.isAnnotationPresent(Immutable.class)).isTrue();
             assertThat(Arrays.stream(type.getDeclaredMethods()).map(Method::getName))
                     .noneMatch(name -> name.startsWith("set"));

@@ -2,6 +2,7 @@ package com.team.aml.shared.api;
 
 import com.team.aml.shared.ai.AiClientException;
 import com.team.aml.shared.domain.DomainException;
+import com.team.aml.shared.domain.ForbiddenException;
 import com.team.aml.shared.domain.NotFoundException;
 import jakarta.persistence.OptimisticLockException;
 import org.slf4j.Logger;
@@ -24,7 +25,8 @@ import java.util.Map;
  *
  *  @Valid 실패, JSON 파싱 실패      → 400 INVALID_REQUEST
  *  *NotFoundException              → 404 <CLASS_NAME>
- *  DomainException 전부            → 409 <CLASS_NAME>
+ *  ForbiddenException 하위         → 403 <CLASS_NAME> (역할·담당자 같은 업무 권한, SCRUM-67)
+ *  DomainException 나머지          → 409 <CLASS_NAME>
  *  OptimisticLock                  → 409 CONCURRENT_UPDATE
  *  AiClientException               → e.httpStatus() (기본 502 AI 코드 그대로, 409 GENERATION_IN_PROGRESS→DRAFT_IN_PROGRESS)
  *  AccessDenied (403)              → 403 FORBIDDEN
@@ -54,6 +56,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ErrorResponse> notFound(NotFoundException e) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of(e.code(), e.getMessage(), e.details()));
+    }
+
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<ErrorResponse> domainForbidden(ForbiddenException e) {
+        log.warn("domain rule violated: {} - {}", e.code(), e.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ErrorResponse.of(e.code(), e.getMessage(), e.details()));
     }
 

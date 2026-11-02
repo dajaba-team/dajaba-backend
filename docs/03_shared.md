@@ -17,10 +17,19 @@
 
 | 클래스 | 쓰는 곳 | 컬럼 |
 |---|---|---|
-| `BaseEntity` | 사람이 고치는 테이블 (`cases`, `str_drafts`, `users`, `rules` …) | `id`, `created_at`, `created_by`, `updated_at`, `updated_by` — 자동 채움 |
-| `CreatedOnlyEntity` | 추가만 하는 테이블 (`case_history`, `str_revisions`, `approvals`, 로그 …) | `id`, `created_at`, `created_by` |
+| `AuditedEntity` | 직접 상속하지 않음 — 아래 `BaseEntity`·`AssignedIdEntity`의 부모 [SCRUM-68] | `created_at`, `created_by`, `updated_at`, `updated_by` — 자동 채움 (id 없음) |
+| `BaseEntity` | 사람이 고치는 테이블 (`cases`, `users`, `rules` …) — `AuditedEntity` + DB 자동 발급(IDENTITY) `id` | `id`, `created_at`, `created_by`, `updated_at`, `updated_by` — 자동 채움 |
+| `AssignedIdEntity` | 시퀀스로 **미리 받은 번호**를 id로 쓰는 테이블 (`str_drafts`, `str_draft_requests`) — `AuditedEntity` + 생성자로 받는 `id`. 새 행 판단은 `Persistable` [SCRUM-68] | `id`, `created_at`, `created_by`, `updated_at`, `updated_by` — 감사 4칸 자동 채움 |
+| `CreatedOnlyEntity` | 사람이 추가만 하는 테이블 (`case_history`, `str_revisions`, `approvals` …) | `id`, `created_at`, `created_by` |
 | (상속 없음, `@Immutable`) | 원천 4개 | 원천 컬럼 그대로 |
+| (상속 없음) | 운영 로그 (`ai_call_logs`, `batch_runs`) — `created_by` 없이 `created_at`만 [레퍼런스 §3.4] | 테이블 컬럼 그대로 |
 
+- **`AssignedIdEntity`** — id를 직접 넣은 엔티티로 `save()`를 부르면 Spring Data가 "이미 있는 행"으로 보고 `merge`(SELECT 한 번 더, 같은 id면 조용히 덮어씀)로 가요. 그래서 `Persistable.isNew()`로 "만들고 아직 저장 안 함 = 새 행"을 알려 줘요 → INSERT 한 번, 같은 id를 또 새로 만들어 저장하면 PK 위반. 생성자에 null을 넣으면 `IllegalArgumentException`. 낙관적 락이 필요한 테이블(`str_drafts`)은 하위 엔티티에 `@Version`을 따로 둬요.
+- id 컬럼 이름이 `id`가 아니면 하위 엔티티에 `@AttributeOverride`를 붙여요:
+  ```java
+  @Entity @Table(name = "str_draft_requests")
+  @AttributeOverride(name = "id", column = @Column(name = "draft_id"))
+  ```
 - 감사 컬럼은 `SessionAuditorAware`가 세션 사용자 ID로 채워요. 세션이 없으면(배치) `SYSTEM`(`users.id = 1`). [레퍼런스 §9.4, 코드 `CurrentUser.SYSTEM_ID = 1L`]
 - 비동기 배치 스레드엔 세션이 없어서, 컨트롤러가 요청자 ID를 꺼내 유스케이스에 넘겨요(`triggered_by`). [SD 명세 §3 〔초안〕]
 
@@ -40,11 +49,14 @@
 |---|---|---|
 | `@Valid` 실패, JSON 파싱 실패 | 400 | `INVALID_REQUEST` |
 | `NotFoundException` 하위 | 404 | 하위 클래스가 정함 (`CASE_NOT_FOUND`, `DRAFT_NOT_FOUND` …) |
-| `DomainException` 하위 전부 | **409** | 클래스 이름 UPPER_SNAKE (`INVALID_CASE_TRANSITION`, `SELF_APPROVAL` …) |
+| `ForbiddenException` 하위 | **403** | 클래스 이름 UPPER_SNAKE (`NOT_APPROVER`, `NOT_ASSIGNEE` …) [SCRUM-67] |
+| `DomainException` 하위 전부 (위 둘 제외) | **409** | 클래스 이름 UPPER_SNAKE (`INVALID_CASE_TRANSITION`, `SELF_APPROVAL` …) |
 | 낙관적 락 충돌 | 409 | `CONCURRENT_UPDATE` |
 | `AiClientException` | 502 | AI가 준 코드 그대로. **예외:** AI 409 `GENERATION_IN_PROGRESS`는 `AiClient`가 409 `DRAFT_IN_PROGRESS`로 바꿔 보내요("생성 중" ≠ AI 장애) [10/29] |
 | 권한 없음 | 403 | `FORBIDDEN` |
 | 그 밖 | 500 | `INTERNAL_ERROR`, 메시지는 "알 수 없는 오류" 고정, 스택은 로그에만 |
+
+- **업무 규칙 중 권한 문제(역할·담당자)는 `ForbiddenException`을 상속 → 403**, 코드는 클래스 이름 규칙 그대로(`NotApproverException` → `NOT_APPROVER`). **상태·버전 충돌은 `DomainException` → 409**(`SELF_APPROVAL`도 409 그대로). URL·역할 단위로 Spring Security가 막는 403은 따로(`FORBIDDEN`). [SCRUM-67, 백엔드 #22 리뷰 11/1]
 
 - 상태 전이 에러 이름은 **`INVALID_CASE_TRANSITION`으로 통일**(10/28). 옛 표기 `INVALID_TRANSITION`은 쓰지 않아요. [STR 문서 미결, CASES 명세 §4]
 - 동시 수정 409 이름은 **`CONCURRENT_UPDATE`**예요. 계정·권한 §5의 `CONFLICT`는 옛 표기예요. [레퍼런스 §8.2, CASES·STR 명세]
@@ -55,7 +67,7 @@
 |---|---|---|---|
 | 400 | `INVALID_REQUEST` | 공통 (반려 코드·사유 누락 포함) | 확정 |
 | 401 | `UNAUTHENTICATED`, `LOGIN_FAILED` | 인증 | 확정 [계정·권한 §3] |
-| 403 | `FORBIDDEN`, `CSRF_INVALID`, `NOT_ASSIGNEE` | 권한 | 확정 [계정·권한 §5] |
+| 403 | `FORBIDDEN`, `CSRF_INVALID`, `NOT_ASSIGNEE`, `NOT_APPROVER` | 권한 (`NOT_ASSIGNEE`·`NOT_APPROVER`는 `ForbiddenException` 하위) | 확정 [계정·권한 §5, SCRUM-67] |
 | 404 | `CASE_NOT_FOUND`, `DRAFT_NOT_FOUND`, `USER_NOT_FOUND`, `EVIDENCE_NOT_FOUND`, `BATCH_RUN_NOT_FOUND`, `ALERT_NOT_FOUND`, `RULE_NOT_FOUND` | 각 기능 | 〔초안〕 |
 | 409 | `INVALID_CASE_TRANSITION`, `CONCURRENT_UPDATE`, `SELF_APPROVAL`, `NARRATIVE_UNCHANGED`, `BATCH_ALREADY_DONE`, `BATCH_RUNNING` | 공통·cases·str·batch | 확정 [안건 24, 레퍼런스 §11.1] |
 | 409 | `DRAFT_NOT_VERIFIED`, `DRAFT_LOCKED`, `DRAFT_SUPERSEDED`, `DRAFT_IN_PROGRESS`, `VERIFY_IN_PROGRESS` | str | 〔초안〕 STR 명세 |
@@ -116,7 +128,19 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   - 재시도 후에도 실패하면 **AI가 준 코드 그대로 502**. 연결 거부로 끝나 AI 코드가 없을 때만 **`AI_UNAVAILABLE` 502**, 타임아웃은 `AI_TIMEOUT` 502. [SCRUM-17, 10/29]
   - 대상 코드는 규약 v0.2 §6.2 그대로이고, "남은 시간 안에서만"과 "백엔드 타임아웃은 제외"를 10/29에 더했어요. 규약 문구도 다음 규약 변경 때 맞출게요. 〔레퍼런스 §8.5·SD 명세의 "5xx·타임아웃 1회"는 그 전 표기〕
 - AI 쪽 중첩 재시도 금지. [안건 21]
-- 모든 호출은 `ai_call_logs`에 한 줄 — **메타데이터만**: 엔드포인트, `request_id`, 상태 코드, 에러 코드, 소요 ms, 재시도 회차, 버전, `generation_id`. **요청·응답 본문은 실패해도 저장하지 않아요.** 실패 요청에 조사 메모·보고서 본문이 들어갈 수 있어서예요. 전문은 **AI가 그 요청을 저장했을 때만** AI 쪽 `ai.generations`에서 `request_id`로 찾을 수 있어요(연결 실패·인증 거부처럼 AI가 기록 전에 끝난 요청은 전문이 없어요). [규약 v0.2 §6.4, 10/29] 〔레퍼런스 §3.4의 "실패한 호출만 본문 저장"은 그 전 안〕
+- 모든 호출은 `ai_call_logs`에 **시도마다 한 줄**(재시도하면 같은 `request_id`로 `attempt` 1·2) — **메타데이터만**: 엔드포인트, `request_id`, 상태 코드(AI가 준 HTTP 상태, 타임아웃·연결 실패는 null), 에러 코드, 소요 ms, 재시도 회차, 버전, `generation_id`, 대상(`target_type`·`target_id`). **요청·응답 본문은 실패해도 저장하지 않아요.** 실패 요청에 조사 메모·보고서 본문이 들어갈 수 있어서예요. 전문은 **AI가 그 요청을 저장했을 때만** AI 쪽 `ai.generations`에서 `request_id`로 찾을 수 있어요(연결 실패·인증 거부처럼 AI가 기록 전에 끝난 요청은 전문이 없어요). [규약 v0.2 §6.4, 10/29] 〔레퍼런스 §3.4의 "실패한 호출만 본문 저장"은 그 전 안〕
+- `ai_call_logs`의 대상·버전은 엔드포인트별로 고정이에요. 버전은 **성공 응답에서만** 채워요(실패는 null). [SCRUM-18]
+
+  | 엔드포인트 | `target_type` / `target_id` | `ai_version` (응답 필드) |
+  |---|---|---|
+  | `/v1/scores` | `BATCH_RUN` / `batchRunId` | `scoring_meta.model_version` |
+  | `/v1/str/drafts` | `CASE` / `caseId` | `generation_meta.prompt_version` |
+  | `/v1/str/verify` | `DRAFT` / `draftId` | `verifier_version` |
+  | `/v1/cases/summary` | `CASE` / `caseId` | `generation_meta.prompt_version` |
+  | `/v1/health` | null / null | null |
+
+  모델 이름·`feature_version` 같은 나머지 버전은 저장하지 않아요. `generation_id`·`request_id`로 AI 쪽 기록에서 찾아요.
+- 기록은 **별도 트랜잭션**(`AiCallLogWriter`, `REQUIRES_NEW`)으로, AI 응답을 받은 **호출 스레드에서** 해요(reactor 연산자 안에서 JPA 금지). 바깥 작업이 롤백돼도 실패 행은 남고, 기록이 실패해도 AI 결과·예외는 그대로예요(`WebClientAiClient`가 삼키고 경고 로그). [SCRUM-18]
 - `AiDtos`는 규약 v0.2 이전 뼈대예요. 실제 연결 전에 `draft_id`·`generation_id`·검증 요청·응답 모양으로 바꿔요(SCRUM-17).
 
 **트랜잭션 패턴 — "DB → HTTP → DB"** 네 군데 [레퍼런스 §8.4]
@@ -166,7 +190,26 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 - `request_id`·`user_id`를 MDC에 넣어 모든 로그에 붙여요. AI 호출 땐 같은 값을 `X-Request-Id`로 보내서 AI 로그와 짝을 맞춰요.
 - 로그 금지 항목은 `01_code_rules.md` §6.
 
-## 9. 마스킹 [레퍼런스 §10-2]
+## 9. 열람 기록 (`access_logs`) [레퍼런스 §3.4, 계정·권한 §1, 코드 `shared/audit`·`V004_3`, SCRUM-19]
+
+누가 언제 무엇을 봤는지 남겨요. **AOP로 자동 기록하지 않고, 조회 유스케이스가 한 줄로 직접 불러요**(레퍼런스 §3.4).
+
+| 언제 | 누가 부르나 | 한 줄 |
+|---|---|---|
+| 케이스 상세 | cases `GetCaseDetail` | `accessLog.view(TargetType.CASE, caseId)` |
+| 경보 상세 | detection (붙일 때) | `accessLog.view(TargetType.ALERT, alertId)` |
+| STR 초안 본문 | str 초안 상세 | `accessLog.strView(draftId)` |
+| 확정본 PDF | str PDF 다운로드 | `accessLog.pdfDownload(draftId)` |
+| ADMIN 내보내기 | 내보내기 유스케이스 | `accessLog.export(type, id)` |
+
+- `AccessLogWriter`(`shared/audit`)를 주입받아 부르기만 해요. **사용자는 `CurrentUser`, IP는 지금 요청**에서 Writer가 꺼내요 — 호출부는 넘기지 않아요. action 문자열을 밖에서 넣는 메서드는 없어요.
+- 기록은 **별도 트랜잭션**(`REQUIRES_NEW`)이라 `@Transactional(readOnly = true)` 조회 안에서 불러도 저장돼요. 조회가 뒤에서 실패해도 "열람 시도" 기록은 남아요.
+- **열람 기록 저장이 실패하면 예외를 그대로 올려서 조회도 실패해요(기록 없는 열람 금지).** 반대로 로그인·로그아웃 기록은 실패해도 응답은 그대로이고 경고 로그만 남겨요. [11/2 진희]
+- 로그인·로그아웃 기록(`LOGIN_OK`·`LOGIN_FAIL`·`LOGOUT`)은 `shared/security`만 쓰는 `LoginAccessLogWriter`가 남겨요(ArchUnit으로 막음). 팀원 코드는 부를 일이 없어요.
+- 추가만 — `app_backend`는 UPDATE·DELETE 권한이 없어요. 비밀번호는 어디에도 저장·로그하지 않아요.
+- action 10개와 로그인 기록 규칙은 `04_auth_user.md` §1·§3. 권한이 없어 403이 난 시도는 아직 안 남겨요(미결 30).
+
+## 10. 마스킹 [레퍼런스 §10-2]
 
 - API 응답의 계좌번호는 **뒤 4자리만** (`****9D80`). 응답 record에서 처리. 전체 번호는 ADMIN 내보내기에만.
 - 〔확인 필요〕 `account_key`(`{bank_id}_{account_no}`)를 그대로 보내면 `account_no`를 마스킹해도 전체 번호가 보여요. 프론트 응답에서 빼거나 마스킹할지, 화면에서 계좌를 무엇으로 가리킬지 정해야 해요(프론트 API 계약서 SCRUM-21). 지금은 합성 데이터라 당장 위험은 없지만, 실데이터 기준으로 정해 둬요. → [노션 미결](https://app.notion.com/p/4077fbce53048094a838f49ca1bde5d4) 1번

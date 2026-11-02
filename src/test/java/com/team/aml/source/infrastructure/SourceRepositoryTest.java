@@ -1,5 +1,7 @@
 package com.team.aml.source.infrastructure;
 
+import com.team.aml.source.domain.SourceFile;
+import com.team.aml.source.domain.SourceFileRepository;
 import com.team.aml.source.domain.Transaction;
 import com.team.aml.source.domain.TransactionRepository;
 import org.junit.jupiter.api.Test;
@@ -14,6 +16,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,6 +43,9 @@ class SourceRepositoryTest {
     TransactionRepository transactions;
 
     @Autowired
+    SourceFileRepository sourceFiles;
+
+    @Autowired
     JdbcTemplate jdbc;
 
     @Test
@@ -54,11 +60,11 @@ class SourceRepositoryTest {
                     ts, from_bank_id, from_bank_id_raw, from_account_no, from_account_key,
                     to_bank_id, to_bank_id_raw, to_account_no, to_account_key,
                     amount_received, currency_received, amount_paid, currency_paid,
-                    payment_format, is_laundering, is_self_transfer, source_file_id, source_row_number)
+                    payment_format, is_laundering, is_self_transfer, source_file_id, source_row_number, created_at)
                 values ('2022-09-01 00:20:00', '10', '010', 'A1', '10_A1',
                         '20', '020', 'B1', '20_B1',
                         3697.34, 'US Dollar', 3697.34, 'US Dollar',
-                        'ACH', false, false, ?, 7)
+                        'ACH', false, false, ?, 7, '2022-09-01 00:20:00+00')
                 returning transaction_id
                 """, Long.class, fileId);
 
@@ -70,5 +76,17 @@ class SourceRepositoryTest {
         assertThat(t.getFromBankIdRaw()).isEqualTo("010");
         assertThat(t.getSourceFileId()).isEqualTo(fileId);
         assertThat(t.getSourceRowNumber()).isEqualTo(7L);
+        assertThat(t.getCreatedAt()).isEqualTo(Instant.parse("2022-09-01T00:20:00Z"));
+    }
+
+    @Test
+    void 읽기_전용_원본_파일도_새로_저장할_수_있다() {
+        String hash = "b".repeat(64);
+
+        Long id = sourceFiles.save(SourceFile.of("b.csv", hash)).getId();
+
+        assertThat(id).isNotNull();
+        assertThat(sourceFiles.findByFileHash(hash)).get()
+                .extracting(SourceFile::getFileName).isEqualTo("b.csv");
     }
 }

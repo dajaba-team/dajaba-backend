@@ -149,6 +149,8 @@ class AccountLoadRepositoryTest {
                 Arguments.of("계좌번호 누락", HEADER + "\nBank,1,,E9,Corporation #9\n"),
                 Arguments.of("계좌번호 빈 문자열", HEADER + "\nBank,1,\"\",E9,Corporation #9\n"),
                 Arguments.of("은행 ID 공백", HEADER + "\nBank,   ,A9,E9,Corporation #9\n"),
+                Arguments.of("은행 ID 문자", HEADER + "\nBank,ABC,SECRET1,E9,Corporation #9\n"),
+                Arguments.of("은행 ID 숫자와 문자 혼합", HEADER + "\nBank,0A1,SECRET1,E9,Corporation #9\n"),
                 Arguments.of("법인 ID 빈 문자열", HEADER + "\nBank,1,A9,\"\",Corporation #9\n"),
                 Arguments.of("법인 이름 공백", HEADER + "\nBank,1,A9,E9,\"  \"\n"),
                 Arguments.of("계좌 소유자 충돌", HEADER + "\nBank,1,A9,E8,Corporation #8\nBank,1,A9,E9,Corporation #9\n"),

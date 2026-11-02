@@ -36,6 +36,7 @@ public class AccountLoadJdbcRepository implements AccountLoadRepository {
                                        or nullif(btrim(account_number), '') is null
                                        or nullif(btrim(entity_id), '') is null
                                        or nullif(btrim(entity_name), '') is null) as missing_required,
+                   count(*) filter (where not coalesce(bank_id ~ '^[0-9]+$', false)) as invalid_bank_ids,
                    count(*) filter (where %1$s not in ('Corporation', 'Partnership', 'Sole Proprietorship',
                                                        'Individual', 'Country', 'Direct')) as unknown_entity_types,
                    (select count(*) from (
@@ -105,7 +106,7 @@ public class AccountLoadJdbcRepository implements AccountLoadRepository {
     @Override
     public AccountStagingCheck checkStaging() {
         return jdbc.queryForObject(CHECK, (rs, rowNum) -> new AccountStagingCheck(
-                rs.getLong("row_count"), rs.getLong("missing_required"),
+                rs.getLong("row_count"), rs.getLong("missing_required"), rs.getLong("invalid_bank_ids"),
                 rs.getLong("unknown_entity_types"), rs.getLong("entity_name_conflicts"),
                 rs.getLong("account_owner_conflicts")));
     }

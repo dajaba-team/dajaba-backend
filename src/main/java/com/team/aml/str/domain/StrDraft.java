@@ -35,6 +35,9 @@ public class StrDraft {
 
     public static StrDraft create(Long caseId, String generationId, JsonNode facts,
                                   List<NarrativeSection> aiNarrative) {
+        if (generationId == null || generationId.isBlank()) {   // VerificationResult.of()와 같은 규칙
+            throw new IllegalArgumentException("generationId가 비어 있다");
+        }
         requireEachSectionOnce(aiNarrative);          // ← 만들기 전에 먼저 검사
         aiNarrative.forEach(n -> validateText(n.section(), n.text()));   // 고친 문장과 같은 규칙
         return new StrDraft(caseId, generationId, facts, inSectionOrder(aiNarrative));

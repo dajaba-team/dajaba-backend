@@ -15,6 +15,7 @@
 **확정** [안건 9·17·23·24, 규약 §5]
 - **`facts`는 AI가 계산**해요. 백엔드는 거래 목록·facts를 보내지 않아요. 초안 요청 필드: `draft_id`, `case_no`, `alert`(규약 2절 경보), `evidence_transaction_ids`(**= `alert.transaction_ids` 전체**), `reasons`(점수 응답 그대로), `prior_alert_count`, `investigator_notes`, `reporting_institution`. [안건 23, 규약 §5.1] 〔STR 명세 예시의 `alert` 필드·`evidence` 부분집합 표기는 규약 원문을 따라 맞출 것〕
 - **`draft_id`는 백엔드가 AI 호출 전에 먼저 발급**(시퀀스). 재전송은 같은 `draft_id`, 새 초안은 새 `draft_id`. `generation_id`는 AI가 발급해서 돌려주고 `str_drafts`에 저장. AI가 같은 `draft_id`를 처리 중이면 409 `GENERATION_IN_PROGRESS` — **자동 재시도 안 하고** "생성 중"으로 표시.
+- `StrDraft`·`StrDraftRequest`는 shared `AssignedIdEntity` 상속, id는 `ops.str_draft_id_seq`에서 받은 값을 생성자로 넣어요(`str_draft_requests`는 `@AttributeOverride`로 `draft_id`). [SCRUM-68, `03_shared` §1]
 - 초안 생성은 **ESCALATED · DRAFTED · REJECTED(보완 요청)**에서만. 에스컬레이션은 **별도 버튼**이고 초안 생성 요청 안에서 하지 않아요. [10/23 확정, 가이드 §5.1]
 - **생성과 검증은 별도 버튼.** 초안 직후 자동 검증 없음. [안건 17]
 - 수정은 섹션 `text`만. `facts`·`evidence_ids`는 요청에 와도 무시하고 서버가 관리. 저장 한 번 = `str_revisions` 한 행(전·후 본문). 섹션당 5,000자, 빈 섹션 금지.
@@ -27,9 +28,10 @@
 **`ApprovalGate`가 막는 여섯 경우** [STR 문서, 레퍼런스 §6.1 ②]
 1. 지금 본문 해시와 같은 검증이 없음(검증 뒤에 고침) → `DraftNotVerifiedException`
 2. 그 검증이 불통과이거나 `VERIFY_UNAVAILABLE` → `DraftNotVerifiedException`
+   - 1·2번 공통: 같은 초안(`generation_id`)·같은 본문 해시의 검증이 여럿이면 **가장 최근 것만** 인정 — 그게 PASSED가 아니면 409 `DRAFT_NOT_VERIFIED`. 요청 `verification_id`가 그 최신과 다르면 같은 409. 평가자 점수가 매번 같지 않아서 다시 돌려 좋은 결과만 고르는 것을 막음 [백엔드 #22 리뷰 11/1]. 구현은 W4 `SubmitForApproval`
 3. 다른 초안(`generation_id`)의 검증 → 거부
 4. 보완 요청 반려 뒤 본문이 반려 당시와 같음 → 409 `NARRATIVE_UNCHANGED`
-5. 승인자가 담당 본인 → `SelfApprovalException` / 승인자 역할 아님 → `NotApproverException`
+5. 승인자가 담당 본인 → `SelfApprovalException` / 승인자 역할 아님 → `NotApproverException` (403 NOT_APPROVER — ForbiddenException 상속, SCRUM-67)
 6. 케이스가 승인 대기가 아니거나 초안이 ACTIVE가 아님 → 거부
 
 **API** 〔초안 — STR 명세〕

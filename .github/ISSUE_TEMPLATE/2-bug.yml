@@ -30,7 +30,7 @@ body:
     id: what
     attributes:
       label: 🐞 무슨 일이 있었나요?
-      placeholder: mock-login 후 GET /api/v1/auth/me 를 부르면 401이 나옵니다.
+      placeholder: inv01 로 POST /api/v1/auth/login 후 GET /api/v1/auth/me 를 부르면 401이 나옵니다.
     validations:
       required: true
 
