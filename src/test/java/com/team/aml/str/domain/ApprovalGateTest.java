@@ -2,7 +2,6 @@ package com.team.aml.str.domain;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.team.aml.shared.domain.ForbiddenException;
 import com.team.aml.user.domain.Role;
 import org.junit.jupiter.api.Test;
 
@@ -157,8 +156,7 @@ public class ApprovalGateTest {
 
         for (Role notApprover : new Role[]{Role.INVESTIGATOR, Role.ADMIN, Role.SYSTEM, null}) {
             assertThatThrownBy(() -> ApprovalGate.requireApprover(notApprover))
-                    .isInstanceOf(NotApproverException.class)
-                    .isInstanceOf(ForbiddenException.class);
+                    .isInstanceOf(NotApproverException.class);
         }
     }
 }

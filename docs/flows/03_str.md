@@ -45,7 +45,7 @@ sequenceDiagram
     STRC->>STRU: VerifyStrDraft  ⟵ 트랜잭션 밖
     STRU->>AI: POST /v1/str/verify {generation_id, revision_no, narrative(현재 수정본)} — facts는 AI가 generation_id로 꺼냄
     AI-->>STRU: {verification_id, generation_id, revision_no, narrative_sha256, passed, status, code_checks[5], llm_checks[5]}
-    STRU->>DB: INSERT verification_results (generation_id, revision_no, narrative_sha256, passed, payload) — V009
+    STRU->>DB: INSERT verification_results (generation_id, revision_no, narrative_sha256, status, verifier_version, produced_at, payload) — V008. passed는 status에서 자동
     STRU-->>FE: 200 {passed, 실패 항목}
     note right of AI: passed = 코드 5종 ∧ 평가자 5종 (안건 9). 호출 실패는 VERIFY_UNAVAILABLE
 
