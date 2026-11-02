@@ -68,7 +68,7 @@ class AccountLoadRepositoryTest {
                 "Canada Bank #26,023842,A1,E1,Corporation #1",
                 "Canada Bank #26,023842,A2,E1,Corporation #1");
 
-        assertThat(result).isEqualTo(new AccountLoadResult(2, 1, 2));
+        assertThat(result).isEqualTo(new AccountLoadResult(2, 1, 2, 0));
         assertThat(text("select bank_id from ops.accounts where account_key = '23842_A1'")).isEqualTo("23842");
         assertThat(text("select account_no from ops.accounts where account_key = '23842_A1'")).isEqualTo("A1");
         assertThat(text("select bank_name from ops.accounts where account_key = '23842_A1'")).isEqualTo("Canada Bank #26");
@@ -104,24 +104,32 @@ class AccountLoadRepositoryTest {
                 "Saudi Arabia Bank #1,1,A1,E1,Corporation #1",
                 "Crytpo Bank #2,2,A2,E1,Corporation #1",
                 "Oasis Bank #3,3,A3,E1,Corporation #1",
-                "First Bank of Dallas,4,A4,E1,Corporation #1",
-                ",5,A5,E1,Corporation #1");
+                "First Bank of Dallas,4,A4,E1,Corporation #1");
 
         assertThat(text("select bank_country from ops.accounts where account_key = '1_A1'")).isEqualTo("Saudi Arabia");
-        assertThat(count("select count(*) from ops.accounts where bank_country is null")).isEqualTo(4);
+        assertThat(count("select count(*) from ops.accounts where bank_country is null")).isEqualTo(3);
     }
 
     @Test
-    void 다음_파일은_새_계좌만_넣고_처음_값을_유지한다() throws Exception {
+    void 다음_파일은_값이_같은_기존_계좌는_건너뛰고_새_계좌만_넣는다() throws Exception {
         load("a.csv", "Canada Bank #1,1,A1,E1,Corporation #1");
 
         AccountLoadResult second = load("b.csv",
-                "Japan Bank #9,1,A1,E1,Corporation #1",
-                "Japan Bank #9,1,A2,E2,Partnership #2");
+                "Canada Bank #1,01,A1,E1,Corporation #1",
+                "Canada Bank #1,1,A2,E2,Partnership #2");
 
-        assertThat(second).isEqualTo(new AccountLoadResult(2, 1, 1));
-        assertThat(text("select bank_country from ops.accounts where account_key = '1_A1'")).isEqualTo("Canada");
+        assertThat(second).isEqualTo(new AccountLoadResult(2, 1, 1, 0));
         assertThat(count("select count(*) from ops.accounts")).isEqualTo(2);
+    }
+
+    @Test
+    void 국가_목록에_없는_국가명_은행은_비워_두고_수를_알려준다() throws Exception {
+        AccountLoadResult result = load("a.csv",
+                "Korea Bank #3,3,A3,E3,Corporation #3",
+                "Crytpo Bank #4,4,A4,E4,Corporation #4");
+
+        assertThat(result.unlistedCountryBanks()).isEqualTo(1);
+        assertThat(count("select count(*) from ops.accounts where bank_country is null")).isEqualTo(2);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -157,6 +165,14 @@ class AccountLoadRepositoryTest {
                 Arguments.of("앞 0만 다른 계좌의 소유자 충돌",
                         HEADER + "\nBank,1,A9,E8,Corporation #8\nBank,001,A9,E9,Corporation #9\n"),
                 Arguments.of("모르는 법인 유형", HEADER + "\nBank,1,A9,E9,SECRET Trust #9\n"),
+                Arguments.of("앞 0만 다른 은행의 이름 충돌",
+                        HEADER + "\nCanada Bank #2,2,SECRET1,E5,Corporation #5\nJapan Bank #2,02,SECRET2,E6,Corporation #6\n"),
+                Arguments.of("기존 계좌와 소유자가 다름", HEADER + "\nCanada Bank #1,1,A1,E9,Corporation #9\n"),
+                Arguments.of("기존 은행과 이름이 다름", HEADER + "\nSECRET Bank #1,01,A7,E7,Corporation #7\n"),
+                Arguments.of("기존 법인과 이름이 다름", HEADER + "\nCanada Bank #1,1,SECRET8,E1,Individual #1\n"),
+                Arguments.of("은행 이름 누락", HEADER + "\n,2,SECRET1,E9,Corporation #9\n"),
+                Arguments.of("같은 은행에 이름 누락과 이름이 섞임",
+                        HEADER + "\nCanada Bank #2,2,SECRET1,E5,Corporation #5\n\"  \",02,SECRET2,E6,Corporation #6\n"),
                 Arguments.of("법인 이름 충돌", HEADER + "\nBank,1,A8,E9,Corporation #8\nBank,1,A9,E9,Corporation #9\n"));
     }
 

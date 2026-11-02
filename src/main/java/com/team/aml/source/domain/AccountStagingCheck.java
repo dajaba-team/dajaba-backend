@@ -1,8 +1,12 @@
 package com.team.aml.source.domain;
 
-/** COPY 직후 스테이징 검증 결과. 건수만 담는다. */
+/**
+ * COPY 직후 스테이징 검증 결과. 건수만 담는다.
+ * unlistedCountryBanks는 실패 조건이 아니라 보고값이다. "{X} Bank #n" 형식인데 국가 목록에 없는 은행 수다.
+ */
 public record AccountStagingCheck(long rowCount, long missingRequired, long invalidBankIds,
-                                  long unknownEntityTypes, long entityNameConflicts, long accountOwnerConflicts) {
+                                  long unknownEntityTypes, long entityNameConflicts, long accountOwnerConflicts,
+                                  long bankNameConflicts, long existingConflicts, long unlistedCountryBanks) {
 
     public void requireValid() {
         if (rowCount == 0) {
@@ -22,6 +26,12 @@ public record AccountStagingCheck(long rowCount, long missingRequired, long inva
         }
         if (accountOwnerConflicts > 0) {
             throw new AccountFileFormatException("소유자가 여러 명인 계좌 " + accountOwnerConflicts + "건");
+        }
+        if (bankNameConflicts > 0) {
+            throw new AccountFileFormatException("이름이 여러 개인 은행 " + bankNameConflicts + "건");
+        }
+        if (existingConflicts > 0) {
+            throw new AccountFileFormatException("이미 적재된 계좌·은행과 값이 다른 행 " + existingConflicts + "건");
         }
     }
 }

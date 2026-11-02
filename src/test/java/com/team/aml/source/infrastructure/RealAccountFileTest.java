@@ -48,7 +48,7 @@ class RealAccountFileTest {
         AccountLoadResult result = loadAccountFile.execute(
                 Path.of(System.getenv("AML_DATASET_DIR"), "HI-Small_accounts.csv"));
 
-        assertThat(result).isEqualTo(new AccountLoadResult(518_581, 166_207, 518_581));
+        assertThat(result).isEqualTo(new AccountLoadResult(518_581, 166_207, 518_581, 0));
         assertThat(jdbc.queryForObject(
                 "select count(distinct bank_id) from ops.accounts where bank_country is not null", Long.class))
                 .isEqualTo(18_642);
