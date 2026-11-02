@@ -95,7 +95,7 @@ public class Case extends BaseEntity {
     public boolean reassign(Long newAssigneeId, Long actorId, String comment) {
         Objects.requireNonNull(newAssigneeId, "newAssigneeId");
         if (!status.isReassignable()) {
-            throw new InvalidCaseTransitionException(status, status, rejectionReasonCode);
+            throw InvalidCaseTransitionException.notAllowedIn(status, CaseHistoryAction.REASSIGN, rejectionReasonCode);
         }
         if (newAssigneeId.equals(assigneeId)) {
             return false;

@@ -463,7 +463,11 @@ class CaseTest {
         c.close(INVESTIGATOR, CloseReason.NO_ACTION, "종결");
 
         assertThatThrownBy(() -> c.escalate(INVESTIGATOR, "다시")).isInstanceOf(InvalidCaseTransitionException.class);
-        assertThatThrownBy(() -> c.reassign(INVESTIGATOR_B, ADMIN, null)).isInstanceOf(InvalidCaseTransitionException.class);
+        assertThatThrownBy(() -> c.reassign(INVESTIGATOR_B, ADMIN, null))
+                .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> {
+                    assertThat(e.getMessage()).contains("REASSIGN").doesNotContain("→");   // "CLOSED → CLOSED" 가 아니라 동작 이름
+                    assertThat(e.details()).containsEntry("action", CaseHistoryAction.REASSIGN).doesNotContainKey("to_status");
+                });
         assertThatThrownBy(() -> c.close(INVESTIGATOR, CloseReason.NO_ACTION, "또")).isInstanceOf(InvalidCaseTransitionException.class);
     }
 

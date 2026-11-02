@@ -98,6 +98,7 @@ flowchart TB
 | 케이스 상세 | REJECTED(보고 안 함) | 종료(사유) (담당 조사역) |
 | STR 편집 (읽기 전용) | PENDING_APPROVAL | 없음 — 승인자 결정 대기 |
 | 승인 | PENDING_APPROVAL | 승인 · 보완 요청 · 보고 안 함(반려 둘 다 사유 필수) (승인자, 담당 조사역 본인 제외) |
-| 케이스 상세 (읽기 전용) | APPROVED · CLOSED | 없음. 이력만 |
+| 승인 | APPROVED | 모의 제출 (승인자, API 12-2) → REPORTED |
+| 케이스 상세 (읽기 전용) | REPORTED · CLOSED | 없음. 이력만 |
 
-케이스 상태 8개의 전이 규칙은 백엔드 설계 가이드 4절. 10/27 안건 11·15·24로 확정: ESCALATED·DRAFTED → CLOSED(사유 필수), REJECTED는 반려 코드에 따라 DRAFTED(보완 요청) 또는 CLOSED(보고 안 함). PENDING_APPROVAL → CLOSED는 없다.
+케이스 상태 9개(REPORTED 포함, 11/1)의 전이 규칙은 `06_features/cases.md`·코드 `CaseStatus`가 정본. 끝 상태는 REPORTED·CLOSED. 10/27 안건 11·15·24로 확정: ESCALATED·DRAFTED → CLOSED(사유 필수), REJECTED는 반려 코드에 따라 DRAFTED(보완 요청) 또는 CLOSED(보고 안 함). PENDING_APPROVAL → CLOSED는 없다.
