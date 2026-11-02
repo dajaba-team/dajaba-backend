@@ -14,7 +14,7 @@
 - `is_laundering`·`pattern_type`·`pattern_id`는 적재하지만 **백엔드 엔티티에 매핑하지 않고 응답에도 없어요.** 적재 SQL 안에서 검증용으로만 세요. [레퍼런스 §10-10, SD 명세 §3]
 - 적재는 JPA가 아니라 `CopyManager`(COPY)로. `transactions_staging`(unlogged)을 거쳐 `INSERT … SELECT`로 변환. [레퍼런스 §11.2]
 - 서비스 DB에는 **HI-Small만** 들어가요(SAML-D·LI는 학습 전용). 준영이 준 검증값(`expected.json`)으로 적재 결과를 같이 확인해요. [안건 12·13]
-- 금액은 `numeric(18,2)` 유지. [안건 19]
+- 금액은 `numeric(20,6)`. 원본 금액을 반올림하지 않아요(Bitcoin 소수 6자리). [안건 19, 11/2 준혁·준영 합의, V005_2] 〔10/27의 `numeric(18,2)` 유지는 실제 파일에서 293,425개 필드가 바뀌어 변경〕
 - **`transaction_id` — DB가 자동 발급.** 원본 추적은 `source_files` 테이블로: `source_files(id, file_name, file_hash CHAR(64) UNIQUE)`, `transactions.source_file_id`(FK), `source_row_number`, `UNIQUE(source_file_id, source_row_number)`. CSV 행 번호·적재 순서로 ID를 추정하지 않아요. [안건 1, ML 규약 §1.1] 〔레퍼런스 §2·SD 명세 §11.2의 "CSV 행 번호를 그대로 PK"는 그 전 안〕
 - `customer_attributes`는 백엔드가 만드는 **가상 KYC**(`entity_id` 해시를 시드로 — 다시 만들어도 같은 값). AI 피처로는 안 써요. [레퍼런스 §3.1, ML 규약 §1]
 
