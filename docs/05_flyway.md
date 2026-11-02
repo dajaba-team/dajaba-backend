@@ -51,7 +51,7 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 | V004_3 | `access_logs` (진짜 로그인과 함께) | 진희 (SCRUM-19 B) | W2 | 머지됨 #27 | V010 (`create_log_tables`) |
 | V005 | detection — `rules`(+ 룰 8개 행), `alerts`, `alert_transactions`, `alert_no_seq` | 준혁 | W2 | 예약 | 같음 |
 | V005_1 | `alert_scores` | 준혁 | W3 (11/3) | 예약 | V007 |
-| V006 | cases — `cases`, `case_history`, `case_summaries`, `case_no_seq` (`REPORTED` CHECK 포함) | 지윤 | W2 | 예약 | 같음 |
+| V006 | cases — `cases`, `case_history`, `case_summaries`, `case_no_seq` (`REPORTED` CHECK 포함) | 지윤 | W2 | PR (SCRUM-48) | 같음 |
 | V007 | **비움 — 쓰지 않아요** | — | — | 비움 | `create_alert_scores` |
 | V008 | str — `str_drafts`, `str_revisions`, `verification_results` + `cases.current_draft_id` FK | 채영 | W2 | 예약 | 같음 (W3) |
 | V009 | `approvals` (`reason_code`, `narrative_sha256` 포함) | 채영 | W2 | 예약 | 같음 (W4) |

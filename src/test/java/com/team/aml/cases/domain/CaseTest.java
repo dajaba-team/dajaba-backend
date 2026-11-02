@@ -20,6 +20,7 @@ class CaseTest {
 
     private static final String CASE_NO = "CASE-2022-000057";
     private static final Long ALERT_ID = 142L;
+    private static final String ACCOUNT_KEY = "010_A001";
     private static final Long SYSTEM = 1L;
     private static final Long INVESTIGATOR = 7L;
     private static final Long INVESTIGATOR_B = 8L;
@@ -31,7 +32,7 @@ class CaseTest {
     // ── 상태별 준비: 허용된 길로만 간다 ─────────────────────────
 
     private static Case opened() {
-        return Case.open(CASE_NO, ALERT_ID, SYSTEM);
+        return Case.open(CASE_NO, ALERT_ID, ACCOUNT_KEY, null, SYSTEM);
     }
 
     private static Case reviewing() {
@@ -65,7 +66,7 @@ class CaseTest {
     }
 
     private static CaseHistory lastHistory(Case c) {
-        List<CaseHistory> h = c.getHistories();
+        List<CaseHistory> h = c.getPendingHistories();
         return h.get(h.size() - 1);
     }
 
@@ -88,8 +89,8 @@ class CaseTest {
     void 생성하면_OPEN_이력이_한_행_남는다() {
         Case c = opened();
 
-        assertThat(c.getHistories()).hasSize(1);
-        CaseHistory h = c.getHistories().get(0);
+        assertThat(c.getPendingHistories()).hasSize(1);
+        CaseHistory h = c.getPendingHistories().get(0);
         assertThat(h.getAction()).isEqualTo(CaseHistoryAction.OPEN);
         assertThat(h.getFromStatus()).isNull();
         assertThat(h.getToStatus()).isEqualTo(OPEN);
@@ -117,13 +118,13 @@ class CaseTest {
     @Test
     void 이미_배정된_케이스는_다시_assign할_수_없다_재배정은_reassign() {
         Case c = reviewing();
-        int before = c.getHistories().size();
+        int before = c.getPendingHistories().size();
 
         assertThatThrownBy(() -> c.assign(INVESTIGATOR_B, INVESTIGATOR_B))
                 .isInstanceOf(InvalidCaseTransitionException.class);
 
         assertThat(c.getAssigneeId()).isEqualTo(INVESTIGATOR);
-        assertThat(c.getHistories()).hasSize(before);
+        assertThat(c.getPendingHistories()).hasSize(before);
     }
 
     // ── 재배정 ──────────────────────────────────────────────
@@ -147,12 +148,12 @@ class CaseTest {
     @Test
     void 같은_담당자로_재배정하면_아무것도_안_바뀐다() {
         Case c = reviewing();
-        int before = c.getHistories().size();
+        int before = c.getPendingHistories().size();
 
         boolean changed = c.reassign(INVESTIGATOR, ADMIN, null);
 
         assertThat(changed).isFalse();
-        assertThat(c.getHistories()).hasSize(before);
+        assertThat(c.getPendingHistories()).hasSize(before);
     }
 
     @Test
@@ -195,7 +196,7 @@ class CaseTest {
     void 상신_사유가_비어_있으면_거부하고_상태는_그대로다() {
         for (String blank : new String[]{null, "", "   "}) {
             Case c = reviewing();
-            int before = c.getHistories().size();
+            int before = c.getPendingHistories().size();
 
             assertThatThrownBy(() -> c.escalate(INVESTIGATOR, blank))
                     .isInstanceOf(CommentRequiredException.class)
@@ -203,7 +204,7 @@ class CaseTest {
                             .isEqualTo("COMMENT_REQUIRED"));
 
             assertThat(c.getStatus()).isEqualTo(REVIEWING);
-            assertThat(c.getHistories()).hasSize(before);
+            assertThat(c.getPendingHistories()).hasSize(before);
         }
     }
 
@@ -274,7 +275,7 @@ class CaseTest {
     @Test
     void 담당자는_자기_케이스를_승인할_수_없다() {
         Case c = pending();
-        int before = c.getHistories().size();
+        int before = c.getPendingHistories().size();
 
         assertThatThrownBy(() -> c.approve(INVESTIGATOR))
                 .isInstanceOf(SelfApprovalException.class)
@@ -282,7 +283,7 @@ class CaseTest {
                         .isEqualTo("SELF_APPROVAL"));
 
         assertThat(c.getStatus()).isEqualTo(PENDING_APPROVAL);
-        assertThat(c.getHistories()).hasSize(before);
+        assertThat(c.getPendingHistories()).hasSize(before);
     }
 
     @Test
@@ -335,12 +336,12 @@ class CaseTest {
     @Test
     void 보완_반려가_아니면_reopenDraft는_409이고_이력이_남지_않는다() {
         Case e = escalated();
-        int before = e.getHistories().size();
+        int before = e.getPendingHistories().size();
 
         assertThatThrownBy(() -> e.reopenDraft(INVESTIGATOR))
                 .isInstanceOf(InvalidCaseTransitionException.class);
         assertThat(e.getStatus()).isEqualTo(ESCALATED);
-        assertThat(e.getHistories()).hasSize(before);
+        assertThat(e.getPendingHistories()).hasSize(before);
 
         Case d = drafted();
         assertThatThrownBy(() -> d.reopenDraft(INVESTIGATOR))
@@ -379,7 +380,7 @@ class CaseTest {
 
         assertThat(c.getStatus()).isEqualTo(CLOSED);
         assertThat(c.getRejectionReasonCode()).isNull();
-        assertThat(c.getHistories())
+        assertThat(c.getPendingHistories())
                 .anySatisfy(h -> {
                     assertThat(h.getAction()).isEqualTo(CaseHistoryAction.REJECT);
                     assertThat(h.getReasonCode()).isEqualTo("NOT_REPORTABLE");
@@ -448,12 +449,12 @@ class CaseTest {
     void 승인된_케이스는_어떤_행동도_거부한다() {
         Case c = pending();
         c.approve(APPROVER);
-        int before = c.getHistories().size();
+        int before = c.getPendingHistories().size();
 
         assertThatThrownBy(() -> c.attachDraft(NEW_DRAFT_ID, INVESTIGATOR)).isInstanceOf(InvalidCaseTransitionException.class);
         assertThatThrownBy(() -> c.close(INVESTIGATOR, CloseReason.NO_ACTION, "종결")).isInstanceOf(InvalidCaseTransitionException.class);
         assertThatThrownBy(() -> c.reject(APPROVER, NEED_REVISION, "반려")).isInstanceOf(InvalidCaseTransitionException.class);
-        assertThat(c.getHistories()).hasSize(before);
+        assertThat(c.getPendingHistories()).hasSize(before);
     }
 
     @Test
@@ -485,7 +486,7 @@ class CaseTest {
         assertThat(c.getStatus()).isEqualTo(APPROVED);
         assertThat(c.getRejectionReasonCode()).isNull();
 
-        assertThat(c.getHistories()).extracting(CaseHistory::getAction).containsExactly(
+        assertThat(c.getPendingHistories()).extracting(CaseHistory::getAction).containsExactly(
                 CaseHistoryAction.OPEN, CaseHistoryAction.ASSIGN, CaseHistoryAction.ESCALATE,
                 CaseHistoryAction.ATTACH_DRAFT, CaseHistoryAction.SUBMIT_FOR_APPROVAL, CaseHistoryAction.REJECT,
                 CaseHistoryAction.REOPEN_DRAFT, CaseHistoryAction.SUBMIT_FOR_APPROVAL, CaseHistoryAction.APPROVE);
@@ -495,7 +496,27 @@ class CaseTest {
     void 이력_목록은_밖에서_고칠_수_없다() {
         Case c = opened();
 
-        assertThatThrownBy(() -> c.getHistories().clear())
+        assertThatThrownBy(() -> c.getPendingHistories().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    // ── 이력 꺼내기 (저장은 application 이 CaseHistoryRepository 로) ─────────
+
+    @Test
+    void 저장_전_케이스의_이력은_꺼낼_수_없다() {
+        Case c = opened();   // id 는 저장해야 생긴다
+
+        assertThatThrownBy(c::takePendingHistories).isInstanceOf(IllegalStateException.class);
+        assertThat(c.getPendingHistories()).hasSize(1);
+    }
+
+    @Test
+    void 생성할_때_계좌와_법인을_받는다() {
+        Case c = Case.open(CASE_NO, ALERT_ID, ACCOUNT_KEY, "E-77", SYSTEM);
+
+        assertThat(c.getAccountKey()).isEqualTo(ACCOUNT_KEY);
+        assertThat(c.getEntityId()).isEqualTo("E-77");
+        assertThatThrownBy(() -> Case.open(CASE_NO, ALERT_ID, null, null, SYSTEM))
+                .isInstanceOf(NullPointerException.class);
     }
 }

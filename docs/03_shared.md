@@ -20,7 +20,9 @@
 | `AuditedEntity` | 직접 상속하지 않음 — 아래 `BaseEntity`·`AssignedIdEntity`의 부모 [SCRUM-68] | `created_at`, `created_by`, `updated_at`, `updated_by` — 자동 채움 (id 없음) |
 | `BaseEntity` | 사람이 고치는 테이블 (`cases`, `users`, `rules` …) — `AuditedEntity` + DB 자동 발급(IDENTITY) `id` | `id`, `created_at`, `created_by`, `updated_at`, `updated_by` — 자동 채움 |
 | `AssignedIdEntity` | 시퀀스로 **미리 받은 번호**를 id로 쓰는 테이블 (`str_drafts`, `str_draft_requests`) — `AuditedEntity` + 생성자로 받는 `id`. 새 행 판단은 `Persistable` [SCRUM-68] | `id`, `created_at`, `created_by`, `updated_at`, `updated_by` — 감사 4칸 자동 채움 |
-| `CreatedOnlyEntity` | 사람이 추가만 하는 테이블 (`case_history`, `str_revisions`, `approvals` …) | `id`, `created_at`, `created_by` |
+| `CreatedOnlyEntity` | 사람이 추가만 하는 테이블 (`str_revisions`, `approvals` …) | `id`, `created_at`, `created_by` |
+
+`case_history`는 추가만 하지만 `CreatedOnlyEntity`를 상속하지 않아요. `created_by`가 로그인한 사람이 아니라 업무상 행위자(승인자, 생성 배치는 SYSTEM)라서 업무 메서드가 받은 값을 그대로 넣어요(SCRUM-48).
 | (상속 없음, `@Immutable`) | 원천 4개 | 원천 컬럼 그대로 |
 | (상속 없음) | 운영 로그 (`ai_call_logs`, `batch_runs`) — `created_by` 없이 `created_at`만 [레퍼런스 §3.4] | 테이블 컬럼 그대로 |
 

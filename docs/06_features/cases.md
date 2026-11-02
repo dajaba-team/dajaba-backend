@@ -41,6 +41,11 @@
 | 보완 반려 뒤 재요청 | 본문 해시 ≠ 반려 당시 해시 (새 `draft_id`는 제외) | `NarrativeUnchangedException` (str `ApprovalGate`) |
 
 - `close_reason`: `FALSE_POSITIVE`, `DUPLICATE`, `NO_ACTION`. [레퍼런스 §3.3]
+**저장 (V006, SCRUM-48)**
+- 테이블: `cases`(+ `case_no_seq`), `case_history`(추가만), `case_summaries`(추가만). `cases`는 DELETE 권한도 회수.
+- DB CHECK가 상태와 칸을 같이 묶어요: 반려 코드는 REJECTED일 때만·반드시, 종결 사유는 CLOSED일 때만·반드시, 담당자는 OPEN에만 없음, 초안은 OPEN·REVIEWING엔 없고 DRAFTED~REJECTED엔 반드시.
+- `Case`는 이력을 컬렉션으로 들고 있지 않아요. 업무 메서드가 만든 이력은 `getPendingHistories()`에 쌓이고, 유스케이스가 `caseRepository.save(c)` 뒤 `caseHistoryRepository.saveAll(c.takePendingHistories())`로 같은 트랜잭션에서 넣어요.
+- JPQL에서 `CASE`가 예약어라 엔티티 이름은 `InvestigationCase`예요(`select c from InvestigationCase c`).
 - 변경 요청은 모두 `version` 확인(`@Version`). 요청 값 비교만 하고 커밋 때 낙관적 락을 빼먹지 않아요. [CASES 명세 §8.3]
 
 **`CasePolicy` — 등급 계산** [안건 2]
