@@ -37,6 +37,12 @@
 | 10/29 | 점수 응답은 경보별 실패 — 없는 거래 ID는 그 경보만 `FAILED`, 재처리는 `FAILED` 중 `score_failure_code`가 NULL(묶음 503 — 응답 자체가 없음)이거나 `COMPUTE_ERROR`인 경보만. 백엔드는 `alerts.score_failure_code`, 실패 경보는 `alert_scores` 행 없음, `data_quality_status`는 `payload`. AI DB 장애는 503 `DB_UNAVAILABLE` → `AiClient` 재시도 1회 대상에 추가. 점수는 경보당 1건(이력은 AI `ai.predictions`) | 500건 중 1건 때문에 전체가 실패하면 안 됨, 다시 보내도 같은 실패는 걸러야 함 | 준혁 답(10/29 슬랙), AI SCRUM-41 |
 | 10/29 | 목록 응답은 `{items, page, size, total}` — 코드를 문서에 맞춤, `total_pages` 없음 | 문서가 전부 이 모양, 쓰는 코드가 아직 없어 지금 바꾸는 비용이 0 | 레퍼런스 §12, SCRUM-39 |
 | 10/30 | `flows/02`·`flows/05`·`04_auth_user`를 미결 8·11·17, 서식 안건 4 결정에 맞춤 — 상세+현재 초안은 str 조회 유스케이스가 조합(REPEATABLE READ), `case_history` action 동사형, 사용자 관리 `POST /admin/users/{id}/{동사}`, STR 본문 열람은 담당 조사역·승인자만 | 요구사항 정의서를 노션과 대조하다 리포 문서가 옛 내용으로 남은 곳이 나옴 | 백엔드 미결 10/30, 계정·권한 안내 v0.2 |
+| 10/30 | `ai_call_logs`는 **시도 1번 = 1행**(재시도는 같은 `request_id`에 `attempt` 1·2). 본문 컬럼 없음, FK 없음, `created_at`만(베이스 클래스 상속 안 함). `target_id`는 `varchar(64)`, `target_type`은 `BATCH_RUN`·`CASE`·`DRAFT` CHECK(health는 null). `ai_version`은 엔드포인트별로 고정(`03_shared` §5 표) | `AiClient` 시그니처를 안 바꾸고 요청 DTO의 `batchRunId`·`caseId`·`draftId`에서 대상을 꺼냄 — 팀원 호출부 영향 없음 | SCRUM-18 |
+| 10/30 | `ai_call_logs` 기록은 **별도 트랜잭션**(`REQUIRES_NEW`, 별도 빈)으로, AI 응답을 받은 **호출 스레드에서**. 기록이 실패해도 AI 결과·예외는 그대로(호출부에서 삼킴) | 바깥 작업이 롤백돼도 실패 행이 남아야 함(`flows/04`), 커밋 때 예외는 프록시 밖으로 나옴 | SCRUM-18 |
+| 10/30 | `ai_call_logs`는 **V004_2**(11/1 SCRUM-56에서 V007에서 옮김) — FK가 없어 V004_1 바로 뒤에 들어감 | 번호가 낮은 파일이 나중에 들어오면 이미 높은 번호가 적용된 DB에서 Flyway가 기동을 거부함 | SCRUM-18, `05_flyway` §3 |
+| 10/31 | 진짜 로그인은 **JSON 로그인 필터**(`UsernamePasswordAuthenticationFilter` 상속)를 **`AbstractAuthenticationFilterConfigurer`로 등록** — 세션 ID 교체·`maximumSessions(1)`·세션 저장·CSRF 토큰 교체를 Spring 전략으로. 끊긴 세션은 401 `UNAUTHENTICATED` JSON. 비활성·SYSTEM은 없는 ID와 같은 401 `LOGIN_FAILED`. users 읽기는 `user/infrastructure/DbUserDetailsService`. 목업 로그인 삭제 | 필터를 `addFilterAt`으로만 끼우면 세션 전략이 빠져 로그인이 세션에 안 남음(테스트로 확인). shared → user 의존 금지 | SCRUM-19 |
+| 11/1 | 권한 문제(역할·담당자)로 막히는 도메인 예외는 shared `ForbiddenException` 하위 → **403**, 코드는 클래스 이름 규칙(`NOT_APPROVER`·`NOT_ASSIGNEE`). 상태·버전 충돌은 `DomainException` 409 그대로(`SELF_APPROVAL` 포함). 승인 게이트는 **같은 초안·같은 본문 해시의 검증 중 최신만** 인정 — 최신이 PASSED가 아니거나 요청 `verification_id`가 최신과 다르면 409 `DRAFT_NOT_VERIFIED` | 역할·담당자가 안 맞는 건 상태 충돌이 아니라 권한 문제라서 03_shared 표대로 403 [백엔드 #22 리뷰 11/1] | 백엔드 #22 리뷰(11/1), SCRUM-67 |
+| 11/2 | Flyway 번호 재배정 — `ai_call_logs` V007 → **V004_2**, `access_logs` **V004_3**, `alert_scores` **V005_1**, V007은 비움. 머지 순서 V004_1 → V004_2 → V004_3 → V005 → V005_1 → V006 → V008 → V009. **양보 규칙**: 하위 번호로 끼운 파일이 뒤 번호 머지를 막으면 끼운 쪽이 다음 빈 번호로 옮김 | 로그 테이블 둘은 탐지·케이스를 참조하지 않아 V005·V006을 기다릴 이유가 없음. `alert_scores`는 V008·V009를 기다리지 않게 V005 바로 뒤. V007을 당겨 채우면 V008·V009와 문서를 다 고쳐야 함 | SCRUM-56, `05_flyway.md` §1·§3 |
 
 ## 2. 문서끼리 다른 곳 — 이 docs에서 고른 것
 
@@ -55,7 +61,8 @@
 | 409 동시 수정 이름 | `CONFLICT` [계정·권한 §5] | `CONCURRENT_UPDATE` [레퍼런스 §8.2, CASES·STR 명세] | `CONCURRENT_UPDATE` |
 | 요약 갱신 경로 | `POST /cases/{id}/summary:refresh` [계정·권한] | `POST /cases/{case_no}/refresh-summary` [CASES 명세 v0.5] | B 〔초안〕 |
 | 메모 경로 | `POST /cases/{id}/notes` [계정·권한] | `PUT /cases/{case_no}/notes` [CASES 명세] | B 〔초안〕 |
-| 마이그레이션 번호 | V007 `alert_scores` [레퍼런스 §7.3] | V007 `ai_call_logs` [README, WBS] | B |
+| 마이그레이션 번호 | V007 `alert_scores` [레퍼런스 §7.3] | V007 `ai_call_logs` [README, WBS] | B → 11/2 SCRUM-56에서 `ai_call_logs`를 V004_2로 옮김, V007 비움 (§1 표) |
+| `ai_call_logs` 본문·대상 | `request_body`·`response_body`(실패만), `target_id bigint` [레퍼런스 §3.4] | 본문 컬럼 없음, `target_id varchar(64)` [10/29, SCRUM-18] | B — 레퍼런스 §3.4 반영됨(10/30) |
 
 ## 3. 미결 — 정해야 하는 것
 
@@ -71,7 +78,7 @@
 | 6 | 은행 ID 앞 0 | 두 파일 형식이 달라 조인이 100% 실패 vs "앞 0 보존" 문구 | 준혁 |
 | 7 | 통화 표기 | DB는 IBM 원문 이름, STR facts는 ISO 코드. 백엔드 화면·`rule_facts`는? 매핑표 관리자는? | 준혁·진희 |
 | 8 | 메모 저장 방식 | NOTE 행 vs `case_note_history` (안건 16 A/B 이름 엇갈림) | 지윤·진희 |
-| 9 | `alert_scores`·`access_logs`·`source_files` 마이그레이션 번호 | 미배정 — 점수 테이블·`score_failure_code`는 준혁이 V007 피해서 지정 예정(10/29) | 준혁·진희 |
+| 9 | ~~`alert_scores`·`access_logs`·`source_files` 마이그레이션 번호~~ | 정리됨 — 11/2 SCRUM-56: `source_files` V004_1(#21), `ai_call_logs` V004_2, `access_logs` V004_3, `alert_scores` V005_1. `batch_runs` 인덱스는 점수 배치 직전(§1 표, `05_flyway.md` §3) | 준혁·진희 |
 | 10 | `access_logs.action` 값 | 레퍼런스 5개 + 계정·권한의 USER_CREATED·ROLE_CHANGED·USER_DEACTIVATED | 진희 |
 | 11 | `user` 관리 API 메서드 | 계정·권한은 PATCH, 레퍼런스 §12는 "PATCH 없음" | 진희 |
 | 12 | 감사 시각 표기 | 응답에서 UTC `Z`를 붙일지 (원천 거래 시각은 시간대 없음 — 확정). 〔제안〕 붙이자 — `01_code_rules.md` §5 | 공통 |
@@ -89,6 +96,8 @@
 | 24 | STR 수정 길이 | 백엔드 5,000자 vs AI 검증 스키마 1,200자 — 생성 1,200 / 수정본 검증 5,000 분리, 글자 수 기준 통일 | 채영·진희 |
 | 25 | `revision_no` | 규약·AI는 1 = AI 원문, STR 명세는 원문 `null` — 규약대로 맞추기 | 채영·진희 |
 | 26 | 경로형 경보 `paths` 계약 | 합집합 = `transaction_ids`·R04 3홉(백엔드·ML) vs 부분집합·길이 제한 없음(AI) — 400과 UNVERIFIED 경계 정하기 | 준혁·진희·준영 |
+| 28 | health 응답 버전 필드 | 백엔드 `HealthResponse`는 `generator_version`을 읽는데 AI `/v1/health`는 `server_version`·`model_version`·`feature_version`·`retrieval_version`을 줌 → 기동 로그에 null. SCRUM-17 코드라 SCRUM-22(BE↔AI 연결)에서 맞춤 (11/1 SCRUM-18 점검) | 진희(SCRUM-22) |
+| 29 | `ai_call_logs` drafts 대상 | 지금 `CASE`/`caseId`인데 안건 23 이후 백엔드가 `draft_id`를 먼저 발급함 → `AiDtos`를 규약 v0.2 모양으로 바꿀 때(SCRUM-22) `DRAFT`/`draft_id`로 갈지 정함 (11/1 SCRUM-18 점검) | 진희(SCRUM-22) |
 
 ## 4. 이 docs 자체에 대한 결정
 

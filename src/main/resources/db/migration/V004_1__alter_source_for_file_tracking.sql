@@ -17,6 +17,7 @@ alter table ops.transactions
     add column to_bank_id_raw    varchar(16) not null,
     add constraint transactions_source_row_uq unique (source_file_id, source_row_number);
 
+comment on column ops.transactions.transaction_id is 'DB 자동 발급 (안건 1). 원본 위치는 source_file_id + source_row_number';
 comment on column ops.transactions.from_bank_id is '앞 0을 제거한 서비스용 은행 ID (미결 6)';
 comment on column ops.transactions.to_bank_id is '앞 0을 제거한 서비스용 은행 ID (미결 6)';
 comment on column ops.transactions.from_bank_id_raw is 'CSV 원본 은행 ID';

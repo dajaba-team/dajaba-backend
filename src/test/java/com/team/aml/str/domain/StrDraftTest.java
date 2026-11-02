@@ -296,4 +296,14 @@ class StrDraftTest {
         }
     }
 
+    // 15: generationId가 비면 초안을 만들지 않는다 — null 초안과 null 검증이 "같은 초안"으로 통과하지 않게
+    @Test
+    void generationId가_비었으면_초안을_만들지_않는다() {
+        for (String bad : Arrays.asList(null, "", "   ")) {
+            assertThatThrownBy(() -> StrDraft.create(CASE_ID, bad, facts(), aiNarrative()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("generationId");
+        }
+    }
+
 }
