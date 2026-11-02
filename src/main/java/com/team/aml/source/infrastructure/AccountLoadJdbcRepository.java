@@ -33,6 +33,7 @@ public class AccountLoadJdbcRepository implements AccountLoadRepository {
     private static final String CHECK = """
             select count(*) as row_count,
                    count(*) filter (where nullif(btrim(bank_id), '') is null
+                                       or nullif(btrim(bank_name), '') is null
                                        or nullif(btrim(account_number), '') is null
                                        or nullif(btrim(entity_id), '') is null
                                        or nullif(btrim(entity_name), '') is null) as missing_required,
@@ -44,8 +45,24 @@ public class AccountLoadJdbcRepository implements AccountLoadRepository {
                         group by entity_id having count(distinct entity_name) > 1) c) as entity_name_conflicts,
                    (select count(*) from (
                         select %2$s, account_number from ops.accounts_staging
-                        group by 1, 2 having count(distinct entity_id) > 1) c) as account_owner_conflicts
-            from ops.accounts_staging""".formatted(ENTITY_PREFIX, normalizedBankId("bank_id"));
+                        group by 1, 2 having count(distinct entity_id) > 1) c) as account_owner_conflicts,
+                   (select count(*) from (
+                        select %2$s from ops.accounts_staging
+                        group by 1 having count(distinct bank_name) > 1) c) as bank_name_conflicts,
+                   (select count(*) from ops.accounts_staging s
+                    where exists (select 1 from ops.accounts a
+                                  where a.account_key = %3$s || '_' || s.account_number
+                                    and a.entity_id <> s.entity_id)
+                       or exists (select 1 from ops.accounts a
+                                  where a.bank_id = %3$s
+                                    and a.bank_name is distinct from s.bank_name)
+                       or exists (select 1 from ops.entities e
+                                  where e.entity_id = s.entity_id
+                                    and e.entity_name <> s.entity_name)) as existing_conflicts,
+                   (select count(distinct %2$s) from ops.accounts_staging
+                    where %4$s not in (%5$s, 'Crytpo')) as unlisted_country_banks
+            from ops.accounts_staging""".formatted(ENTITY_PREFIX, normalizedBankId("bank_id"),
+            normalizedBankId("s.bank_id"), BANK_COUNTRY_NAME, BANK_COUNTRIES);
 
     private static final String INSERT_ENTITIES = """
             insert into ops.entities(entity_id, entity_name, entity_type)
@@ -108,7 +125,8 @@ public class AccountLoadJdbcRepository implements AccountLoadRepository {
         return jdbc.queryForObject(CHECK, (rs, rowNum) -> new AccountStagingCheck(
                 rs.getLong("row_count"), rs.getLong("missing_required"), rs.getLong("invalid_bank_ids"),
                 rs.getLong("unknown_entity_types"), rs.getLong("entity_name_conflicts"),
-                rs.getLong("account_owner_conflicts")));
+                rs.getLong("account_owner_conflicts"), rs.getLong("bank_name_conflicts"),
+                rs.getLong("existing_conflicts"), rs.getLong("unlisted_country_banks")));
     }
 
     @Override

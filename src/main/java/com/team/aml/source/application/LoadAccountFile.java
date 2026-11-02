@@ -39,7 +39,7 @@ public class LoadAccountFile {
             // accounts.entity_id가 필수 FK라 법인을 먼저 넣는다.
             long entities = accounts.insertEntities();
             long inserted = accounts.insertAccounts();
-            return new AccountLoadResult(check.rowCount(), entities, inserted);
+            return new AccountLoadResult(check.rowCount(), entities, inserted, check.unlistedCountryBanks());
         } catch (IOException e) {
             throw new UncheckedIOException("계좌 파일을 읽을 수 없습니다", e);
         }
