@@ -80,6 +80,35 @@ class DetectionSchemaTest {
     }
 
     @Test
+    void 기준_시각이_창_끝보다_늦으면_거부한다() throws Exception {
+        try (Connection c = backend(); PreparedStatement statement = c.prepareStatement("""
+                insert into ops.alerts(alert_no, batch_run_id, rule_ref_id, account_key, window_start, window_end,
+                                       reference_ts, rule_facts, batch_date)
+                values (?, ?, ?, '10_A3', '2022-09-02 00:00:00', '2022-09-03 00:00:00',
+                        '2022-09-03 00:01:00', '{}'::jsonb, '2022-09-02')""")) {
+            statement.setString(1, "ALT-TEST-" + SEQUENCE.incrementAndGet());
+            statement.setLong(2, newBatchRun(c));
+            statement.setLong(3, newRule(c, false));
+
+            assertSqlState("23514", statement::executeUpdate);
+        }
+    }
+
+    @Test
+    void 백엔드_계정은_룰의_활성_여부만_바꾸고_기준값은_못_바꾼다() throws Exception {
+        try (Connection c = backend(); Statement statement = c.createStatement()) {
+            long ruleId = newRule(c, false);
+
+            statement.executeUpdate(
+                    "update ops.rules set is_active = true, updated_at = now(), updated_by = 1 where id = " + ruleId);
+            assertSqlState("42501", () -> statement.executeUpdate(
+                    "update ops.rules set params = '{\"min_senders\": 3}'::jsonb where id = " + ruleId));
+            assertSqlState("42501", () -> statement.executeUpdate(
+                    "update ops.rules set name = '변경' where id = " + ruleId));
+        }
+    }
+
+    @Test
     void 실패_코드는_FAILED_경보에만_정해진_값으로_넣는다() throws Exception {
         try (Connection c = backend(); Statement statement = c.createStatement()) {
             long alertId = newAlert(c);

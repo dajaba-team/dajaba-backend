@@ -42,7 +42,10 @@ create table ops.alerts (
                                                       'REQUIRED_INPUT_MISSING', 'COMPUTE_ERROR')),
     case_opened         boolean      not null default false,
     created_at          timestamptz  not null default now(),
-    constraint alerts_window_ck check (window_start < window_end and window_start < reference_ts),
+    -- reference_ts 는 창의 끝을 넘지 않는다. R01·R02·R07 은 window_end = reference_ts 다 (B7, 11/2).
+    -- 같다고 강제하지는 않는다 — 창 중간에 조건이 성립하는 룰이 있을 수 있고 ML 규약 §2.2·AC27 도 둘을 따로 본다.
+    constraint alerts_window_ck check (window_start < window_end and window_start < reference_ts
+                                       and reference_ts <= window_end),
     -- 실패 코드는 FAILED 일 때만. FAILED 이면서 코드가 없는 경우는 묶음 실패·응답 누락이다 (미결 16).
     constraint alerts_failure_code_ck check (score_failure_code is null or score_status = 'FAILED'),
     constraint alerts_rule_account_window_uq unique (rule_ref_id, account_key, window_start)
@@ -59,8 +62,9 @@ create table ops.alert_transactions (
 );
 create index alert_transactions_transaction_idx on ops.alert_transactions (transaction_id);
 
--- 룰·경보 행은 지우지 않는다. 경보는 만든 뒤 점수 상태·실패 코드·케이스 생성 여부만 바뀐다.
+-- 룰·경보 행은 지우지 않는다. 룰은 기준값을 고치지 않고 새 버전 행을 넣으므로 활성 여부만 바뀐다.
+-- 경보는 만든 뒤 점수 상태·실패 코드·케이스 생성 여부만 바뀐다.
 -- app_ai 는 원천 4개만 읽으므로 여기 테이블에는 권한을 주지 않는다.
-revoke delete on ops.rules from app_backend;
-revoke update, delete on ops.alerts, ops.alert_transactions from app_backend;
+revoke update, delete on ops.rules, ops.alerts, ops.alert_transactions from app_backend;
+grant update (is_active, updated_at, updated_by) on ops.rules to app_backend;
 grant update (score_status, score_failure_code, case_opened) on ops.alerts to app_backend;
