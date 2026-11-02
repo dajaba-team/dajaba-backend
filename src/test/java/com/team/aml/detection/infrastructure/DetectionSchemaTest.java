@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** V005의 경보 중복 방지, 상태 제약, 계정 권한을 실제 PostgreSQL에서 확인한다. */
+/** V005·V005_1의 경보 중복 방지, 상태 제약, 계정 권한을 실제 PostgreSQL에서 확인한다. */
 @Testcontainers
 class DetectionSchemaTest {
 
@@ -169,8 +169,44 @@ class DetectionSchemaTest {
         }
     }
 
+    @Test
+    void 점수는_경보마다_한_행이고_AI가_준_값을_그대로_둔다() throws Exception {
+        try (Connection c = backend(); Statement statement = c.createStatement()) {
+            long alertId = newAlert(c);
+            insertScore(c, alertId, "0.912345678");
+
+            try (ResultSet result = statement.executeQuery(
+                    "select score::text from ops.alert_scores where alert_id = " + alertId)) {
+                result.next();
+                assertThat(result.getString(1)).isEqualTo("0.912345678");
+            }
+            assertSqlState("23505", () -> insertScore(c, alertId, "0.5"));
+        }
+    }
+
+    @Test
+    void 점수가_0에서_1_밖이면_거부한다() throws Exception {
+        try (Connection c = backend()) {
+            assertSqlState("23514", () -> insertScore(c, newAlert(c), "1.01"));
+            assertSqlState("23514", () -> insertScore(c, newAlert(c), "-0.01"));
+        }
+    }
+
+    @Test
+    void 백엔드_계정은_점수를_고치거나_지울_수_없다() throws Exception {
+        try (Connection c = backend(); Statement statement = c.createStatement()) {
+            long alertId = newAlert(c);
+            insertScore(c, alertId, "0.7");
+
+            assertSqlState("42501", () -> statement.executeUpdate(
+                    "update ops.alert_scores set score = 0.1 where alert_id = " + alertId));
+            assertSqlState("42501", () -> statement.executeUpdate(
+                    "delete from ops.alert_scores where alert_id = " + alertId));
+        }
+    }
+
     @ParameterizedTest
-    @ValueSource(strings = {"rules", "alerts", "alert_transactions"})
+    @ValueSource(strings = {"rules", "alerts", "alert_transactions", "alert_scores"})
     void AI_계정은_탐지_테이블을_읽을_수_없다(String table) throws Exception {
         try (Connection c = connect("app_ai", "ai"); Statement statement = c.createStatement()) {
             assertSqlState("42501", () -> statement.executeQuery("select count(*) from ops." + table));
@@ -226,6 +262,18 @@ class DetectionSchemaTest {
             statement.setString(6, windowEnd);
             statement.setString(7, windowEnd);
             return single(statement);
+        }
+    }
+
+    private static void insertScore(Connection c, long alertId, String score) throws SQLException {
+        try (PreparedStatement statement = c.prepareStatement("""
+                insert into ops.alert_scores(alert_id, score, threshold, model_version, feature_version,
+                                             prediction_id, produced_at, payload)
+                values (?, ?::numeric, 0.7, 'test-model', 'test-features', ?, now(), '{}'::jsonb)""")) {
+            statement.setLong(1, alertId);
+            statement.setString(2, score);
+            statement.setString(3, "prediction-" + SEQUENCE.incrementAndGet());
+            statement.executeUpdate();
         }
     }
 
