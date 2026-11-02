@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -17,6 +18,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.util.AopTestUtils;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -31,6 +33,9 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 
 /** 파일 3개 적재 → 검증 → batch_runs 기록, 실패 시 롤백 (SCRUM-69). */
 @Testcontainers
@@ -75,6 +80,9 @@ class LoadIbmDatasetTest {
 
     @Autowired
     LoadIbmDataset loadIbmDataset;
+
+    @SpyBean
+    DatasetLoadRecorder recorder;
 
     @Autowired
     JdbcTemplate jdbc;
@@ -180,6 +188,45 @@ class LoadIbmDatasetTest {
 
         assertThat(batchRun(retry)).containsEntry("status", "SUCCEEDED");
         assertThat(count("select min(source_row_number) from ops.transactions")).isEqualTo(1);
+    }
+
+    @Test
+    void 성공_기록이_실패하면_적재도_롤백되고_실패로_남는다() {
+        // 트랜잭션 프록시를 거치지 않도록 프록시 안쪽 스파이에 스텁을 건다.
+        DatasetLoadRecorder spy = AopTestUtils.getUltimateTargetObject(recorder);
+        doThrow(new IllegalStateException("기록 실패")).when(spy).succeed(anyLong(), anyLong(), anyLong());
+
+        long batchRunId = loadIbmDataset.start(1L);
+        loadIbmDataset.run(batchRunId);
+
+        assertThat(batchRun(batchRunId)).containsEntry("status", "FAILED");
+        assertThat(count("select count(*) from ops.transactions")).isZero();
+        assertThat(count("select count(*) from ops.source_files")).isZero();
+
+        // 데이터와 상태가 같이 롤백돼서 다시 적재할 수 있다.
+        reset(spy);
+        long retry = loadIbmDataset.start(1L);
+        loadIbmDataset.run(retry);
+        assertThat(batchRun(retry)).containsEntry("status", "SUCCEEDED");
+    }
+
+    @Test
+    void 기동_시_남은_적재_RUNNING만_FAILED로_정리한다() {
+        jdbc.update("""
+                insert into ops.batch_runs(batch_type, batch_date, status, triggered_by)
+                values ('LOAD_DATASET', '2026-01-01', 'RUNNING', 1), ('RULE_SCAN', '2022-09-02', 'RUNNING', 1)""");
+
+        recorder.failAbandonedLoads();
+
+        assertThat(jdbc.queryForObject(
+                "select status from ops.batch_runs where batch_type = 'LOAD_DATASET'", String.class)).isEqualTo("FAILED");
+        assertThat(jdbc.queryForObject(
+                "select error_message from ops.batch_runs where batch_type = 'LOAD_DATASET'", String.class))
+                .isEqualTo(DatasetLoadRecorder.ABANDONED_MESSAGE);
+        assertThat(jdbc.queryForObject(
+                "select status from ops.batch_runs where batch_type = 'RULE_SCAN'", String.class)).isEqualTo("RUNNING");
+        long retry = loadIbmDataset.start(1L);
+        assertThat(retry).isPositive();
     }
 
     private static void writeFiles(String... transactionRows) throws IOException {

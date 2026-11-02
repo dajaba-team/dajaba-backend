@@ -50,14 +50,13 @@ public class LoadIbmDataset {
     /** 실패해도 예외를 던지지 않는다. 결과는 batch_runs에 남고 API 2로 조회한다. */
     public void run(long batchRunId) {
         try {
-            DatasetLoadSummary summary = importer.execute(datasetDir());
-            recorder.succeed(batchRunId, summary.fileRows(), summary.insertedRows());
+            DatasetLoadSummary summary = importer.execute(datasetDir(), batchRunId);
             // 실패 조건이 아닌 값은 기록만 한다. 건수만 남기고 금액·계좌는 남기지 않는다.
             log.info("적재 완료 batch_run_id={} rows={} pattern_matched={} pattern_unmatched={} pattern_multi_matched={}"
-                            + " orphan_accounts={} amounts_rounded={}",
+                            + " orphan_accounts={} amounts_rounded={} unlisted_country_banks={}",
                     batchRunId, summary.insertedRows(), summary.patternMatch().matched(),
                     summary.patternMatch().unmatched(), summary.patternMatch().multiMatched(),
-                    summary.orphanAccounts(), summary.amountsRounded());
+                    summary.orphanAccounts(), summary.amountsRounded(), summary.unlistedCountryBanks());
         } catch (RuntimeException e) {
             recorder.fail(batchRunId, failureMessage(e));
             // DB 예외 메시지에는 행 값이 들어갈 수 있어 클래스 이름만 남긴다.

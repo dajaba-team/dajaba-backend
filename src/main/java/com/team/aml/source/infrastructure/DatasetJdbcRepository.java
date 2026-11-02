@@ -54,6 +54,13 @@ public class DatasetJdbcRepository implements DatasetRepository {
     }
 
     @Override
+    public int failRunningLoads(String message) {
+        return jdbc.update("""
+                update ops.batch_runs set status = 'FAILED', finished_at = now(), error_message = ?
+                where batch_type = 'LOAD_DATASET' and status = 'RUNNING'""", message);
+    }
+
+    @Override
     public DatasetStats collectStats() {
         return jdbc.queryForObject(STATS, (rs, rowNum) -> new DatasetStats(
                 rs.getLong("transactions"), rs.getLong("laundering"), rs.getLong("self_transfers"),
