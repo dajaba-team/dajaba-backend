@@ -64,7 +64,7 @@ sequenceDiagram
         FE->>STRC: POST /approvals/{draftId}/approve
         STRC->>STRU: ApproveStr  ⟵ @Transactional 하나
         STRU->>STRU: 승인자 == 담당 조사역? → SelfApprovalException(409)
-        STRU->>DB: INSERT approvals(APPROVED)
+        STRU->>DB: INSERT approvals(APPROVED, revision_id, verification_result_id, narrative_sha256) — V009, 초안당 한 번
         STRU->>DB: str_drafts.status → LOCKED
         STRU->>CAS: Case.approve() → APPROVED
         STRU->>DB: case_history(APPROVED)
@@ -75,7 +75,7 @@ sequenceDiagram
         FE->>STRC: POST /approvals/{draftId}/reject {reason_code, comment}
         note over STRC: reason_code·comment 없거나 값이 틀리면 400 INVALID_REQUEST
         STRC->>STRU: RejectStr  ⟵ @Transactional 하나
-        STRU->>DB: INSERT approvals(REJECTED, reason_code, comment, narrative_sha256)
+                STRU->>DB: INSERT approvals(REJECTED, revision_id, reason_code, comment, narrative_sha256) — V009
         STRU->>CAS: Case.reject(reasonCode) → REJECTED (반려 코드는 케이스에도 저장)
         STRU-->>FE: 200
         alt NEED_REVISION (보완 요청)
