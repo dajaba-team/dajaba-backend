@@ -11,6 +11,7 @@
 **확정**
 - 원천 4개는 적재 후 UPDATE·DELETE 없음. 적재는 빈 DB에서만(이미 있으면 409). [레퍼런스 §11.1]
 - 적재 실패는 트랜잭션 롤백으로 원천에 남지 않아 따로 비우지 않아요. 다시 적재하려면 `docker compose down -v`로 DB를 새로 만들어요. `app_backend`에는 원천 UPDATE·DELETE·TRUNCATE 권한이 없어요.
+- 계좌 파일은 이미 있는 계좌·은행·법인과 값이 같으면 건너뛰고, 소유자·은행 이름·법인 이름이 다르면 실패해요. 은행 이름은 필수이고, 하나로 정해지지 않는 파일(앞 0만 다른 ID에 다른 이름)도 실패예요. MVP 적재는 빈 DB에서 1회라 실제로는 첫 적재 검증이에요. [SCRUM-54 리뷰]
 - `is_laundering`·`pattern_type`·`pattern_id`는 적재하지만 **백엔드 엔티티에 매핑하지 않고 응답에도 없어요.** 적재 SQL 안에서 검증용으로만 세요. [레퍼런스 §10-10, SD 명세 §3]
 - 적재는 JPA가 아니라 `CopyManager`(COPY)로. `transactions_staging`(unlogged)을 거쳐 `INSERT … SELECT`로 변환. [레퍼런스 §11.2]
 - 서비스 DB에는 **HI-Small만** 들어가요(SAML-D·LI는 학습 전용). 준영이 준 검증값(`expected.json`)으로 적재 결과를 같이 확인해요. [안건 12·13]
