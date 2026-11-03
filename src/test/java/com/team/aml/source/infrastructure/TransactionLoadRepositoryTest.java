@@ -145,7 +145,7 @@ class TransactionLoadRepositoryTest {
     @Test
     void 소수_자릿수를_넘는_금액_필드_수를_돌려준다() throws Exception {
         TransactionLoadResult result = load("a.csv",
-                "2022/09/01 00:20,010,A1,020,B1,0.001234,Bitcoin,0.001234,Bitcoin,Bitcoin,0",
+                "2022/09/01 00:20,010,A1,020,B1,0.0012345,Bitcoin,0.0012345,Bitcoin,Bitcoin,0",
                 "2022/09/01 00:21,010,A1,020,B1,1.500000,Bitcoin,1.00,Euro,Bitcoin,0");
 
         assertThat(result.amountsRounded()).isEqualTo(2);
