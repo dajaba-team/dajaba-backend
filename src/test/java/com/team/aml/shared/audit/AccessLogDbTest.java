@@ -2,11 +2,15 @@ package com.team.aml.shared.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.team.aml.shared.security.AppUserDetails;
+import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.HikariPoolMXBean;
 import jakarta.servlet.http.Cookie;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
+import org.mockito.stubbing.Answer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.jdbc.JdbcConnectionDetails;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -26,6 +30,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -35,14 +40,17 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import javax.sql.DataSource;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
@@ -82,6 +90,7 @@ class AccessLogDbTest {
     @Autowired ObjectMapper om;
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactionManager;
+    @Autowired DataSource dataSource;
     @Autowired Flyway flyway;
     @Autowired AccessLogWriter accessLog;
     @SpyBean AccessLogRepository repository;
@@ -123,11 +132,9 @@ class AccessLogDbTest {
     }
 
     @Test
-    void 정상_readOnly_트랜잭션_안에서_view를_불러도_저장된다() {
+    void 정상_조회_트랜잭션_안에서_view는_로그인_사용자로_한_행() {
         long me = signIn("inv01", "INVESTIGATOR", "10.1.0.3");
-        TransactionTemplate readOnly = new TransactionTemplate(transactionManager);
-        readOnly.setReadOnly(true);
-        readOnly.executeWithoutResult(status -> accessLog.view(TargetType.CASE, 7L));
+        inTx(() -> accessLog.view(TargetType.CASE, 7L));
 
         Map<String, Object> row = onlyRow("10.1.0.3");
         assertThat(row.get("action")).isEqualTo("VIEW");
@@ -137,10 +144,33 @@ class AccessLogDbTest {
     }
 
     @Test
+    void 정상_view는_바깥_조회와_같은_커넥션_하나만_쓴다() throws SQLException {   // REQUIRES_NEW 면 저장 순간 2 (SCRUM-93)
+        signIn("inv01", "INVESTIGATOR", "10.1.0.12");
+        HikariPoolMXBean pool = dataSource.unwrap(HikariDataSource.class).getHikariPoolMXBean();
+        AtomicInteger activeAtSave = new AtomicInteger(-1);
+        // 저장소는 인터페이스라 callRealMethod 가 안 됨 → @SpyBean 이 진짜 저장소로 넘기는 기본 응답을 그대로 씀
+        Answer<?> realSave = Mockito.mockingDetails(repository).getMockCreationSettings().getDefaultAnswer();
+        doAnswer(inv -> {
+            activeAtSave.set(pool.getActiveConnections());
+            return realSave.answer(inv);
+        }).when(repository).save(any());
+
+        inTx(() -> {
+            jdbc.queryForObject("select 1", Integer.class);   // 조회 유스케이스가 먼저 커넥션을 쥔 상태
+            accessLog.view(TargetType.CASE, 7L);
+        });
+
+        assertThat(activeAtSave.get()).isEqualTo(1);
+        assertThat(count("10.1.0.12")).isEqualTo(1L);
+    }
+
+    @Test
     void 정상_strView와_pdfDownload는_STR_DRAFT_대상이다() {
         signIn("apr01", "APPROVER", "10.1.0.4");
-        accessLog.strView(31L);
-        accessLog.pdfDownload(31L);
+        inTx(() -> {
+            accessLog.strView(31L);
+            accessLog.pdfDownload(31L);
+        });
         assertThat(jdbc.queryForList("""
                 select action || ':' || target_type || ':' || target_id from ops.access_logs
                 where host(ip) = '10.1.0.4' order by id
@@ -150,7 +180,7 @@ class AccessLogDbTest {
     @Test
     void 정상_export는_ADMIN_내보내기_대상과_EXPORT_action() {
         long admin = signIn("admin", "ADMIN", "10.1.0.11");
-        accessLog.export(TargetType.CASE, 5L);
+        inTx(() -> accessLog.export(TargetType.CASE, 5L));
 
         Map<String, Object> row = onlyRow("10.1.0.11");
         assertThat(row.get("action")).isEqualTo("EXPORT");
@@ -189,6 +219,16 @@ class AccessLogDbTest {
     }
 
     @Test
+    void 경계_기록_뒤_조회가_롤백되면_기록도_남지_않는다() {   // 같이 성공·같이 실패 (SCRUM-93)
+        signIn("inv01", "INVESTIGATOR", "10.1.0.13");
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+            accessLog.view(TargetType.CASE, 7L);
+            status.setRollbackOnly();   // 기록 뒤 본문 조회가 실패한 것과 같음
+        });
+        assertThat(count("10.1.0.13")).isZero();
+    }
+
+    @Test
     void 경계_Flyway는_V004_1_V004_2_다음에_V004_3을_적용하고_FK는_users_하나() {
         assertThat(Arrays.stream(flyway.info().applied()).map(m -> m.getVersion()).toList())
                 .containsSubsequence(
@@ -222,8 +262,35 @@ class AccessLogDbTest {
     void 실패_view_저장이_실패하면_예외를_그대로_올린다() {   // 기록 없는 열람 금지 (11/2)
         signIn("inv01", "INVESTIGATOR", "10.1.0.7");
         doThrow(new DataAccessResourceFailureException("db down")).when(repository).save(any());
-        assertThatThrownBy(() -> accessLog.view(TargetType.CASE, 8L)).isInstanceOf(DataAccessException.class);
+        assertThatThrownBy(() -> inTx(() -> accessLog.view(TargetType.CASE, 8L))).isInstanceOf(DataAccessException.class);
         assertThat(count("10.1.0.7")).isZero();
+    }
+
+    @Test
+    void 실패_readOnly_트랜잭션_안에서_view는_바로_실패하고_남지_않는다() {   // 03_shared §9 자주 하는 실수 ①
+        signIn("inv01", "INVESTIGATOR", "10.1.0.14");
+        TransactionTemplate readOnly = new TransactionTemplate(transactionManager);
+        readOnly.setReadOnly(true);
+        assertThatThrownBy(() -> readOnly.executeWithoutResult(status -> accessLog.view(TargetType.CASE, 7L)))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("readOnly");
+        assertThat(count("10.1.0.14")).isZero();
+    }
+
+    @Test
+    void 실패_트랜잭션_밖에서_view는_바로_실패하고_남지_않는다() {   // 03_shared §9 자주 하는 실수 ② (컨트롤러 등)
+        signIn("inv01", "INVESTIGATOR", "10.1.0.15");
+        assertThatThrownBy(() -> accessLog.view(TargetType.CASE, 7L))
+                .isInstanceOf(IllegalTransactionStateException.class);
+        assertThat(count("10.1.0.15")).isZero();
+    }
+
+    @Test
+    void 실패_로그인_사용자가_없으면_view는_실패하고_남지_않는다() {   // user_id null 열람 행 금지
+        signIn("inv01", "INVESTIGATOR", "10.1.0.16");
+        SecurityContextHolder.clearContext();   // 요청(IP)은 있고 사용자만 없음
+        assertThatThrownBy(() -> inTx(() -> accessLog.view(TargetType.CASE, 7L)))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(count("10.1.0.16")).isZero();
     }
 
     @Test
@@ -277,6 +344,11 @@ class AccessLogDbTest {
         request.setRemoteAddr(ip);
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
         return id;
+    }
+
+    /** 열람 기록을 부르는 조회 유스케이스와 같은 트랜잭션 — @Transactional (readOnly 아님). */
+    private void inTx(Runnable body) {
+        new TransactionTemplate(transactionManager).executeWithoutResult(status -> body.run());
     }
 
     private long userId(String loginId) {

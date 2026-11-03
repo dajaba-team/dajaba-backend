@@ -98,4 +98,12 @@ class ArchitectureTest {
                 .resideInAnyPackage("..aml.shared.security..", "..aml.shared.audit..")
                 .check(classes);
     }
+
+    @Test
+    void 열람_기록_엔티티와_저장소는_audit_안에서만_쓴다() {   // SCRUM-93 — 가짜 행 금지, 밖에서는 AccessLogWriter 만
+        classes().that().haveFullyQualifiedName("com.team.aml.shared.audit.AccessLog")
+                .or().haveFullyQualifiedName("com.team.aml.shared.audit.AccessLogRepository")
+                .should().onlyHaveDependentClassesThat().resideInAPackage("..aml.shared.audit..")
+                .check(classes);
+    }
 }
