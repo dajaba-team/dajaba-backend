@@ -13,6 +13,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -59,6 +61,9 @@ class RealDatasetLoadTest {
     @Autowired
     JdbcTemplate jdbc;
 
+    @Autowired
+    PlatformTransactionManager transactionManager;
+
     @Test
     void 실제_파일_3개를_적재하면_규약_검증값이_나온다() {
         Path dir = Path.of(System.getenv("AML_DATASET_DIR"));
@@ -66,7 +71,9 @@ class RealDatasetLoadTest {
 
         stagePatternFile.execute(dir.resolve("HI-Small_Patterns.txt"));
         loadAccountFile.execute(dir.resolve("HI-Small_accounts.csv"));
-        TransactionLoadResult result = loadTransactionFile.execute(dir.resolve("HI-Small_Trans.csv"));
+        // 거래 적재는 ImportIbmDataset 트랜잭션 안에서만 돈다(MANDATORY)
+        TransactionLoadResult result = new TransactionTemplate(transactionManager)
+                .execute(status -> loadTransactionFile.execute(dir.resolve("HI-Small_Trans.csv")));
 
         System.out.println("REAL_LOAD_SECONDS=" + Duration.between(start, Instant.now()).toSeconds());
         System.out.println("REAL_AMOUNTS_ROUNDED=" + result.amountsRounded());

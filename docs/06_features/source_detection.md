@@ -47,7 +47,7 @@
 - **통화 표기** — DB엔 IBM 원문 이름(`US Dollar`)이 들어가요. 규약 v0.2의 STR facts는 ISO 코드(`USD`)라 AI 서버가 읽을 때 바꿔요. 백엔드 화면·`rule_facts`의 통화를 원문으로 둘지 코드로 바꿀지, 매핑표를 누가 관리할지 정해야 해요. [CASES 명세 §4는 "SOURCE 매핑표를 따른다"]
 - 서식 반영 — `entity_type` 6종 → 서식 표기(5-6), `accounts.bank_country`(5-10), `customer_attributes`를 508만 건 전체 계좌에 만들지(5-7). 서식 회의 전.
 
-**API** — `POST /api/v1/admin/batches/load`(ADMIN, 202), 상태는 `GET /api/v1/admin/batches/{batch_run_id}`. 실패 응답: 이미 적재됨 409 `BATCH_ALREADY_DONE`, 실행 중 409 `BATCH_RUNNING`, CSV 없음 409 `DATASET_FILES_MISSING`〔초안〕.
+**API** — `POST /api/v1/admin/batches/load`(ADMIN, 202), 상태는 `GET /api/v1/admin/batches/{batch_run_id}`. 실패 응답: 이미 적재됨 409 `BATCH_ALREADY_DONE`, 같은 파일 재적재 409 `SOURCE_FILE_ALREADY_LOADED`(파일명이 아니라 SHA-256 기준), 실행 중 409 `BATCH_RUNNING`, CSV 없음 409 `DATASET_FILES_MISSING`〔초안〕.
 
 ---
 
