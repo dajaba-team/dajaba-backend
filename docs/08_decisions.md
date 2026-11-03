@@ -22,7 +22,7 @@
 | 10/27 | 재실행 — 적재·룰 스캔은 성공 후 금지, 점수·케이스 생성은 남은 대상 재처리 허용. `SCORE_RETRY` 없이 점수 재실행 | 재시도 뒤 새 HIGH의 케이스 생성이 막히면 안 됨 | 안건 14·21 |
 | 10/27 | 메모는 `case_history` NOTE 행이 권장 — **이름 확인 남음** | 이력 원칙과 같음 | 안건 16 |
 | 10/27 | 초안 생성·검증 버튼 분리, 자동 검증 없음 | 90초 + 90초는 길다 | 안건 17 |
-| 10/27 | 금액 `numeric(18,2)` 유지 | 서비스 DB는 IBM만 | 안건 19 |
+| 10/27 | 금액 `numeric(18,2)` 유지 〔11/2 `numeric(20,6)`으로 바뀜 — 아래 11/2 줄〕 | 서비스 DB는 IBM만 | 안건 19 |
 | 10/27 | 룰 공통 네 가지(규약 번호·통화별·달력일·자기계좌 제외), 대표 룰 R02 | 백엔드 룰과 학습용 룰 정합 | 안건 20 |
 | 10/27 | `AiClient` 재시도 1회 — `LLM_UNAVAILABLE`·`MODEL_UNAVAILABLE`·연결 계열 5xx만, 그 밖 0회. `alert_scores.alert_id` UNIQUE 유지 | 현값 유지 | 안건 21, 규약 v0.2 §6.2 |
 | 10/27 | AI가 facts 계산, `draft_id` 백엔드 선발급, 검증은 `generation_id` + 본문 해시로 묶음 | facts·검증이 한 기준 | 안건 23 |
@@ -45,6 +45,7 @@
 | 11/2 | Flyway 번호 재배정 — `ai_call_logs` V007 → **V004_2**, `access_logs` **V004_3**, `alert_scores` **V005_1**, V007은 비움. 머지 순서 V004_1 → V004_2 → V004_3 → V005 → V005_1 → V006 → V008 → V009. **양보 규칙**: 하위 번호로 끼운 파일이 뒤 번호 머지를 막으면 끼운 쪽이 다음 빈 번호로 옮김 | 로그 테이블 둘은 탐지·케이스를 참조하지 않아 V005·V006을 기다릴 이유가 없음. `alert_scores`는 V008·V009를 기다리지 않게 V005 바로 뒤. V007을 당겨 채우면 V008·V009와 문서를 다 고쳐야 함 | SCRUM-56, `05_flyway.md` §1·§3 |
 | 11/2 | `access_logs`(V004_3) — action 이름 `STR_VIEW`·`PDF_DOWNLOAD`(나머지 8개 그대로). 기록은 모두 **별도 트랜잭션**(`REQUIRES_NEW`)〔열람 기록은 11/3에 바뀜 — 아래 줄〕. 팀원은 `shared/audit/AccessLogWriter`의 action별 메서드(`view`·`strView`·`pdfDownload`·`export`)만 부르고 사용자·IP는 Writer가 꺼냄. 로그인용 `LoginAccessLogWriter`는 `shared/security`만. **`LOGIN_FAIL`은 인증까지 간 실패(401)만** — 400 형식 오류는 기록 안 함. `login_id_attempted`는 앞 64자, IP는 `getRemoteAddr()`. **열람 기록 저장이 실패하면 조회도 실패**(예외 전파), 로그인·로그아웃 기록 실패는 응답 그대로 + 경고 로그 | 조회 유스케이스는 보통 readOnly라 같은 트랜잭션에선 INSERT가 거부됨. 문자열 action을 밖에서 못 넣게 해 값이 흩어지지 않음. 400은 인증 시도가 아니라 형식 오류. 기록 없는 열람은 감사 공백이라 막음, 로그인은 기록 때문에 막히면 안 됨 | SCRUM-19, 미결 10, 11/2 진희 |
 | 11/2 | 시퀀스로 미리 받은 번호를 id로 쓰는 엔티티(`str_drafts`·`str_draft_requests`)는 shared **`AssignedIdEntity`** 상속. 감사 4칸은 새 부모 `AuditedEntity`로 올리고 `BaseEntity`는 그 위에 IDENTITY id만(공개 메서드 그대로). **새 행 판단은 `Persistable.isNew()`** — 생성 직후 true, `@PostPersist`·`@PostLoad` 뒤 false. version 칸으로 판단하지 않음 | id를 직접 넣으면 `save()`가 `merge`로 가서 SELECT가 더 나가고 같은 id를 조용히 덮어씀. `str_draft_requests`엔 version 칸이 없어 "version null = 새 행"도 못 씀 | 백엔드 #28 리뷰(11/2), 미결 21, SCRUM-68 |
+| 11/2 | 거래 금액 `numeric(18,2)` → **`numeric(20,6)`** (V005_2). 원본 금액을 반올림하지 않음 | 실제 HI-Small에서 Bitcoin 소수 6자리 필드 294,217개 중 293,425개 값이 바뀌고 일부는 0.00이 됨. 정수부 최대 13자리라 14자리면 충분 | 안건 19, 준혁·준영 합의(ML 규약 하위 「B7 기준 및 후속 협의 사항」), SCRUM-97 |
 | 11/3 | 열람 기록(`AccessLogWriter`의 `view`·`strView`·`pdfDownload`·`export`)은 **바깥 조회 트랜잭션에 참여**(`MANDATORY`) — 그래서 열람 기록을 부르는 조회 유스케이스는 **readOnly를 쓰지 않음**. readOnly 안·트랜잭션 밖에서 부르면 바로 실패. 기록과 조회는 같이 성공·실패(본문을 돌려준 열람만 남음). 로그인 사용자 필수(`CurrentUser.require()`). 호출은 권한 검사 뒤·본문 읽기 전, 403·404는 기록 안 함. 케이스 상세는 `view(CASE)`(현재 초안 본문도 주면 `strView` 더), STR 상세는 제한 응답이어도 `strView`(미결 30 전제). `AccessLog`·`AccessLogRepository`는 `shared/audit` 밖에서 못 씀(ArchUnit, `AccessLog.create` package-private). 로그인 기록·`ai_call_logs`는 `REQUIRES_NEW` 그대로 | `REQUIRES_NEW`는 바깥 조회가 커넥션을 쥔 채 두 번째 커넥션을 잡아, Hikari 10개에서 상세 조회 10건이 동시에 오면 풀이 고갈돼 멈춤. 호출처가 0곳인 지금이 바꾸기 가장 쌈. 고르지 않은 안: 풀만 키움(2배는 그대로), 조회 뒤 기록(유스케이스를 둘로 나눠야 함), `afterCommit` 기록(그때도 첫 커넥션 반납 전) | 3주차 리뷰 리스크 6, SCRUM-93, 11/3 진희 |
 
 ## 2. 문서끼리 다른 곳 — 이 docs에서 고른 것
