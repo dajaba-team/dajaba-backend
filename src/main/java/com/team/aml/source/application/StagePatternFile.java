@@ -13,7 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** 패턴 파일을 파싱해 스테이징에 넣고 사건 수를 돌려준다. LoadIbmDataset 트랜잭션에 참여한다. */
+/** 패턴 파일을 파싱해 스테이징에 넣고 사건 수를 돌려준다. ImportIbmDataset 트랜잭션에 참여한다. */
 @Service
 public class StagePatternFile {
 
