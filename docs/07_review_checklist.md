@@ -47,7 +47,8 @@
 
 ## 4. 트랜잭션·AI 호출 [가이드 §5, 레퍼런스 §8.4]
 
-- [ ] `@Transactional`은 application에만, 읽기는 `readOnly = true` (못 잡음)
+- [ ] `@Transactional`은 application에만, 읽기는 `readOnly = true` (못 잡음). 단, 열람 기록(`AccessLogWriter`)을 부르는 상세 조회는 readOnly 없이 — `03_shared.md` §9 (readOnly면 테스트에서 바로 실패)
+- [ ] 상세 조회는 권한 검사 뒤·데이터 읽기 전에 `accessLog.*` 한 줄 (못 잡음)
 - [ ] **AI 호출이 트랜잭션 밖** ("DB → HTTP → DB") (못 잡음)
 - [ ] AI 응답 저장 때 상태·담당자·version을 다시 확인 → 그사이 종료됐으면 저장 거절
 - [ ] AI 실패 때 케이스 상태를 되돌리지 않음

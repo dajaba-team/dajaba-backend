@@ -203,7 +203,11 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | ADMIN 내보내기 | 내보내기 유스케이스 | `accessLog.export(type, id)` |
 
 - `AccessLogWriter`(`shared/audit`)를 주입받아 부르기만 해요. **사용자는 `CurrentUser`, IP는 지금 요청**에서 Writer가 꺼내요 — 호출부는 넘기지 않아요. action 문자열을 밖에서 넣는 메서드는 없어요.
-- 기록은 **별도 트랜잭션**(`REQUIRES_NEW`)이라 `@Transactional(readOnly = true)` 조회 안에서 불러도 저장돼요. 조회가 뒤에서 실패해도 "열람 시도" 기록은 남아요.
+- 기록은 **바깥 조회 트랜잭션에 참여**해요(`MANDATORY`, 같은 커넥션). 그래서 **열람 기록을 부르는 조회 유스케이스는 `@Transactional`(readOnly 아님)**이에요. 커넥션은 조회 하나에 하나, 기록과 조회는 **같이 성공·같이 실패**해요 — 기록 뒤에 조회가 실패하면 기록도 롤백되어 **본문을 실제로 돌려준 열람만** 남아요. [11/3, SCRUM-93]
+- **호출 순서** — 권한 검사(담당자·역할) **통과 뒤, 본문 데이터를 읽기 전에** 한 줄. 권한에 걸려 403이면 기록하지 않아요(미결 30). 대상이 없어 404여도 기록하지 않아요.
+- **상세 + 현재 초안 화면** — 케이스 상세는 `view(CASE)` 한 줄 — 같은 응답에 현재 초안 본문도 주면 `strView` 한 줄 더. STR 상세(`GET /str-drafts/{draft_no}`)는 본문 응답이든 상태·날짜만 주는 제한 응답(비담당·관리자, FR-APR-02)이든 `strView` 한 줄(미결 30 전제).
+- **사용자** — 로그인 사용자가 없으면 기록하지 않고 실패해요(`CurrentUser.require()`, `user_id` 없는 열람 행 금지). 배치·SYSTEM은 열람 기록을 부르지 않아요.
+- **자주 하는 실수** — ① `readOnly = true` 안에서 부르면 바로 `IllegalStateException`. ② 트랜잭션 밖(컨트롤러 등, `open-in-view: false`)에서 부르면 바로 `IllegalTransactionStateException`.
 - **열람 기록 저장이 실패하면 예외를 그대로 올려서 조회도 실패해요(기록 없는 열람 금지).** 반대로 로그인·로그아웃 기록은 실패해도 응답은 그대로이고 경고 로그만 남겨요. [11/2 진희]
 - 로그인·로그아웃 기록(`LOGIN_OK`·`LOGIN_FAIL`·`LOGOUT`)은 `shared/security`만 쓰는 `LoginAccessLogWriter`가 남겨요(ArchUnit으로 막음). 팀원 코드는 부를 일이 없어요.
 - 추가만 — `app_backend`는 UPDATE·DELETE 권한이 없어요. 비밀번호는 어디에도 저장·로그하지 않아요.

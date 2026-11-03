@@ -47,13 +47,13 @@ public class Transaction {
     @Column(name = "to_account_key", nullable = false, length = 64)
     private String toAccountKey;
 
-    @Column(name = "amount_received", nullable = false, precision = 18, scale = 2)
+    @Column(name = "amount_received", nullable = false, precision = 20, scale = 6)
     private BigDecimal amountReceived;
 
     @Column(name = "currency_received", nullable = false, length = 32)
     private String currencyReceived;
 
-    @Column(name = "amount_paid", nullable = false, precision = 18, scale = 2)
+    @Column(name = "amount_paid", nullable = false, precision = 20, scale = 6)
     private BigDecimal amountPaid;
 
     @Column(name = "currency_paid", nullable = false, length = 32)

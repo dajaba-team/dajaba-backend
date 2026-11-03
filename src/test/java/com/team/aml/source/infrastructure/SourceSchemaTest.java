@@ -78,6 +78,22 @@ class SourceSchemaTest {
     }
 
     @Test
+    void 금액은_소수_6자리와_정수_14자리까지_그대로_저장한다() throws Exception {
+        try (Connection c = backend(); Statement statement = c.createStatement()) {
+            long fileId = newSourceFile(c);
+            long id = insertTransactionWithAmounts(c, fileId, "12345678901234.123456", "0.001234");
+
+            try (ResultSet result = statement.executeQuery(
+                    "select amount_received::text, amount_paid::text from ops.transactions where transaction_id = " + id)) {
+                result.next();
+                assertThat(result.getString(1)).isEqualTo("12345678901234.123456");
+                assertThat(result.getString(2)).isEqualTo("0.001234");
+            }
+            assertSqlState("22003", () -> insertTransactionWithAmounts(c, fileId, "123456789012345.0", "1.0"));
+        }
+    }
+
+    @Test
     void 거래_ID를_직접_넣으면_거부한다() throws Exception {
         try (Connection c = backend()) {
             long fileId = newSourceFile(c);
@@ -221,6 +237,20 @@ class SourceSchemaTest {
         try (PreparedStatement statement = c.prepareStatement(INSERT_TRANSACTION)) {
             statement.setLong(1, fileId);
             statement.setLong(2, row);
+            try (ResultSet result = statement.executeQuery()) {
+                result.next();
+                return result.getLong(1);
+            }
+        }
+    }
+
+    private static long insertTransactionWithAmounts(Connection c, long fileId, String received, String paid)
+            throws SQLException {
+        String sql = INSERT_TRANSACTION.replace("100.00, 'US Dollar', 100.00,",
+                received + ", 'Bitcoin', " + paid + ",");
+        try (PreparedStatement statement = c.prepareStatement(sql)) {
+            statement.setLong(1, fileId);
+            statement.setLong(2, SEQUENCE.incrementAndGet());
             try (ResultSet result = statement.executeQuery()) {
                 result.next();
                 return result.getLong(1);
