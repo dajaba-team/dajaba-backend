@@ -1,5 +1,5 @@
 -- V008: str — 초안 요청 기록, 초안, 수정본, 검증 결과 + cases.current_draft_id FK.
--- V006(ops.cases)이 먼저 있어야 한다. 머지 순서: V004_1 → V004_2 → V004_3 → V005 → V005_1 → V006 → V008 (05_flyway §3).
+-- V006(ops.cases)이 먼저 있어야 한다. 머지 순서: V004_1 → V004_2 → V004_3 → V005 → V005_1 → V005_2 → V006 → V008 (05_flyway §3).
 -- 다른 초안·케이스의 행이 섞이지 않게 "id가 있는가"만이 아니라 "같은 초안·케이스의 것인가"까지 복합 FK로 막는다.
 
 -- draft_id 는 AI 호출 전에 이 시퀀스로 먼저 받는다. str_drafts.id 와 같은 값이다.
@@ -53,6 +53,8 @@ create table ops.str_drafts (
 -- 케이스마다 사용 중인 초안은 하나. 재생성하면 예전 초안은 SUPERSEDED.
 create unique index str_drafts_one_active_uq on ops.str_drafts (case_id) where status = 'ACTIVE';
 create index str_drafts_case_idx on ops.str_drafts (case_id, created_at desc, id desc);
+-- 요청 기록·초안은 상태만 바뀌고 지우지 않는다.
+revoke delete on ops.str_draft_requests, ops.str_drafts from app_backend;
 
 -- 수정본. 추가만 한다. 1번 = AI 원문(작성자 SYSTEM, 고치기 전 없음), 첫 수정은 2번 (미결 25).
 create table ops.str_revisions (
@@ -91,6 +93,7 @@ create table ops.verification_results (
     payload           jsonb not null,                            -- AI 응답 전체 (code_checks, llm_checks, narrative_refs)
     created_at        timestamptz not null default now(),
     created_by        bigint not null references ops.users(id),
+    constraint verification_results_draft_id_uq unique (draft_id, id),          -- approvals 복합 FK 대상 (V009)
     -- 그 초안의 generation_id 로만 저장된다 (다른 초안의 검증이 섞이지 않게)
     constraint verification_results_draft_generation_fk foreign key (draft_id, generation_id)
         references ops.str_drafts (id, generation_id)

@@ -15,13 +15,14 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * V008 계약 검증. develop에 있는 V008보다 낮은 번호 파일을 전부 적용한 뒤 V008을 적용한다.
- * V006이 아직 없으면 V008이 참조하는 칸만 가진 ops.cases를 만든다. V006이 들어오면 이 stub은 저절로 빠지고 실제 V006 위에서 돈다.
+ * V008 계약 검증. develop에 있는 V008보다 낮은 번호 파일(V001 ~ V006)을 전부 적용한 뒤 V008을 적용한다.
+ * 케이스는 실제 V006 위에 만든다. 초안을 붙이려면 ESCALATED + 담당자여야 V006 CHECK를 통과한다(CaseMigrationDbTest와 같은 재료).
  */
 @Testcontainers
 class StrMigrationIsolatedTest {
@@ -30,6 +31,10 @@ class StrMigrationIsolatedTest {
     static Flyway flyway;
     static final String HASH = "a".repeat(64);
     static final String V008 = "V008__create_str_tables.sql";
+    static final AtomicInteger SEQ = new AtomicInteger();
+    static long batchRunId;
+    static long ruleId;
+    static long investigator;
 
     @Container
     static PostgreSQLContainer<?> db = new PostgreSQLContainer<>("postgres:16")
@@ -42,17 +47,21 @@ class StrMigrationIsolatedTest {
 
     @BeforeAll
     static void migrate() throws Exception {
-        List<Path> earlier = migrationsBefore(8.0);                 // V001 ~ V006(있으면)까지 실제 파일
+        List<Path> earlier = migrationsBefore(8.0);                 // V001 ~ V006 실제 파일
         for (Path f : earlier) Files.copy(f, migrations.resolve(f.getFileName()));
         flyway = Flyway.configure().dataSource(db.getJdbcUrl(), "app_migrate", "migrate")
                 .schemas("ops").defaultSchema("ops")
                 .locations("filesystem:" + migrations).load();
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(earlier.size());
 
-        try (var c = DriverManager.getConnection(db.getJdbcUrl(), "app_migrate", "migrate");
-             var s = c.createStatement()) {
-            // V006이 아직 없을 때만: V008이 참조하는 칸만
-            s.execute("create table if not exists ops.cases (id bigint generated always as identity primary key, current_draft_id bigint)");
+        try (var c = DriverManager.getConnection(db.getJdbcUrl(), "app_migrate", "migrate")) {
+            // 케이스를 만들 재료: 조사역·배치·룰 (CaseMigrationDbTest와 같은 값)
+            investigator = number(c, "insert into ops.users(login_id, display_name, role, created_by, updated_by) "
+                    + "values ('inv1','조사역1','INVESTIGATOR',1,1) returning id");
+            batchRunId = number(c, "insert into ops.batch_runs(batch_type, batch_date, status, triggered_by) "
+                    + "values ('RULE_SCAN','2022-09-01','SUCCEEDED',1) returning id");
+            ruleId = number(c, "insert into ops.rules(rule_id, version, name, params, created_by, updated_by) "
+                    + "values ('R02_FAN_IN_24H',1,'fan-in','{}',1,1) returning id");
         }
         Files.copy(migrationFile(V008), migrations.resolve(V008));
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
@@ -108,6 +117,8 @@ class StrMigrationIsolatedTest {
             rejected(c, "23514", "update ops.str_drafts set suspicion_level_branch=0 where id=" + second);
             rejected(c, "23514", "update ops.str_drafts set suspicion_level_hq=6 where id=" + second);
             exec(c, "update ops.str_drafts set suspicion_types='{VI-4}', suspicion_level_branch=4 where id=" + second);
+            rejected(c, "42501", "delete from ops.str_drafts where id=" + requestOfA);          // 초안은 지우지 않는다
+            rejected(c, "42501", "delete from ops.str_draft_requests where draft_id=" + requestOfA);
         }
     }
 
@@ -219,8 +230,16 @@ class StrMigrationIsolatedTest {
         return DriverManager.getConnection(db.getJdbcUrl(), "app_backend", "backend");
     }
 
+    /** 경보 → 케이스. 초안을 붙이려면 ESCALATED + 담당자여야 V006 CHECK를 통과한다. */
     private static long newCase(Connection c) throws SQLException {
-        return number(c, "insert into ops.cases default values returning id");
+        int n = SEQ.incrementAndGet();
+        long alertId = number(c, "insert into ops.alerts(alert_no, batch_run_id, rule_ref_id, account_key, window_start, "
+                + "window_end, reference_ts, rule_facts, batch_date, score_status) values ('ALT-20220901-"
+                + String.format("%06d", n) + "'," + batchRunId + "," + ruleId + ",'ACC-" + n + "','2022-09-01 00:00',"
+                + "'2022-09-02 00:00','2022-09-02 00:00','{}','2022-09-01','SCORED') returning id");
+        return number(c, "insert into ops.cases(case_no, alert_id, account_key, status, assignee_id, created_by, updated_by) "
+                + "values ('CASE-2022-" + String.format("%06d", n) + "'," + alertId + ",'ACC-" + n + "','ESCALATED',"
+                + investigator + ",1,1) returning id");
     }
 
     private static long newRequest(Connection c, long caseId) throws SQLException {
