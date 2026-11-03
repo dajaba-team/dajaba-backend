@@ -52,7 +52,7 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 | V005 | detection — `rules`, `alerts`, `alert_transactions`, `alert_no_seq`. 룰 행은 룰 명세(SCRUM-73) 확정 후 별도 파일 | 준혁 (SCRUM-72) | W3 | 머지됨 #31 | 같음 |
 | V005_1 | `alert_scores` (경보당 1행, `score_band` 없음) | 준혁 (SCRUM-96) | W3 (11/3) | 머지됨 #36 | V007 |
 | V005_2 | `transactions` 금액 `numeric(18,2)` → `numeric(20,6)` (11/2 준혁·준영 합의) | 준혁 (SCRUM-97) | W3 (11/3) | 머지됨 #34 | — |
-| V006 | cases — `cases`, `case_history`, `case_summaries`, `case_no_seq` (`REPORTED` CHECK 포함) | 지윤 (SCRUM-48) | W3 | 머지됨 #39 | 같음 |
+| V006 | cases — `cases`, `case_history`, `case_summaries`, `case_no_seq` (`REPORTED` CHECK 포함) | 지윤 (SCRUM-48) | W3 | PR | 같음 |
 | V007 | **비움 — 쓰지 않아요** | — | — | 비움 | `create_alert_scores` |
 | V008 | str — `str_drafts`, `str_revisions`, `verification_results` + `cases.current_draft_id` FK | 채영 | W2 | 예약 | 같음 (W3) |
 | V009 | `approvals` (`reason_code`, `narrative_sha256` 포함) | 채영 | W2 | 예약 | 같음 (W4) |
