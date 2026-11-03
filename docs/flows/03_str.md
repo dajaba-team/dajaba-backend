@@ -84,7 +84,7 @@ sequenceDiagram
             Inv->>FE: "종료" + 사유
             FE->>STRC: 케이스 종료 요청
             STRC->>STRU: str 유스케이스 ⟵ @Transactional 하나
-            STRU->>CAS: Case.close(사유) → CLOSED (종료 사유에 반려 코드)
+            STRU->>CAS: Case.close(종결 사유 3개 중 하나) → CLOSED (반려 코드는 REJECT 이력에 있음)
             STRU->>DB: str_drafts.status → SUPERSEDED
         end
         note over CAS: 코드와 안 맞는 이동(NEED_REVISION인데 종료, NOT_REPORTABLE인데 수정)은 cases가 409로 막음.<br/>검사는 cases의 반려 코드로, approvals 값은 이력용
