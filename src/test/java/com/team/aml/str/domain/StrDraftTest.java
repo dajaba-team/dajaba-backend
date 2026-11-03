@@ -7,6 +7,7 @@ import com.team.aml.user.domain.User;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
+import java.text.Normalizer;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -304,6 +305,42 @@ class StrDraftTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("generationId");
         }
+    }
+
+    // 16: 글자 수는 NFC로 맞춘 뒤 UTF-16 길이로 센다 (11/1 공지, AI 06_verification과 같은 기준)
+    @Test
+    void 글자_수는_NFC로_맞춘_뒤_UTF16_길이로_센다() {
+        StrDraft draft = newDraft();
+        String nfd5000 = Normalizer.normalize("가".repeat(5_000), Normalizer.Form.NFD);   // 자소로 나뉘어 length() 10,000
+
+        assertThat(draft.revise(Map.of(StrSection.HOW, "가".repeat(5_000)), INVESTIGATOR).getRevisionNo())
+                .isEqualTo(2);                                                              // 5,000자 통과
+        assertThatThrownBy(() -> draft.revise(Map.of(StrSection.HOW, "가".repeat(5_001)), INVESTIGATOR))
+                .isInstanceOf(InvalidSectionTextException.class);                           // 5,001자 거부
+        assertThatThrownBy(() -> draft.revise(Map.of(StrSection.HOW, "가".repeat(4_999) + "😀"), INVESTIGATOR))
+                .isInstanceOf(InvalidSectionTextException.class);                           // 이모지는 2로 세서 5,001
+        assertThat(draft.revise(Map.of(StrSection.HOW, nfd5000), INVESTIGATOR).getRevisionNo())
+                .isEqualTo(3);                                                              // NFD 한글 5,000자 통과
+    }
+
+    // 17: 끝 상태에서 같은 전이를 다시 불러도 거부하고 상태는 그대로다
+    @Test
+    void 잠긴_초안을_다시_잠그면_거부하고_상태는_그대로다() {
+        StrDraft draft = newDraft();
+        draft.lock();
+
+        assertThatThrownBy(draft::lock).isInstanceOf(DraftLockedException.class);
+        assertThat(draft.getStatus()).isEqualTo(StrDraftStatus.LOCKED);
+    }
+
+    // 18
+    @Test
+    void 대체된_초안을_다시_대체하면_거부하고_상태는_그대로다() {
+        StrDraft draft = newDraft();
+        draft.supersede();
+
+        assertThatThrownBy(draft::supersede).isInstanceOf(DraftLockedException.class);
+        assertThat(draft.getStatus()).isEqualTo(StrDraftStatus.SUPERSEDED);
     }
 
 }

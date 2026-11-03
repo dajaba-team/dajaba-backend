@@ -28,7 +28,7 @@
 | PENDING_APPROVAL → REJECTED | `reject(code, comment)` | APPROVER | 코드·사유 필수 |
 | REJECTED → DRAFTED | `reopenDraft` | 담당 조사역 (str 진행) | `NEED_REVISION`만. 수정본·새 초안 저장과 같은 트랜잭션 |
 | ESCALATED·DRAFTED → CLOSED | `close` | 담당 조사역 | 사유 필수. 초안 있으면 str 유스케이스가 SUPERSEDED와 같은 트랜잭션 |
-| REJECTED → CLOSED | `close` | 담당 조사역 (str 진행) | `NOT_REPORTABLE`만. 종료 사유에 반려 코드 |
+| REJECTED → CLOSED | `close` | 담당 조사역 (str 진행) | `NOT_REPORTABLE`만. 종결 사유는 아래 세 값 중 조사역이 고름, 반려 코드는 REJECT 이력에 이미 있음 |
 
 **금지** — OPEN → ESCALATED, PENDING_APPROVAL → CLOSED, `NEED_REVISION` 반려 건 종료, `NOT_REPORTABLE` 반려 건 수정·재생성, APPROVED에서 REPORTED 말고 다른 곳으로 이동, REPORTED·CLOSED 재개. 전부 409 `INVALID_CASE_TRANSITION`. 전이 가능 여부는 `CaseStatus` enum 한 곳, 전이 때마다 `case_history` 한 행. 반려 뒤 이동 검사는 **cases의 반려 코드 값만** 봐요(approvals는 이력). [가이드 §4, 안건 24]
 
@@ -41,6 +41,7 @@
 | 보완 반려 뒤 재요청 | 본문 해시 ≠ 반려 당시 해시 (새 `draft_id`는 제외) | `NarrativeUnchangedException` (str `ApprovalGate`) |
 
 - `close_reason`: `FALSE_POSITIVE`, `DUPLICATE`, `NO_ACTION`. [레퍼런스 §3.3]
+- **`NOT_REPORTABLE` 반려 건 종결도 `close_reason`은 위 세 값 중 하나**(보통 `NO_ACTION`)를 조사역이 골라요. 종결 사유는 "왜 닫았나", 반려 코드는 "승인자가 뭐라 했나"라 다른 질문이고, 반려 코드는 REJECT 이력 행(`reason_code = NOT_REPORTABLE`)에 이미 남아 있어요. 그래서 `close-with-draft` 요청도 `close_reason`을 받아요. 규약 4절의 "종료 사유에 반려 코드"는 이 뜻으로 읽어요. [#39 리뷰 1번, 11/3 지윤·채영]
 - 변경 요청은 모두 `version` 확인(`@Version`). 요청 값 비교만 하고 커밋 때 낙관적 락을 빼먹지 않아요. [CASES 명세 §8.3]
 
 **`CasePolicy` — 등급 계산** [안건 2]

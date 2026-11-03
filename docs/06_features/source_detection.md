@@ -11,10 +11,11 @@
 **확정**
 - 원천 4개는 적재 후 UPDATE·DELETE 없음. 적재는 빈 DB에서만(이미 있으면 409). [레퍼런스 §11.1]
 - 적재 실패는 트랜잭션 롤백으로 원천에 남지 않아 따로 비우지 않아요. 다시 적재하려면 `docker compose down -v`로 DB를 새로 만들어요. `app_backend`에는 원천 UPDATE·DELETE·TRUNCATE 권한이 없어요.
+- 계좌 파일은 이미 있는 계좌·은행·법인과 값이 같으면 건너뛰고, 소유자·은행 이름·법인 이름이 다르면 실패해요. 은행 이름은 필수이고, 하나로 정해지지 않는 파일(앞 0만 다른 ID에 다른 이름)도 실패예요. MVP 적재는 빈 DB에서 1회라 실제로는 첫 적재 검증이에요. [SCRUM-54 리뷰]
 - `is_laundering`·`pattern_type`·`pattern_id`는 적재하지만 **백엔드 엔티티에 매핑하지 않고 응답에도 없어요.** 적재 SQL 안에서 검증용으로만 세요. [레퍼런스 §10-10, SD 명세 §3]
 - 적재는 JPA가 아니라 `CopyManager`(COPY)로. `transactions_staging`(unlogged)을 거쳐 `INSERT … SELECT`로 변환. [레퍼런스 §11.2]
 - 서비스 DB에는 **HI-Small만** 들어가요(SAML-D·LI는 학습 전용). 준영이 준 검증값(`expected.json`)으로 적재 결과를 같이 확인해요. [안건 12·13]
-- 금액은 `numeric(18,2)` 유지. [안건 19]
+- 금액은 `numeric(20,6)`. 원본 금액을 반올림하지 않아요(Bitcoin 소수 6자리). [안건 19, 11/2 준혁·준영 합의, V005_2] 〔10/27의 `numeric(18,2)` 유지는 실제 파일에서 293,425개 필드가 바뀌어 변경〕
 - **`transaction_id` — DB가 자동 발급.** 원본 추적은 `source_files` 테이블로: `source_files(id, file_name, file_hash CHAR(64) UNIQUE)`, `transactions.source_file_id`(FK), `source_row_number`, `UNIQUE(source_file_id, source_row_number)`. CSV 행 번호·적재 순서로 ID를 추정하지 않아요. [안건 1, ML 규약 §1.1] 〔레퍼런스 §2·SD 명세 §11.2의 "CSV 행 번호를 그대로 PK"는 그 전 안〕
 - `customer_attributes`는 백엔드가 만드는 **가상 KYC**(`entity_id` 해시를 시드로 — 다시 만들어도 같은 값). AI 피처로는 안 써요. [레퍼런스 §3.1, ML 규약 §1]
 
@@ -46,7 +47,7 @@
 - **통화 표기** — DB엔 IBM 원문 이름(`US Dollar`)이 들어가요. 규약 v0.2의 STR facts는 ISO 코드(`USD`)라 AI 서버가 읽을 때 바꿔요. 백엔드 화면·`rule_facts`의 통화를 원문으로 둘지 코드로 바꿀지, 매핑표를 누가 관리할지 정해야 해요. [CASES 명세 §4는 "SOURCE 매핑표를 따른다"]
 - 서식 반영 — `entity_type` 6종 → 서식 표기(5-6), `accounts.bank_country`(5-10), `customer_attributes`를 508만 건 전체 계좌에 만들지(5-7). 서식 회의 전.
 
-**API** — `POST /api/v1/admin/batches/load`(ADMIN, 202), 상태는 `GET /api/v1/admin/batches/{batch_run_id}`. 실패 응답: 이미 적재됨 409 `BATCH_ALREADY_DONE`, 실행 중 409 `BATCH_RUNNING`, CSV 없음 409 `DATASET_FILES_MISSING`〔초안〕.
+**API** — `POST /api/v1/admin/batches/load`(ADMIN, 202), 상태는 `GET /api/v1/admin/batches/{batch_run_id}`. 실패 응답: 이미 적재됨 409 `BATCH_ALREADY_DONE`, 같은 파일 재적재 409 `SOURCE_FILE_ALREADY_LOADED`(파일명이 아니라 SHA-256 기준), 실행 중 409 `BATCH_RUNNING`, CSV 없음 409 `DATASET_FILES_MISSING`〔초안〕.
 
 ---
 
@@ -58,7 +59,7 @@
 - `rules` — `rule_id`(`R02_FAN_IN_24H`), `version`(기준값 바뀔 때마다 +1, `(rule_id, version)` unique), `name`, `typology_hint`, `params jsonb`, `is_active`. 감사 4. 끈 룰도 행은 살려 둬요(과거 경보가 가리킴).
 - `alerts` — `alert_no`(unique), `batch_run_id`, `rule_ref_id`(어느 버전의 룰), `account_key`, `entity_id`(null 가능), `window_start`, `window_end`, `reference_ts`, `rule_facts jsonb`, `batch_date`, `score_status`(PENDING/SCORED/FAILED), `score_failure_code`(null 가능 — FAILED일 때 AI `failure_code`, 10/29), `case_opened`. unique `(rule_ref_id, account_key, window_start)`. 만든 뒤 바뀌는 건 `score_status`·`score_failure_code`·`case_opened`뿐.
 - `alert_transactions` — 경보 ↔ 거래 N:M, 복합 PK.
-- `alert_scores` — `score`(null 가능), `threshold`(AI 추천값), `model_version`, `feature_version`, `prediction_id`, `produced_at`, `payload jsonb`(응답 원문 — `data_quality_status`도 여기서 읽어요, 10/29 준혁). **MVP는 `alert_id` UNIQUE 유지**, 다른 모델로 재채점은 고도화. [안건 2·4·5·21, ML 규약 §6.3] 〔레퍼런스·SD 명세의 "경보 하나에 점수 여러 행"은 그 전 안〕 (V005_1, SCRUM-56)
+- `alert_scores` — `score`(not null — 점수 있는 경보만 행을 만들고, FAILED는 행 없음), `threshold`(AI 추천값), `model_version`, `feature_version`, `prediction_id`, `produced_at`, `payload jsonb`(응답 원문 — `data_quality_status`도 여기서 읽어요, 10/29 준혁). **MVP는 `alert_id` UNIQUE 유지**, 다른 모델로 재채점은 고도화. [안건 2·4·5·21, ML 규약 §6.3] 〔레퍼런스·SD 명세의 "경보 하나에 점수 여러 행"은 그 전 안〕 (V005_1, SCRUM-96)
 
 **룰 8개** [안건 20, 규약 §2]
 | 번호 | 룰 | 지금 |
@@ -80,7 +81,9 @@
 1. **집계는 SQL**(네이티브 쿼리): "수신 계좌·일자별 서로 다른 송신 계좌 수와 거래 ID 목록"
 2. **판정은 Java**: `FanInRule.evaluate(AggregatedRow) → Optional<AlertCandidate>`. 기준은 이상(≥). 기준값이 없거나 0 이하면 `InvalidRuleParamsException` — 기본값으로 조용히 돌지 않아요. TDD 대상은 2단계.
 
-**룰 스캔** [레퍼런스 §11.3, SD 명세 §5 〔초안〕] — 룰 전체가 **한 트랜잭션**(하나라도 실패하면 그 실행의 경보 전부 롤백 → 다시 돌려도 두 번 생기지 않음). `alert_no`는 시퀀스, `score_status = PENDING`, `case_opened = false`. 경보 단위는 계좌 × 룰 × 하루 창(00:00:00~23:59:59) — 이름은 "24H"지만 자정에 걸친 패턴은 못 잡아요(받아들인 한계).
+**룰 스캔** [레퍼런스 §11.3, SD 명세 §5 〔초안〕] — 룰 전체가 **한 트랜잭션**(하나라도 실패하면 그 실행의 경보 전부 롤백 → 다시 돌려도 두 번 생기지 않음). `alert_no`는 시퀀스, `score_status = PENDING`, `case_opened = false`. 경보 단위는 계좌 × 룰 × 하루 창(00:00:00~23:59:59) — 이름은 "24H"지만 자정에 걸친 패턴은 못 잡아요(받아들인 한계). 〔B7 11/2: R01·R02·R07은 슬라이딩 24시간, 창 `[E+1분-24시간, E+1분)`으로 바뀌어요. 룰 명세(SCRUM-73)에서 반영〕
+- 룰 기준값은 기존 행을 고치지 않고 새 버전 행을 추가해요. DB도 `rules`는 `is_active`·`updated_*`만 바꿀 수 있어요(V005).
+- 이미 성공한 날짜는 다시 스캔하지 않아요(`batch_runs`). 그래서 룰 버전을 올려도 같은 날짜에 같은 룰·계좌·창 경보가 버전별로 또 생기지 않아요. 새 버전은 다음 스캔부터 적용돼요.
 
 **점수 요청** [레퍼런스 §11.1, 안건 2·4·14·21, ML 규약 §2·§3·§6]
 - 대상: 그날 `PENDING`(재실행 땐 남은 `PENDING`과, `FAILED` 중 `score_failure_code`가 **NULL(묶음 실패)이거나 `COMPUTE_ERROR`**인 것 — 10/29) 경보를 **500개씩** `POST /v1/scores`. AI 호출은 트랜잭션 밖, **묶음마다 커밋**.

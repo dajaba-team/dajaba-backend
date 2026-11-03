@@ -2,6 +2,7 @@ package com.team.aml.str.domain;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.text.Normalizer;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.List;
@@ -103,10 +104,18 @@ public class StrDraft {
         if (text == null || text.isBlank()) {
             throw new InvalidSectionTextException(section, "문장이 비어 있습니다");
         }
-        if (text.length() > MAX_SECTION_LENGTH) {
+        if (lengthAfterNfc(text) > MAX_SECTION_LENGTH) {
             throw new InvalidSectionTextException(section, MAX_SECTION_LENGTH + "자를 넘습니다");
         }
     }
+    /**
+     * 글자 수 = NFC로 맞춘 뒤 UTF-16 길이(String.length()). AI 규약과 같은 기준이다 (11/1 공지, 06_verification).
+     * 자소가 나뉜 한글(NFD)도 완성형 글자 수로 세고, 이모지는 2로 센다. 저장하는 문장은 그대로 두고 세기만 한다(해시는 NarrativeHash가 NFC로 맞춘다).
+     */
+    static int lengthAfterNfc(String text) {
+        return Normalizer.normalize(text, Normalizer.Form.NFC).length();
+    }
+
     /** lock이면 거부. */
     public void lock() {
         requireActive();

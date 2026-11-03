@@ -74,6 +74,7 @@
 | 409 | `GENERATION_IN_PROGRESS` → 프론트엔 `DRAFT_IN_PROGRESS` | AI가 주는 409. 자동 재시도 안 함, `AiClient`가 409로 그대로 전달 | 확정 [안건 23, 10/29] |
 | 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases | 〔초안〕 CASES 명세 "신규 제안" |
 | 400·409 | `DATE_OUT_OF_RANGE`, `INVALID_RULE_PARAMS`, `DATASET_NOT_LOADED`, `NO_ACTIVE_RULES`, `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
+| 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |
 | 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 거부), `AI_TIMEOUT`, `AI_BAD_RESPONSE` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정 |
 
 AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지고 `LLM_UNAVAILABLE`로 합쳐졌어요. `VERIFY_UNAVAILABLE`은 에러가 아니라 **검증 결과의 `status` 값**(200 응답)이라 검증 결과 한 줄로 저장해요 [§5.3].
@@ -203,7 +204,11 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | ADMIN 내보내기 | 내보내기 유스케이스 | `accessLog.export(type, id)` |
 
 - `AccessLogWriter`(`shared/audit`)를 주입받아 부르기만 해요. **사용자는 `CurrentUser`, IP는 지금 요청**에서 Writer가 꺼내요 — 호출부는 넘기지 않아요. action 문자열을 밖에서 넣는 메서드는 없어요.
-- 기록은 **별도 트랜잭션**(`REQUIRES_NEW`)이라 `@Transactional(readOnly = true)` 조회 안에서 불러도 저장돼요. 조회가 뒤에서 실패해도 "열람 시도" 기록은 남아요.
+- 기록은 **바깥 조회 트랜잭션에 참여**해요(`MANDATORY`, 같은 커넥션). 그래서 **열람 기록을 부르는 조회 유스케이스는 `@Transactional`(readOnly 아님)**이에요. 커넥션은 조회 하나에 하나, 기록과 조회는 **같이 성공·같이 실패**해요 — 기록 뒤에 조회가 실패하면 기록도 롤백되어 **본문을 실제로 돌려준 열람만** 남아요. [11/3, SCRUM-93]
+- **호출 순서** — 권한 검사(담당자·역할) **통과 뒤, 본문 데이터를 읽기 전에** 한 줄. 권한에 걸려 403이면 기록하지 않아요(미결 30). 대상이 없어 404여도 기록하지 않아요.
+- **상세 + 현재 초안 화면** — 케이스 상세는 `view(CASE)` 한 줄 — 같은 응답에 현재 초안 본문도 주면 `strView` 한 줄 더. STR 상세(`GET /str-drafts/{draft_no}`)는 본문 응답이든 상태·날짜만 주는 제한 응답(비담당·관리자, FR-APR-02)이든 `strView` 한 줄(미결 30 전제).
+- **사용자** — 로그인 사용자가 없으면 기록하지 않고 실패해요(`CurrentUser.require()`, `user_id` 없는 열람 행 금지). 배치·SYSTEM은 열람 기록을 부르지 않아요.
+- **자주 하는 실수** — ① `readOnly = true` 안에서 부르면 바로 `IllegalStateException`. ② 트랜잭션 밖(컨트롤러 등, `open-in-view: false`)에서 부르면 바로 `IllegalTransactionStateException`.
 - **열람 기록 저장이 실패하면 예외를 그대로 올려서 조회도 실패해요(기록 없는 열람 금지).** 반대로 로그인·로그아웃 기록은 실패해도 응답은 그대로이고 경고 로그만 남겨요. [11/2 진희]
 - 로그인·로그아웃 기록(`LOGIN_OK`·`LOGIN_FAIL`·`LOGOUT`)은 `shared/security`만 쓰는 `LoginAccessLogWriter`가 남겨요(ArchUnit으로 막음). 팀원 코드는 부를 일이 없어요.
 - 추가만 — `app_backend`는 UPDATE·DELETE 권한이 없어요. 비밀번호는 어디에도 저장·로그하지 않아요.

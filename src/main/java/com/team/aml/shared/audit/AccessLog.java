@@ -48,8 +48,8 @@ public class AccessLog {
 
     protected AccessLog() {}
 
-    /** loginIdAttempted 는 64자 넘으면 앞 64자만. 로그인 실패가 아니면 null. */
-    public static AccessLog create(AccessLogAction action, Long userId, String loginIdAttempted,
+    /** loginIdAttempted 는 64자 넘으면 앞 64자만. 로그인 실패가 아니면 null. shared/audit 의 Writer 만 부른다(SCRUM-93). */
+    static AccessLog create(AccessLogAction action, Long userId, String loginIdAttempted,
                                    TargetType targetType, Long targetId, String ip) {
         AccessLog log = new AccessLog();
         log.action = action;

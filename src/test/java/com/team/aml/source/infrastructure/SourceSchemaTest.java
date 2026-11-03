@@ -5,11 +5,13 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.postgresql.PGConnection;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.io.StringReader;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -72,6 +74,22 @@ class SourceSchemaTest {
             long second = insertTransaction(c, fileId, SEQUENCE.incrementAndGet());
 
             assertThat(second).isGreaterThan(first);
+        }
+    }
+
+    @Test
+    void 금액은_소수_6자리와_정수_14자리까지_그대로_저장한다() throws Exception {
+        try (Connection c = backend(); Statement statement = c.createStatement()) {
+            long fileId = newSourceFile(c);
+            long id = insertTransactionWithAmounts(c, fileId, "12345678901234.123456", "0.001234");
+
+            try (ResultSet result = statement.executeQuery(
+                    "select amount_received::text, amount_paid::text from ops.transactions where transaction_id = " + id)) {
+                result.next();
+                assertThat(result.getString(1)).isEqualTo("12345678901234.123456");
+                assertThat(result.getString(2)).isEqualTo("0.001234");
+            }
+            assertSqlState("22003", () -> insertTransactionWithAmounts(c, fileId, "123456789012345.0", "1.0"));
         }
     }
 
@@ -139,6 +157,47 @@ class SourceSchemaTest {
     }
 
     @Test
+    void 백엔드_계정은_계좌를_COPY하고_중복은_건너뛰며_적재할_수_있다() throws Exception {
+        try (Connection c = backend(); Statement statement = c.createStatement()) {
+            statement.execute("truncate table ops.accounts_staging");
+            c.unwrap(PGConnection.class).getCopyAPI().copyIn("""
+                    copy ops.accounts_staging(bank_name, bank_id, account_number, entity_id, entity_name)
+                    from stdin with (format csv)""", new StringReader("Bank,1,A1,COPY_E1,Corporation #1\n"));
+            statement.execute("""
+                    insert into ops.entities(entity_id, entity_name, entity_type)
+                    select entity_id, entity_name, 'CORPORATION' from ops.accounts_staging
+                    on conflict (entity_id) do nothing""");
+            statement.execute("""
+                    insert into ops.accounts(account_key, bank_id, account_no, entity_id)
+                    select 'COPY_' || account_number, bank_id, account_number, entity_id from ops.accounts_staging
+                    on conflict (account_key) do nothing""");
+
+            assertThat(statement.executeUpdate("""
+                    insert into ops.accounts(account_key, bank_id, account_no, entity_id)
+                    select 'COPY_' || account_number, bank_id, account_number, entity_id from ops.accounts_staging
+                    on conflict (account_key) do nothing""")).isZero();
+        }
+    }
+
+    @Test
+    void 백엔드_계정은_거래_파일을_COPY할_수_있다() throws Exception {
+        try (Connection c = backend(); Statement statement = c.createStatement()) {
+            statement.execute("truncate table ops.transactions_staging");
+            c.unwrap(PGConnection.class).getCopyAPI().copyIn("""
+                    copy ops.transactions_staging(
+                        timestamp_text, from_bank, from_account, to_bank, to_account, amount_received,
+                        receiving_currency, amount_paid, payment_currency, payment_format, is_laundering)
+                    from stdin with (format csv)""",
+                    new StringReader("2022/09/01 00:20,010,A1,020,B1,1.00,Euro,1.00,Euro,ACH,0\n"));
+
+            try (ResultSet result = statement.executeQuery("select count(*) from ops.transactions_staging")) {
+                result.next();
+                assertThat(result.getLong(1)).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
     void AI_계정은_원천만_읽고_source_files는_읽지_못한다() throws Exception {
         try (Connection c = connect("app_ai", "ai"); Statement statement = c.createStatement()) {
             statement.executeQuery("select count(*) from ops.transactions");
@@ -178,6 +237,20 @@ class SourceSchemaTest {
         try (PreparedStatement statement = c.prepareStatement(INSERT_TRANSACTION)) {
             statement.setLong(1, fileId);
             statement.setLong(2, row);
+            try (ResultSet result = statement.executeQuery()) {
+                result.next();
+                return result.getLong(1);
+            }
+        }
+    }
+
+    private static long insertTransactionWithAmounts(Connection c, long fileId, String received, String paid)
+            throws SQLException {
+        String sql = INSERT_TRANSACTION.replace("100.00, 'US Dollar', 100.00,",
+                received + ", 'Bitcoin', " + paid + ",");
+        try (PreparedStatement statement = c.prepareStatement(sql)) {
+            statement.setLong(1, fileId);
+            statement.setLong(2, SEQUENCE.incrementAndGet());
             try (ResultSet result = statement.executeQuery()) {
                 result.next();
                 return result.getLong(1);
