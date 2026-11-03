@@ -68,7 +68,7 @@ com.team.aml
 | 애그리거트 | 루트 | 안에 포함 | 바깥에서 참조 |
 |---|---|---|---|
 | `Case` | `Case` | `CaseHistory` 목록 | `StrDraft`는 `caseId`(Long)만 |
-| `StrDraft` | `StrDraft` | `StrRevision`, `VerificationResult` 목록, `Approval` | `Case`는 `currentDraftId`(Long)만 |
+| `StrDraft` | `StrDraft` | 현재 수정본(`currentRevision`) 하나. 지난 수정본·`VerificationResult`·`Approval`은 밖에서 `draftId`로 참조(추가만 하는 기록이라 루트가 목록을 들지 않음) | `Case`는 `currentDraftId`(Long)만 |
 
 - 애그리거트 하나 = 트랜잭션 하나가 원칙. **예외:** 승인(`ApproveStr`)·반려·초안 저장·초안 있는 종료처럼 두 루트를 같이 바꾸는 협력 트랜잭션은 `str` 유스케이스가 시작하고 `cases`가 참여해요(`REQUIRED`, `REQUIRES_NEW` 아님). [레퍼런스 §4.3, CASES 명세 §6.2·§8.2 〔초안〕]
 - `Alert`, `Rule`, `AlertScore`는 애그리거트가 아니에요(배치가 만들고 사람이 안 고침). `Transaction`, `Account`, `Entity`는 `@Immutable`.
