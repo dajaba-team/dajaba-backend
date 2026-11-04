@@ -61,7 +61,7 @@ public class ImportIbmDataset {
 
         PatternMatchStats match = patterns.matchStats();
         DatasetStats stats = dataset.collectStats();
-        List<String> mismatches = expectation.mismatches(stats);
+        List<String> mismatches = expectation.mismatches(stats, match);
         if (!mismatches.isEmpty()) {
             throw new DatasetVerificationException(mismatches);
         }
@@ -70,7 +70,7 @@ public class ImportIbmDataset {
         accounts.clearStaging();
         transactions.clearStaging();
         recorder.succeed(batchRunId, loaded.fileRows(), loaded.insertedRows());
-        return new DatasetLoadSummary(loaded.fileRows(), loaded.insertedRows(), match,
-                stats.orphanAccounts(), loaded.amountsRounded(), accountsLoaded.unlistedCountryBanks());
+        return new DatasetLoadSummary(loaded.fileRows(), loaded.insertedRows(), loaded.amountsRounded(),
+                accountsLoaded.unlistedCountryBanks());
     }
 }

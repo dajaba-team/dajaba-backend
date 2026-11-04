@@ -15,6 +15,10 @@ public class DatasetJdbcRepository implements DatasetRepository {
     private static final long LOAD_START_LOCK = 4_004_001L;
 
     private static final String STATS = """
+            with k as (
+                select from_account_key as account_key from ops.transactions
+                union
+                select to_account_key from ops.transactions)
             select (select count(*) from ops.transactions) as transactions,
                    (select count(*) from ops.transactions where is_laundering) as laundering,
                    (select count(*) from ops.transactions where is_self_transfer) as self_transfers,
@@ -24,10 +28,8 @@ public class DatasetJdbcRepository implements DatasetRepository {
                    (select max(ts) from ops.transactions) as last_ts,
                    (select count(*) from ops.accounts) as accounts,
                    (select count(*) from ops.entities) as entities,
-                   (select count(*) from (
-                        select from_account_key as account_key from ops.transactions
-                        union
-                        select to_account_key from ops.transactions) k
+                   (select count(*) from k) as transaction_accounts,
+                   (select count(*) from k
                     where not exists (select 1 from ops.accounts a where a.account_key = k.account_key)) as orphan_accounts""";
 
     private final JdbcTemplate jdbc;
@@ -66,6 +68,7 @@ public class DatasetJdbcRepository implements DatasetRepository {
                 rs.getLong("transactions"), rs.getLong("laundering"), rs.getLong("self_transfers"),
                 rs.getLong("pattern_transactions"), rs.getLong("pattern_events"),
                 rs.getObject("first_ts", LocalDateTime.class), rs.getObject("last_ts", LocalDateTime.class),
-                rs.getLong("accounts"), rs.getLong("entities"), rs.getLong("orphan_accounts")));
+                rs.getLong("accounts"), rs.getLong("entities"), rs.getLong("transaction_accounts"),
+                rs.getLong("orphan_accounts")));
     }
 }

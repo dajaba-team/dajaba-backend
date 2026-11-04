@@ -74,7 +74,7 @@ class LoadIbmDatasetTest {
         @Primary
         DatasetExpectation smallExpectation() {
             return new DatasetExpectation(2, 1, 1, 1, 1,
-                    LocalDateTime.of(2022, 9, 1, 0, 20), LocalDateTime.of(2022, 9, 1, 0, 21), 2, 2);
+                    LocalDateTime.of(2022, 9, 1, 0, 20), LocalDateTime.of(2022, 9, 1, 0, 21), 2, 2, 2);
         }
     }
 
@@ -147,6 +147,35 @@ class LoadIbmDatasetTest {
                 .contains("금액 형식")
                 .doesNotContain("SECRET");
         assertThat(count("select count(*) from ops.transactions")).isZero();
+    }
+
+    @Test
+    void 계좌_파일에_없는_거래_계좌가_있으면_롤백하고_실패를_기록한다() throws IOException {   // 준영 요청 적재 후 검증
+        writeFiles(LAUNDERING_ROW, "2022/09/01 00:21,010,A1,030,SECRET1,5.00,US Dollar,5.00,US Dollar,ACH,0");
+
+        long batchRunId = loadIbmDataset.start(1L);
+        loadIbmDataset.run(batchRunId);
+
+        assertThat(batchRun(batchRunId)).containsEntry("status", "FAILED");
+        assertThat((String) batchRun(batchRunId).get("error_message"))
+                .contains("계좌 파일에 없는 거래 계좌 수 1 (기대 0)")
+                .doesNotContain("SECRET");
+        assertThat(count("select count(*) from ops.transactions")).isZero();
+    }
+
+    @Test
+    void 패턴_행이_거래와_매칭되지_않으면_롤백하고_실패를_기록한다() throws IOException {
+        Files.writeString(DIR.resolve(DatasetFiles.PATTERNS), "BEGIN LAUNDERING ATTEMPT - CYCLE\n" + LAUNDERING_ROW
+                + "\n2022/09/01 00:30,010,A1,020,B1,9.00,US Dollar,9.00,US Dollar,ACH,1\nEND LAUNDERING ATTEMPT\n");
+
+        long batchRunId = loadIbmDataset.start(1L);
+        loadIbmDataset.run(batchRunId);
+
+        assertThat(batchRun(batchRunId)).containsEntry("status", "FAILED");
+        assertThat((String) batchRun(batchRunId).get("error_message"))
+                .isEqualTo("검증값 불일치: 패턴 미매칭 행 수 1 (기대 0)");
+        assertThat(count("select count(*) from ops.transactions")).isZero();
+        assertThat(count("select count(*) from ops.patterns_staging")).isZero();
     }
 
     @Test
