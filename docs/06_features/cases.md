@@ -76,6 +76,22 @@
 | 14 | `POST /admin/batches/open-cases?date=` | ADMIN |
 | 15 | `GET /cases/{case_no}/note-histories` | 조회 3역할 |
 
-**str에 주는 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`, `AttachDraftToCase`, `ReopenCaseDraft`, `SubmitCaseForApproval`, `ApproveCase`, `RejectCase`, `CloseCase`. Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
+**str에 주는 공개 기능 — 구현됨 (SCRUM-98)** 둘 다 `Propagation.MANDATORY`라 str 트랜잭션 안에서만 불러요(혼자 부르면 `IllegalTransactionStateException`).
+
+| 유스케이스 | 하는 일 | 검사 순서·오류 |
+|---|---|---|
+| `AttachDraftToCase.execute(caseId, draftId, expectedVersion)` | 초안 연결 → DRAFTED, 반려 코드 지움, `ATTACH_DRAFT` 이력 | 케이스 잠금 조회 404 `CASE_NOT_FOUND` → version 409 `CONCURRENT_UPDATE` → 담당자 403 `NOT_ASSIGNEE` → 상태 409 `INVALID_CASE_TRANSITION`. 허용: ESCALATED, DRAFTED(재생성), REJECTED+NEED_REVISION |
+| `BumpCaseVersion.execute(caseId, expectedVersion)` | 상태·이력은 그대로, `cases.version`만 +1 | 404 → version 409. 권한은 부르는 쪽이 먼저 봐요. 수정본 저장처럼 **초안 행만 바뀌는 작업**에서 불러 동시 승인 요청과 부딪히게 해요(NFR-APR-02, 미결 20) |
+
+- `CaseRepository.findForUpdate(id)`는 `SELECT … FOR UPDATE`로 읽어요. 위 두 유스케이스가 먼저 케이스를 잠그므로, 같은 케이스를 동시에 바꾸는 요청은 앞 트랜잭션이 끝날 때까지 기다린 뒤 version 검사에서 409가 돼요.
+- `draftId`는 같은 케이스의 초안이어야 해요(V008 `cases_current_draft_fk`). 이전 초안 SUPERSEDED는 str 몫이에요(`str_drafts_one_active_uq`).
+- str은 `cases.domain`·`cases.infrastructure`가 아니라 이 두 유스케이스만 불러요.
+
+**저장 매핑 (SCRUM-98)**
+- `Case`는 이력을 컬렉션으로 들고 있지 않아요. 업무 메서드가 만든 이력은 `getPendingHistories()`에 쌓이고, 유스케이스가 `caseRepository.save(c)` 뒤 `caseHistoryRepository.saveAll(c.takePendingHistories())`로 같은 트랜잭션에서 넣어요.
+- JPQL에서 `CASE`가 예약어라 엔티티 이름은 `InvestigationCase`예요(`select c from InvestigationCase c`).
+- `case_history.case_version_before`는 **그 변경 직전**의 `cases.version`이에요. `@Version`은 flush 때 올라가서, 한 트랜잭션에서 전이가 두 번 일어나면 두 행에 같은 번호가 남아요.
+
+**아직 남은 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`, `ReopenCaseDraft`, `SubmitCaseForApproval`, `ApproveCase`, `RejectCase`, `CloseCase`. Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
 
 **〔확인 필요〕** 상세 화면에 "현재 초안"을 합치는 위치(cases → str 의존 금지라 상위 조합 계층 필요 — 권장은 str 조회 유스케이스가 조합. 같은 시점 보장은 한 SQL·REPEATABLE READ·조합 후 버전 재확인 중 하나로, 기본 READ COMMITTED에선 한 트랜잭션만으로는 부족 — 노션 미결 17번), 메모·요약을 편집할 수 있는 상태 범위, 화면 집계 규칙(유입은 받은 금액, 유출은 보낸 금액, 자기계좌 제외 — STR facts와 같은 규칙인지). AI facts는 **같은 법인의 다른 계좌**와 오간 거래를 `internal`로 따로 빼서 입출금에 넣지 않아요(dajaba-AI `docs/str/04_facts.md`). 그래서 같은 경보라도 화면과 STR 숫자가 다를 수 있어요 — 각 숫자가 무엇을 포함하는지 이름·설명을 정하고, 같은 법인 계좌 간 이체·복수 통화 사례로 같이 확인해요.

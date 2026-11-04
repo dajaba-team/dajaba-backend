@@ -189,6 +189,12 @@ class CaseStatusTest {
                 .containsExactlyInAnyOrder(REPORTED, CLOSED);
     }
 
+    @Test
+    void 재배정은_REVIEWING_ESCALATED_DRAFTED_REJECTED에서만() {   // API-04
+        assertThat(Set.of(values()).stream().filter(CaseStatus::isReassignable))
+                .containsExactlyInAnyOrder(REVIEWING, ESCALATED, DRAFTED, REJECTED);
+    }
+
     // ── 전체 표 ──────────────────────────────────────────────
 
     /** 9×9 전부 확인: 위 허용 13개 말고는 모두 거부. 새 화살표를 몰래 추가하면 여기서 깨진다. */

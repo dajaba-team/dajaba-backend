@@ -1,44 +1,82 @@
 package com.team.aml.cases.domain;
 
+import com.team.aml.shared.domain.BaseEntity;
+import jakarta.persistence.*;
+
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 
 /**
- * 조사 케이스. 상태는 업무 메서드로만 바뀐다(setter 없음). 바뀔 때마다 이력이 한 행 붙는다.
- * 전이 가능 여부는 CaseStatus 가 판단하고, 여기서는 담당자·초안·반려 코드·이력을 함께 바꾼다.
+ * 조사 케이스 (ops.cases, V006). 상태는 업무 메서드로만 바뀐다(setter 없음). 바뀔 때마다 이력이 한 행 생긴다.
+ * 전이 가능 여부와 상태별 허용 동작은 CaseStatus 가 판단하고, 여기서는 담당자·초안·반려 코드·이력을 함께 바꾼다.
  * 누가 부를 수 있는지(담당자 본인·APPROVER·ADMIN)는 application 에서 CurrentUser 로 검사한다.
- * JPA 매핑·@Version 은 V006 머지 뒤에 붙인다.
+ *
+ * 이력은 엔티티 컬렉션으로 들고 있지 않는다(3주차 리뷰 질문 2). 업무 메서드가 만든 이력은 저장 전까지
+ * pendingHistories 에 쌓이고, application 이 케이스를 저장한 뒤 takePendingHistories() 로 꺼내 CaseHistoryRepository 에 넣는다.
+ * 같은 트랜잭션이라 케이스·이력은 함께 커밋되거나 함께 롤백된다.
+ *
+ * JPQL 에서 CASE 는 예약어라 엔티티 이름을 InvestigationCase 로 둔다 (select c from InvestigationCase c).
  */
-public class Case {
+@Entity(name = "InvestigationCase")
+@Table(name = "cases")
+public class Case extends BaseEntity {
 
-    private static final Set<CaseStatus> REASSIGNABLE =
-            EnumSet.of(CaseStatus.REVIEWING, CaseStatus.ESCALATED, CaseStatus.DRAFTED, CaseStatus.REJECTED);
+    @Column(name = "case_no", nullable = false, updatable = false, length = 32)
+    private String caseNo;                            // CASE-2022-000057
 
-    private final String caseNo;                      // CASE-2022-000057
-    private final Long alertId;                       // 경보는 객체가 아니라 번호로만
+    @Column(name = "alert_id", nullable = false, updatable = false)
+    private Long alertId;                             // 경보는 객체가 아니라 번호로만 (cases → detection 엔티티 의존 없음)
+
+    @Column(name = "account_key", nullable = false, updatable = false, length = 64)
+    private String accountKey;                        // 경보의 계좌 (내부 키 — 화면에는 가린 값만)
+
+    @Column(name = "entity_id", updatable = false, length = 32)
+    private String entityId;                          // 법인 미확인이면 null
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 32)
     private CaseStatus status;
-    private Long assigneeId;                          // 담당 조사역 (users.id)
-    private Long currentDraftId;                      // str 초안은 번호로만 (cases → str 의존 금지)
-    private RejectionReasonCode rejectionReasonCode;  // REJECTED 일 때만 있음 (V006 CHECK)
-    private CloseReason closeReason;
-    private long version;                             // @Version 이 붙으면 커밋 때 올라간다. 도메인은 읽기만
-    private final List<CaseHistory> histories = new ArrayList<>();
 
-    private Case(String caseNo, Long alertId) {
+    @Column(name = "assignee_id")
+    private Long assigneeId;                          // 담당 조사역 (users.id)
+
+    @Column(name = "current_draft_id")
+    private Long currentDraftId;                      // str 초안은 번호로만 (cases → str 의존 금지)
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "rejection_reason_code", length = 32)
+    private RejectionReasonCode rejectionReasonCode;  // REJECTED 일 때만 있음 (V006 CHECK)
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "close_reason", length = 32)
+    private CloseReason closeReason;                  // CLOSED 일 때만 있음 (V006 CHECK)
+
+    @Version
+    @Column(name = "version", nullable = false)
+    private long version;                             // 커밋 때 Hibernate 가 올린다. 도메인은 읽기만
+
+    @Transient
+    private List<CaseHistory> pendingHistories = new ArrayList<>();
+
+    /** JPA 용. */
+    protected Case() {}
+
+    private Case(String caseNo, Long alertId, String accountKey, String entityId) {
         this.caseNo = caseNo;
         this.alertId = alertId;
+        this.accountKey = accountKey;
+        this.entityId = entityId;
         this.status = CaseStatus.OPEN;
     }
 
     /** 케이스 생성. 생성 배치(OpenCasesFromAlerts)가 CasePolicy 로 HIGH 를 확인한 뒤 부른다. */
-    public static Case open(String caseNo, Long alertId, Long actorId) {
+    public static Case open(String caseNo, Long alertId, String accountKey, String entityId, Long actorId) {
         Objects.requireNonNull(caseNo, "caseNo");
         Objects.requireNonNull(alertId, "alertId");
-        Case c = new Case(caseNo, alertId);
+        Objects.requireNonNull(accountKey, "accountKey");
+        Case c = new Case(caseNo, alertId, accountKey, entityId);
         c.record(CaseHistoryAction.OPEN, null, CaseStatus.OPEN, null, null, actorId);
         return c;
     }
@@ -56,8 +94,8 @@ public class Case {
      */
     public boolean reassign(Long newAssigneeId, Long actorId, String comment) {
         Objects.requireNonNull(newAssigneeId, "newAssigneeId");
-        if (!REASSIGNABLE.contains(status)) {
-            throw new InvalidCaseTransitionException(status, status, rejectionReasonCode);
+        if (!status.isReassignable()) {
+            throw InvalidCaseTransitionException.notAllowedIn(status, CaseHistoryAction.REASSIGN, rejectionReasonCode);
         }
         if (newAssigneeId.equals(assigneeId)) {
             return false;
@@ -133,6 +171,20 @@ public class Case {
         this.rejectionReasonCode = null;   // 과거 반려 코드는 REJECT 이력에 남아 있다
     }
 
+    /**
+     * 아직 저장하지 않은 이력을 꺼낸다. 케이스를 저장해 id 가 생긴 뒤에 부른다.
+     * 꺼낸 이력에는 케이스 id 가 붙고, 이 케이스의 대기 목록은 비워진다.
+     */
+    public List<CaseHistory> takePendingHistories() {
+        if (getId() == null) {
+            throw new IllegalStateException("케이스를 먼저 저장해야 이력에 case_id 를 붙일 수 있습니다: " + caseNo);
+        }
+        List<CaseHistory> taken = new ArrayList<>(pendingHistories);
+        taken.forEach(h -> h.attachTo(getId()));
+        pendingHistories.clear();
+        return taken;
+    }
+
     /** 전이 검사 → 상태 변경 → 이력. 검사에 걸리면 아무것도 바뀌지 않는다. */
     private void moveTo(CaseStatus target, CaseHistoryAction action, String reasonCode, String comment, Long actorId) {
         status.validateTransition(target, rejectionReasonCode);
@@ -143,7 +195,7 @@ public class Case {
 
     private void record(CaseHistoryAction action, CaseStatus from, CaseStatus to,
                         String reasonCode, String comment, Long actorId) {
-        histories.add(new CaseHistory(action, from, to, reasonCode, comment, version, actorId));
+        pendingHistories.add(new CaseHistory(action, from, to, reasonCode, comment, version, actorId));
     }
 
     private static void requireComment(String comment, CaseHistoryAction action) {
@@ -154,11 +206,14 @@ public class Case {
 
     public String getCaseNo() { return caseNo; }
     public Long getAlertId() { return alertId; }
+    public String getAccountKey() { return accountKey; }
+    public String getEntityId() { return entityId; }
     public CaseStatus getStatus() { return status; }
     public Long getAssigneeId() { return assigneeId; }
     public Long getCurrentDraftId() { return currentDraftId; }
     public RejectionReasonCode getRejectionReasonCode() { return rejectionReasonCode; }
     public CloseReason getCloseReason() { return closeReason; }
     public long getVersion() { return version; }
-    public List<CaseHistory> getHistories() { return Collections.unmodifiableList(histories); }
+    /** 저장 전 이력(읽기 전용). 저장된 이력은 CaseHistoryRepository 로 조회한다. */
+    public List<CaseHistory> getPendingHistories() { return Collections.unmodifiableList(pendingHistories); }
 }
