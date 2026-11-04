@@ -17,7 +17,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * V006 계약 검증 (SCRUM-48). 실제 마이그레이션 V001 ~ V006 을 app_migrate 로 적용하고,
+ * V006 계약 검증 (SCRUM-48). db/migration 의 실제 마이그레이션 전체(V008 의 cases.current_draft_id FK 포함)를
+ * app_migrate 로 적용하고,
  * 앱 계정(app_backend)으로 넣고 바꿔 보며 CHECK·UNIQUE·FK·권한을 SQLSTATE 로 확인한다.
  */
 @Testcontainers
@@ -102,14 +103,15 @@ class CaseMigrationDbTest {
     void 상태와_담당자_반려코드_종결사유_초안이_맞아야_한다() throws Exception {
         try (var c = backend()) {
             long caseId = newCase(c, newAlert(c));
+            long draftId = newDraft(c, caseId);                                                                // V008 FK: 진짜 초안
             rejected(c, "23514", "update ops.cases set status='UNKNOWN' where id=" + caseId);
             rejected(c, "23514", "update ops.cases set assignee_id=" + investigator + " where id=" + caseId);   // OPEN 인데 담당자
             rejected(c, "23514", "update ops.cases set status='REVIEWING' where id=" + caseId);                 // 담당자 없이 조사
-            rejected(c, "23514", "update ops.cases set current_draft_id=10 where id=" + caseId);               // 상신 전 초안
+            rejected(c, "23514", "update ops.cases set current_draft_id=" + draftId + " where id=" + caseId);     // 상신 전 초안
 
             exec(c, "update ops.cases set status='ESCALATED', assignee_id=" + investigator + " where id=" + caseId);
             rejected(c, "23514", "update ops.cases set status='DRAFTED' where id=" + caseId);                   // 초안 없이 DRAFTED
-            exec(c, "update ops.cases set status='DRAFTED', current_draft_id=10 where id=" + caseId);
+            exec(c, "update ops.cases set status='DRAFTED', current_draft_id=" + draftId + " where id=" + caseId);
             exec(c, "update ops.cases set status='PENDING_APPROVAL' where id=" + caseId);
             rejected(c, "23514", "update ops.cases set status='REJECTED' where id=" + caseId);                  // 반려 코드 없음
             rejected(c, "23514", "update ops.cases set rejection_reason_code='NEED_REVISION' where id=" + caseId); // REJECTED 아닌데 코드
@@ -201,6 +203,18 @@ class CaseMigrationDbTest {
     private static String insertCase(long alertId, String caseNo) {
         return "insert into ops.cases(case_no, alert_id, account_key, status, created_by, updated_by) values ('"
                 + caseNo + "'," + alertId + ",'ACC-" + alertId + "','OPEN',1,1)";
+    }
+
+    /** 초안 요청 기록 → SUCCEEDED → 초안 (V008 의 str_drafts → str_draft_requests 복합 FK 순서). */
+    private static long newDraft(Connection c, long caseId) throws SQLException {
+        long draftId = number(c, "select nextval('ops.str_draft_id_seq')");
+        exec(c, "insert into ops.str_draft_requests(draft_id, case_id, request_snapshot, created_by, updated_by) values ("
+                + draftId + "," + caseId + ",'{}',1,1)");
+        exec(c, "update ops.str_draft_requests set status='SUCCEEDED', finished_at=now() where draft_id=" + draftId);
+        exec(c, "insert into ops.str_drafts(id, case_id, generation_id, generator_version, produced_at, payload, created_by, updated_by) "
+                + "values (" + draftId + "," + caseId + ",'g-" + draftId + "','test','2026-11-03T01:10:00Z',"
+                + "'{\"facts\":{\"tx_count\":12}}',1,1)");
+        return draftId;
     }
 
     private static String history(long caseId, String action, String from, String to,
