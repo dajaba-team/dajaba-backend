@@ -42,8 +42,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * str 에 주는 cases 기능 — AttachDraftToCase, BumpCaseVersion, CaseRepository.findForUpdate (WBS 2.9.1) — 실제 PostgreSQL.
- * str SaveStrDraft 대신 TransactionTemplate 으로 바깥 트랜잭션을 연다. 초안 FK 는 V008 이라 아직 아무 번호나 된다.
+ * str 에 주는 cases 기능 — AttachDraftToCase(lock·execute), TouchCaseForRevision, CaseRepository.findForUpdate
+ * (SCRUM-98) — 실제 PostgreSQL. str SaveStrDraft 대신 TransactionTemplate 으로 바깥 트랜잭션을 연다.
+ * 초안은 V008 cases_current_draft_fk 때문에 진짜로 만든다(newDraft).
  */
 @Testcontainers
 @SpringBootTest
@@ -65,7 +66,7 @@ class AttachDraftToCaseDbTest {
             .withCopyFileToContainer(MountableFile.forHostPath("db/init/01_roles.sh", 0755),
                     "/docker-entrypoint-initdb.d/01_roles.sh");
 
-    // Flyway 는 DDL 소유자(app_migrate)로 (CaseSchemaDbTest 와 같음).
+    // Flyway 는 DDL 소유자(app_migrate)로 (CaseMigrationDbTest 와 같음).
     @DynamicPropertySource
     static void migrationProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.flyway.url", db::getJdbcUrl);
@@ -74,7 +75,7 @@ class AttachDraftToCaseDbTest {
     }
 
     @Autowired AttachDraftToCase attachDraft;
-    @Autowired BumpCaseVersion bumpVersion;
+    @Autowired TouchCaseForRevision touchForRevision;
     @Autowired CaseRepository cases;
     @Autowired CaseHistoryRepository histories;
     @Autowired JdbcTemplate jdbc;
@@ -267,14 +268,86 @@ class AttachDraftToCaseDbTest {
                 .filteredOn(h -> h.getAction() == CaseHistoryAction.ATTACH_DRAFT).hasSize(1);
     }
 
-    // ── BumpCaseVersion: version 만 올리기 ─────────────────────
+    @Test
+    void 경계_str_흐름대로_lock_초안_insert_execute를_동시에_하면_뒤_요청은_lock에서_기다렸다가_409() throws Exception {
+        // #43 리뷰 1번: 초안 insert(FK → cases KEY SHARE) 뒤에 FOR UPDATE 를 잡으면 두 저장이 서로를 기다려 교착(40P01).
+        // str 은 트랜잭션 맨 앞에서 lock 을 부르므로, 뒤 요청은 lock 에서 기다렸다가 version 검사에서 409 가 된다.
+        Case c = prepare(CaseStatus.ESCALATED);
+        long version = c.getVersion();
+        AppUserDetails me = new AppUserDetails(inv, "a_inv01", "a_inv01", "INVESTIGATOR");
+        CountDownLatch firstAttached = new CountDownLatch(1);
+        AtomicLong firstDraft = new AtomicLong();
+
+        CompletableFuture<Void> first = CompletableFuture.runAsync(() -> {
+            login(me);
+            tx().executeWithoutResult(s -> {
+                attachDraft.lock(c.getId(), version);
+                long d = newDraft(c.getId());                 // str 초안 insert — 같은 트랜잭션
+                attachDraft.execute(c.getId(), d, version);
+                firstDraft.set(d);
+                firstAttached.countDown();
+                sleep(800);   // 잠금을 쥔 채로 커밋을 늦춘다
+            });
+        });
+        assertThat(firstAttached.await(10, TimeUnit.SECONDS)).isTrue();
+
+        CompletableFuture<Void> second = CompletableFuture.runAsync(() -> {
+            login(me);
+            tx().executeWithoutResult(s -> {
+                attachDraft.lock(c.getId(), version);         // 여기서 기다렸다가 409 — 초안 insert 까지 가지 않는다
+                long d = newDraft(c.getId());
+                attachDraft.execute(c.getId(), d, version);
+            });
+        });
+
+        first.get(10, TimeUnit.SECONDS);
+        assertThatThrownBy(() -> second.get(10, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(OptimisticLockException.class);   // 교착(40P01)이 아니라 version 409
+
+        Case after = cases.findById(c.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.DRAFTED);
+        assertThat(after.getCurrentDraftId()).isEqualTo(firstDraft.get());
+        assertThat(jdbc.queryForObject("select count(*) from ops.str_drafts where case_id = ?", Long.class, c.getId()))
+                .isEqualTo(1L);                                       // 뒤 요청의 초안은 만들어지지 않았다
+    }
+
+    // ── AttachDraftToCase.lock: 초안 넣기 전 확인 ─────────────
 
     @Test
-    void 정상_version만_1_오르고_상태와_이력은_그대로() {
+    void 정상_lock은_확인만_하고_아무것도_바꾸지_않는다() {
+        Case c = prepare(CaseStatus.ESCALATED);
+        loginAs(inv);
+
+        inTx(() -> attachDraft.lock(c.getId(), c.getVersion()));
+
+        assertUnchanged(c);
+        assertThat(cases.findById(c.getId()).orElseThrow().getVersion()).isEqualTo(c.getVersion());
+    }
+
+    @Test
+    void 실패_lock도_보고_대상_아님_반려나_담당_아님이면_초안을_넣기_전에_거부() {
+        Case rejected = prepare(CaseStatus.REJECTED, RejectionReasonCode.NOT_REPORTABLE);
+        Case other = prepare(CaseStatus.ESCALATED);
+
+        loginAs(inv);
+        assertThatThrownBy(() -> inTx(() -> attachDraft.lock(rejected.getId(), rejected.getVersion())))
+                .isInstanceOf(InvalidCaseTransitionException.class);
+        loginAs(inv2);
+        assertThatThrownBy(() -> inTx(() -> attachDraft.lock(other.getId(), other.getVersion())))
+                .isInstanceOf(NotAssigneeException.class);
+        assertThatThrownBy(() -> attachDraft.lock(other.getId(), other.getVersion()))
+                .isInstanceOf(IllegalTransactionStateException.class);   // str 트랜잭션 밖
+    }
+
+    // ── TouchCaseForRevision: 수정본 저장 전 version 만 올리기 ──
+
+    @Test
+    void 정상_수정본_저장이면_version만_1_오르고_상태와_이력은_그대로() {
         Case c = prepare(CaseStatus.DRAFTED);
         int historyCount = histories.findByCaseIdOrderByIdAsc(c.getId()).size();
+        loginAs(inv);
 
-        inTx(() -> bumpVersion.execute(c.getId(), c.getVersion()));
+        inTx(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion()));
 
         Case after = cases.findById(c.getId()).orElseThrow();
         assertThat(after.getVersion()).isEqualTo(c.getVersion() + 1);
@@ -284,24 +357,60 @@ class AttachDraftToCaseDbTest {
     }
 
     @Test
-    void 실패_수정본_저장과_승인_요청이_같은_version으로_오면_뒤쪽이_409() {
+    void 실패_같은_version으로_두_번째_version_올리기는_409() {
         Case c = prepare(CaseStatus.DRAFTED);
         long seen = c.getVersion();   // 두 화면이 같은 version 을 들고 있다
         loginAs(inv);
 
-        inTx(() -> bumpVersion.execute(c.getId(), seen));                   // str 수정본 저장 (케이스 행은 안 바뀜)
-        assertThatThrownBy(() -> inTx(() -> {                               // 같은 version 으로 들어온 다른 요청
-            bumpVersion.execute(c.getId(), seen);
-        })).isInstanceOf(OptimisticLockException.class);
+        inTx(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), seen));
+        assertThatThrownBy(() -> inTx(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), seen)))
+                .isInstanceOf(OptimisticLockException.class);
 
         assertThat(cases.findById(c.getId()).orElseThrow().getVersion()).isEqualTo(seen + 1);
     }
 
     @Test
-    void 실패_version만_올리기도_str_트랜잭션_밖에서는_거부() {
+    void 실패_담당이_아니면_403_NOT_ASSIGNEE() {
         Case c = prepare(CaseStatus.DRAFTED);
+        loginAs(inv2);
 
-        assertThatThrownBy(() -> bumpVersion.execute(c.getId(), c.getVersion()))
+        assertThatThrownBy(() -> inTx(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion())))
+                .isInstanceOf(NotAssigneeException.class);
+        assertThat(cases.findById(c.getId()).orElseThrow().getVersion()).isEqualTo(c.getVersion());
+    }
+
+    @Test
+    void 실패_DRAFTED가_아니면_409_보완_반려_뒤_첫_수정은_ReopenCaseDraft_몫() {
+        Case c = prepare(CaseStatus.REJECTED);   // NEED_REVISION
+        loginAs(inv);
+
+        assertThatThrownBy(() -> inTx(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion())))
+                .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
+                        e -> assertThat(e.details()).containsEntry("action", "REVISE_DRAFT"));
+        assertThat(cases.findById(c.getId()).orElseThrow().getVersion()).isEqualTo(c.getVersion());
+    }
+
+    @Test
+    void 실패_현재_초안이_아니면_409() {
+        Case c = prepare(CaseStatus.DRAFTED);
+        long old = c.getCurrentDraftId();
+        loginAs(inv);
+        long current = newDraft(c.getId());
+        inTx(() -> attachDraft.execute(c.getId(), current, c.getVersion()));   // 재생성으로 현재 초안이 바뀜
+        long version = cases.findById(c.getId()).orElseThrow().getVersion();
+
+        assertThatThrownBy(() -> inTx(() -> touchForRevision.execute(c.getId(), old, version)))
+                .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
+                        e -> assertThat(e.details()).containsEntry("current_draft_id", current));
+        assertThat(cases.findById(c.getId()).orElseThrow().getVersion()).isEqualTo(version);
+    }
+
+    @Test
+    void 실패_수정본_저장도_str_트랜잭션_밖에서는_거부() {
+        Case c = prepare(CaseStatus.DRAFTED);
+        loginAs(inv);
+
+        assertThatThrownBy(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion()))
                 .isInstanceOf(IllegalTransactionStateException.class);
         assertThat(cases.findById(c.getId()).orElseThrow().getVersion()).isEqualTo(c.getVersion());
     }
@@ -309,9 +418,10 @@ class AttachDraftToCaseDbTest {
     @Test
     void 경계_바깥_트랜잭션이_롤백되면_version도_그대로() {
         Case c = prepare(CaseStatus.DRAFTED);
+        loginAs(inv);
 
         tx().executeWithoutResult(s -> {
-            bumpVersion.execute(c.getId(), c.getVersion());
+            touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion());
             s.setRollbackOnly();
         });
 

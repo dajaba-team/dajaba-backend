@@ -27,6 +27,26 @@ public class InvalidCaseTransitionException extends DomainException {
                 details(status, null, rejectionCode, action));
     }
 
+    /**
+     * 수정본 저장이 지금 케이스에서 안 될 때 — DRAFTED 가 아니거나, 요청한 초안이 케이스의 현재 초안이 아니다.
+     * details: from_status, action=REVISE_DRAFT, draft_id, current_draft_id(있으면).
+     */
+    public static InvalidCaseTransitionException revisionNotAllowed(CaseStatus status, RejectionReasonCode rejectionCode,
+                                                                    Long draftId, Long currentDraftId) {
+        Map<String, Object> details = new HashMap<>(details(status, null, rejectionCode, null));
+        details.put("action", "REVISE_DRAFT");
+        if (draftId != null) {
+            details.put("draft_id", draftId);
+        }
+        if (currentDraftId != null) {
+            details.put("current_draft_id", currentDraftId);
+        }
+        String reason = status != CaseStatus.DRAFTED
+                ? "지금 상태(" + status + ")에서는 수정본을 저장할 수 없습니다"
+                : "케이스의 현재 초안이 아닙니다: " + draftId;
+        return new InvalidCaseTransitionException(reason, Map.copyOf(details));
+    }
+
     // Map.copyOf 는 null 값을 못 넣는다. 값이 있는 것만 담는다(반려 코드는 REJECTED 일 때만 있음).
     private static Map<String, Object> details(CaseStatus from, CaseStatus to, RejectionReasonCode rejectionCode,
                                                CaseHistoryAction action) {

@@ -123,6 +123,24 @@ public class Case extends BaseEntity {
         this.rejectionReasonCode = null;
     }
 
+    /**
+     * 초안을 붙일 수 있는 상태인지만 본다(아무것도 바꾸지 않음). ESCALATED, DRAFTED, REJECTED+NEED_REVISION.
+     * AttachDraftToCase.lock 이 케이스를 잠근 뒤, str 이 초안을 넣기 전에 부른다.
+     */
+    public void requireCanAttachDraft() {
+        status.validateTransition(CaseStatus.DRAFTED, rejectionReasonCode);
+    }
+
+    /**
+     * 지금 초안의 수정본을 저장할 수 있는지 본다(아무것도 바꾸지 않음). DRAFTED 이고 현재 초안이 draftId 일 때만.
+     * 보완 반려(REJECTED+NEED_REVISION) 뒤 첫 수정은 reopenDraft 몫이다.
+     */
+    public void requireRevisable(Long draftId) {
+        if (status != CaseStatus.DRAFTED || !Objects.equals(currentDraftId, draftId)) {
+            throw InvalidCaseTransitionException.revisionNotAllowed(status, rejectionReasonCode, draftId, currentDraftId);
+        }
+    }
+
     /** 보완 반려 뒤 같은 초안의 수정본 저장 → DRAFTED. REJECTED+NEED_REVISION 에서만. */
     public void reopenDraft(Long actorId) {
         // ESCALATED·DRAFTED → DRAFTED 도 enum 상으론 허용이라 여기서 한 번 더 막는다
