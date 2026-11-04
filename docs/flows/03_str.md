@@ -75,7 +75,7 @@ sequenceDiagram
         FE->>STRC: POST /approvals/{draftId}/reject {reason_code, comment}
         note over STRC: reason_code·comment 없거나 값이 틀리면 400 INVALID_REQUEST
         STRC->>STRU: RejectStr  ⟵ @Transactional 하나
-                STRU->>DB: INSERT approvals(REJECTED, revision_id, reason_code, comment, narrative_sha256) — V009
+        STRU->>DB: INSERT approvals(REJECTED, revision_id, reason_code, comment, narrative_sha256) — V009
         STRU->>CAS: Case.reject(reasonCode) → REJECTED (반려 코드는 케이스에도 저장)
         STRU-->>FE: 200
         alt NEED_REVISION (보완 요청)
