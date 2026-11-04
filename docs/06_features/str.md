@@ -38,13 +38,13 @@
 | # | API | 누가 |
 |---|---|---|
 | 1 | `POST /cases/{case_no}/str-drafts` (최대 90초) | 담당 |
-| 2 | `GET /str-drafts/{draft_id}` | 로그인 사용자 (열람 기록) |
-| 3 | `PUT /str-drafts/{draft_id}/revisions` (고친 섹션만) | 담당 |
-| 4 | `GET /str-drafts/{draft_id}/revisions` (`?revision_no=` 전·후 본문) | 로그인 사용자 |
-| 5 | `POST /str-drafts/{draft_id}/verify` (body `{}`) | 담당 |
-| 6 | `POST /str-drafts/{draft_id}/submit` `{case_version, verification_id}` | 담당 |
-| 7 | `POST /approvals/{draft_id}/approve` | APPROVER |
-| 8 | `POST /approvals/{draft_id}/reject` `{case_version, reason_code, comment}` | APPROVER |
+| 2 | `GET /str-drafts/{draft_no}` | 로그인 사용자 (열람 기록) |
+| 3 | `PUT /str-drafts/{draft_no}/revisions` (고친 섹션만) | 담당 |
+| 4 | `GET /str-drafts/{draft_no}/revisions` (`?revision_no=` 전·후 본문) | 로그인 사용자 |
+| 5 | `POST /str-drafts/{draft_no}/verify` (body `{}`) | 담당 |
+| 6 | `POST /str-drafts/{draft_no}/submit` `{case_version, verification_id}` | 담당 |
+| 7 | `POST /approvals/{draft_no}/approve` | APPROVER |
+| 8 | `POST /approvals/{draft_no}/reject` `{case_version, reason_code, comment}` | APPROVER |
 | 9 | `POST /cases/{case_no}/close-with-draft` (컨트롤러·유스케이스는 str) | 담당 |
 
 **〔확인 필요〕** 승인·반려 경로 `{draft_id}` vs `{case_no}`, `close-with-draft` 경로 확정(진희·지윤), 조사역이 바뀐 케이스의 승인자 제한(논의 중), `reasons` 형식(안건 3은 10/28 확정 — 관측·기준·기여 분리, STR은 관측값만).

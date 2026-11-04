@@ -33,9 +33,9 @@ sequenceDiagram
     CAS->>DET: 유스케이스 호출 — 경보·점수·reasons·근거 거래 ID
     DET-->>CAS: AlertDetailView
     CAS->>DB: cases, case_history, case_summaries(최신 1건)
-    CAS-->>STR: 케이스 상세 DTO {case, alert, score, reasons, history, summary?, current_draft_id, version}
-    alt current_draft_id != null
-        STR->>STR: 열람 권한 — 본문은 담당 조사역·승인자만, 그 밖에는 상태·날짜만 (서식 안건 4)
+    CAS-->>STR: 케이스 상세 DTO {case, alert, score, reasons, history, summary?, current_draft_no, version}
+    alt current_draft_no != null
+        STR->>STR: 열람 권한 — 본문은 담당 조사역·승인자만, 그 밖에는 상태·날짜만 (서식 안건 4) — 비담당은 META_ONLY
         STR->>DB: (초안 본문을 줄 때만) INSERT access_logs STR_VIEW — 본문 읽기 전
         STR->>DB: 현재 초안 (본문 권한이면 narrative·revisions·검증 결과, 아니면 상태·날짜만)
     else 초안 없음
