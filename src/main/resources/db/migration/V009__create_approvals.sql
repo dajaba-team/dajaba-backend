@@ -5,15 +5,15 @@
 -- 복합 FK 대상 verification_results (draft_id, id) 유니크는 V008 에 있다 (#28 2차 리뷰).
 
 create table ops.approvals (
-                               id                      bigint generated always as identity primary key,
-                               draft_id                bigint not null references ops.str_drafts(id),
-                               revision_id             bigint not null,                    -- 어떤 본문을 (승인·반려 당시 현재 수정본)
-                               verification_result_id  bigint,                             -- 승인 근거가 된 검증 (verification_results.id). 승인이면 필수
-                               decision                varchar(16) not null
-                                   check (decision in ('APPROVED', 'REJECTED')),
-                               reason_code             varchar(32)
-                                   check (reason_code in ('NEED_REVISION', 'NOT_REPORTABLE')),  -- cases.rejection_reason_code 와 같은 값
-                               narrative_sha256        char(64) not null check (narrative_sha256 ~ '^[0-9a-f]{64}$'),  -- 승인·반려 당시 본문 해시
+    id                      bigint generated always as identity primary key,
+    draft_id                bigint not null references ops.str_drafts(id),
+    revision_id             bigint not null,                    -- 어떤 본문을 (승인·반려 당시 현재 수정본)
+    verification_result_id  bigint,                             -- 승인 근거가 된 검증 (verification_results.id). 승인이면 필수
+    decision                varchar(16) not null
+                            check (decision in ('APPROVED', 'REJECTED')),
+    reason_code             varchar(32)
+                            check (reason_code in ('NEED_REVISION', 'NOT_REPORTABLE')),  -- cases.rejection_reason_code 와 같은 값
+    narrative_sha256        char(64) not null check (narrative_sha256 ~ '^[0-9a-f]{64}$'),  -- 승인·반려 당시 본문 해시
     comment                 text check (char_length(comment) <= 2000),                     -- 반려 사유
     created_at              timestamptz not null default now(),
     created_by              bigint not null references ops.users(id),                      -- 승인자
