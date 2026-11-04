@@ -46,6 +46,8 @@
 | 11/2 | `access_logs`(V004_3) — action 이름 `STR_VIEW`·`PDF_DOWNLOAD`(나머지 8개 그대로). 기록은 모두 **별도 트랜잭션**(`REQUIRES_NEW`)〔열람 기록은 11/3에 바뀜 — 아래 줄〕. 팀원은 `shared/audit/AccessLogWriter`의 action별 메서드(`view`·`strView`·`pdfDownload`·`export`)만 부르고 사용자·IP는 Writer가 꺼냄. 로그인용 `LoginAccessLogWriter`는 `shared/security`만. **`LOGIN_FAIL`은 인증까지 간 실패(401)만** — 400 형식 오류는 기록 안 함. `login_id_attempted`는 앞 64자, IP는 `getRemoteAddr()`. **열람 기록 저장이 실패하면 조회도 실패**(예외 전파), 로그인·로그아웃 기록 실패는 응답 그대로 + 경고 로그 | 조회 유스케이스는 보통 readOnly라 같은 트랜잭션에선 INSERT가 거부됨. 문자열 action을 밖에서 못 넣게 해 값이 흩어지지 않음. 400은 인증 시도가 아니라 형식 오류. 기록 없는 열람은 감사 공백이라 막음, 로그인은 기록 때문에 막히면 안 됨 | SCRUM-19, 미결 10, 11/2 진희 |
 | 11/2 | 시퀀스로 미리 받은 번호를 id로 쓰는 엔티티(`str_drafts`·`str_draft_requests`)는 shared **`AssignedIdEntity`** 상속. 감사 4칸은 새 부모 `AuditedEntity`로 올리고 `BaseEntity`는 그 위에 IDENTITY id만(공개 메서드 그대로). **새 행 판단은 `Persistable.isNew()`** — 생성 직후 true, `@PostPersist`·`@PostLoad` 뒤 false. version 칸으로 판단하지 않음 | id를 직접 넣으면 `save()`가 `merge`로 가서 SELECT가 더 나가고 같은 id를 조용히 덮어씀. `str_draft_requests`엔 version 칸이 없어 "version null = 새 행"도 못 씀 | 백엔드 #28 리뷰(11/2), 미결 21, SCRUM-68 |
 | 11/2 | 거래 금액 `numeric(18,2)` → **`numeric(20,6)`** (V005_2). 원본 금액을 반올림하지 않음 | 실제 HI-Small에서 Bitcoin 소수 6자리 필드 294,217개 중 293,425개 값이 바뀌고 일부는 0.00이 됨. 정수부 최대 13자리라 14자리면 충분 | 안건 19, 준혁·준영 합의(ML 규약 하위 「B7 기준 및 후속 협의 사항」), SCRUM-97 |
+| 11/1 | 적재 검증값은 **11/1 실제 HI-Small 전체 적재 실측값** — 계좌 **518,581**(규약 518,573 아님), 패턴 거래 3,209·사건 370, 거래에 나오는 고유 계좌 515,088, 계좌 파일에 없는 거래 계좌 0, 패턴 미매칭·다중매칭 0. 하나라도 다르면 적재 실패 | 518,573은 계좌 파일 행 수와 다름. 515,088·0·0은 준영과 맞춘 적재 후 검증 | 미결 14, SCRUM-69·71 |
+| 11/2 | 은행 ID는 **앞 0을 빼고 정규화**해 `account_key`를 만듦(거래·계좌 파일 같은 규칙). 원본 표기는 `from_bank_id_raw`·`to_bank_id_raw`, 계좌번호는 원문 그대로 | 두 파일 표기가 달라(`023842` vs `23842`) 그대로는 연결이 100% 실패. 10/30 조건(키 충돌·미연결·다른 은행 합쳐짐 확인)을 11/2 전체 파일로 확인 — 충돌·미연결 0, 준영 수용·ML 규약 반영 | 미결 6(10/30 조건부 → 11/2), 서식 안건 5-1, SCRUM-54·71 |
 | 11/2 | 권한이 없어 403이 난 시도는 **`access_logs`에 남기지 않고** 앱 경고 로그 한 줄로 남김(`access denied code=… method=… uri=…`). 감사용 DB 기록이 꼭 필요해지면 W5에 ① `ACCESS_DENIED` action으로 올릴 수 있음 | `access_logs`는 "누가 무엇을 봤나" 기록인데 403은 대부분 고치려다 막힌 것(비담당 수정·승인자 아닌 승인·`/admin` 접근·CSRF). 가장 민감한 "남의 STR 보기"는 403이 아니라 200 `META_ONLY` + `STR_VIEW` 한 줄이라 누설 감사는 그대로 됨. 고르지 않은 안: ① `ACCESS_DENIED` action(V004_3 CHECK를 바꿔야 하고 CSRF 403까지 쌓임, URL 단계 403은 target을 못 채움) ② 원래 action + 결과 칸(URL·CSRF 단계에서는 원래 action을 알 수 없음 + 새 마이그레이션 필요(①은 V004_3 CHECK 변경, ②는 결과 칸 추가)) | 노션 미결 30(③, 11/2 진희) (구현 11/4 SCRUM-74) |
 | 11/3 | 열람 기록(`AccessLogWriter`의 `view`·`strView`·`pdfDownload`·`export`)은 **바깥 조회 트랜잭션에 참여**(`MANDATORY`) — 그래서 열람 기록을 부르는 조회 유스케이스는 **readOnly를 쓰지 않음**. readOnly 안·트랜잭션 밖에서 부르면 바로 실패. 기록과 조회는 같이 성공·실패(본문을 돌려준 열람만 남음). 로그인 사용자 필수(`CurrentUser.require()`). 호출은 권한 검사 뒤·본문 읽기 전, 403·404는 기록 안 함. 케이스 상세는 `view(CASE)`(현재 초안 본문도 주면 `strView` 더), STR 상세는 제한 응답이어도 `strView`(미결 30 전제). `AccessLog`·`AccessLogRepository`는 `shared/audit` 밖에서 못 씀(ArchUnit, `AccessLog.create` package-private). 로그인 기록·`ai_call_logs`는 `REQUIRES_NEW` 그대로 | `REQUIRES_NEW`는 바깥 조회가 커넥션을 쥔 채 두 번째 커넥션을 잡아, Hikari 10개에서 상세 조회 10건이 동시에 오면 풀이 고갈돼 멈춤. 호출처가 0곳인 지금이 바꾸기 가장 쌈. 고르지 않은 안: 풀만 키움(2배는 그대로), 조회 뒤 기록(유스케이스를 둘로 나눠야 함), `afterCommit` 기록(그때도 첫 커넥션 반납 전) | 3주차 리뷰 리스크 6, SCRUM-93, 11/3 진희 |
 | 11/3 | `NOT_REPORTABLE` 반려 건 종결도 `close_reason`은 `FALSE_POSITIVE`·`DUPLICATE`·`NO_ACTION` 중 조사역이 고름. 반려 코드는 REJECT 이력(`case_history.reason_code`)으로 봄 — V006 CHECK 그대로, `close-with-draft`도 `close_reason`을 받음 | 종결 사유(왜 닫았나)와 반려 코드(승인자 판단)는 다른 질문이고 반려 코드는 이미 이력에 있음. 고르지 않은 안: 종결 사유에 `NOT_REPORTABLE` 추가(성격이 다른 값이 섞이고 같은 값을 두 번 적음) | #39 리뷰 1번, 11/3 지윤·채영, SCRUM-48 |
@@ -82,7 +84,7 @@
 | 3 | ~~목록 응답 모양~~ | 코드를 문서에 맞춤(§1 표). SCRUM-39 머지되면 끝 | 진희 |
 | 4 | `batch_runs` 재실행 인덱스 | `V004`는 네 배치 다 막음 → 적재·룰 스캔으로 좁히는 새 파일 필요. `RUNNING` 조건 추가, `PARTIAL` 상태, `metrics jsonb`도 SD 명세 제안 | 진희·준혁 |
 | 5 | ~~AI 재시도 대상~~ | 규약 v0.2 §6.2로 정리됨(§1 표). 레퍼런스 §8.5 문구만 고치면 됨 | 진희 |
-| 6 | 은행 ID 앞 0 | 두 파일 형식이 달라 조인이 100% 실패 vs "앞 0 보존" 문구 | 준혁 |
+| 6 | ~~은행 ID 앞 0~~ | 정리됨 — 11/2 앞 0 제거로 확정(§1 표). 공통 규약 §0·§1.1 문구는 반영 요청(SCRUM-71) | 준혁 |
 | 7 | 통화 표기 | DB는 IBM 원문 이름, STR facts는 ISO 코드. 백엔드 화면·`rule_facts`는? 매핑표 관리자는? | 준혁·진희 |
 | 8 | 메모 저장 방식 | NOTE 행 vs `case_note_history` (안건 16 A/B 이름 엇갈림) | 지윤·진희 |
 | 9 | ~~`alert_scores`·`access_logs`·`source_files` 마이그레이션 번호~~ | 정리됨 — 11/2 SCRUM-56: `source_files` V004_1(#21), `ai_call_logs` V004_2, `access_logs` V004_3, `alert_scores` V005_1. `batch_runs` 인덱스는 점수 배치 직전(§1 표, `05_flyway.md` §3) | 준혁·진희 |
@@ -90,7 +92,7 @@
 | 11 | `user` 관리 API 메서드 | 계정·권한은 PATCH, 레퍼런스 §12는 "PATCH 없음" | 진희 |
 | 12 | 감사 시각 표기 | 응답에서 UTC `Z`를 붙일지 (원천 거래 시각은 시간대 없음 — 확정). 〔제안〕 붙이자 — `01_code_rules.md` §5 | 공통 |
 | 13 | "신규 제안" 에러 코드 | SD 명세 6개, CASES 명세 3개 | 진희 확인 후 반영 |
-| 14 | 적재 검증값 | 계좌 수 518,573 vs 518,581, 패턴 거래 3,209 재확인 | 준혁 |
+| 14 | ~~적재 검증값~~ | 정리됨 — 11/1 실측으로 확정(§1 표). 공통 규약 §1.2·§1.5는 반영 요청(SCRUM-71) | 준혁 |
 | 15 | 룰 세부 | R06 대체 룰, R05 수치 한도, R08 기준, 룰 스캔 날짜 범위, 섞인 통화의 `rule_facts` | 준혁·준영 |
 | 16 | ~~점수 공개 실패 코드(`failure_code`)~~ | 10/29 준혁 확인으로 확정(§1 표). 규약 §3·§6.3은 규약 변경 요청 | 진희 |
 | 17 | 상세 화면에 현재 초안을 합치는 위치 | cases → str 의존 금지 | 지윤·채영·진희 |
