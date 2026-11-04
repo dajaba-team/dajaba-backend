@@ -5,6 +5,7 @@ import com.team.aml.shared.domain.DomainException;
 import com.team.aml.shared.domain.ForbiddenException;
 import com.team.aml.shared.domain.NotFoundException;
 import jakarta.persistence.OptimisticLockException;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -60,8 +61,8 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(ForbiddenException.class)
-    public ResponseEntity<ErrorResponse> domainForbidden(ForbiddenException e) {
-        log.warn("domain rule violated: {} - {}", e.code(), e.getMessage());
+    public ResponseEntity<ErrorResponse> domainForbidden(ForbiddenException e, HttpServletRequest req) {
+        warnDenied(e.code(), req);   // 메시지는 찍지 않는다 — 번호·이름이 들어갈 수 있다
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ErrorResponse.of(e.code(), e.getMessage(), e.details()));
     }
@@ -87,9 +88,11 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ErrorResponse> forbidden(AccessDeniedException e) {
+    public ResponseEntity<ErrorResponse> forbidden(AccessDeniedException e, HttpServletRequest req) {
+        String code = "FORBIDDEN";
+        warnDenied(code, req);
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(ErrorResponse.of("FORBIDDEN", "권한이 없습니다"));
+                .body(ErrorResponse.of(code, "권한이 없습니다"));
     }
 
     @ExceptionHandler(Exception.class)
@@ -97,5 +100,10 @@ public class GlobalExceptionHandler {
         log.error("unhandled exception", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ErrorResponse.of("INTERNAL_ERROR", "알 수 없는 오류"));
+    }
+
+    /** 403 은 access_logs 에 남기지 않고 경고 한 줄만 (미결 30). JsonAuthHandlers.accessDenied 와 같은 모양. */
+    private void warnDenied(String code, HttpServletRequest req) {
+        log.warn("access denied code={} method={} uri={}", code, req.getMethod(), req.getRequestURI());
     }
 }
