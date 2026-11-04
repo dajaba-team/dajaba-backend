@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.user.domain.User;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.lang.reflect.Method;
 import java.text.Normalizer;
 import java.util.*;
@@ -43,8 +44,23 @@ class StrDraftTest {
                 .toList();
     }
 
+    private static final Long DRAFT_ID = 100L;
+    private static final String GENERATOR_VERSION = "test-v1";
+    private static final Instant PRODUCED_AT = Instant.parse("2026-11-03T01:10:00Z");
+
+    /** AI 응답 전체. facts 는 payload 안에 들어 있다 (StrDraft.create 규칙). */
+    private static JsonNode payload() {
+        ObjectNode payload = new ObjectMapper().createObjectNode();
+        payload.set("facts", facts());
+        return payload;
+    }
+
+    private static StrDraft draft(Long caseId, String generationId, List<NarrativeSection> narrative) {
+        return StrDraft.create(DRAFT_ID, caseId, generationId, GENERATOR_VERSION, PRODUCED_AT, payload(), narrative);
+    }
+
     private static StrDraft newDraft() {
-        return StrDraft.create(CASE_ID, GENERATION_ID, facts(), aiNarrative());
+        return draft(CASE_ID, GENERATION_ID, aiNarrative());
     }
 
     private static NarrativeSection section(List<NarrativeSection> body, StrSection s) {
@@ -240,14 +256,14 @@ class StrDraftTest {
         swapped.set(0, new NarrativeSection(StrSection.WHO, "비밀 문장", List.of(1L)));       // 개수는 맞는데 SUMMARY 대신 WHO
 
         for (List<NarrativeSection> bad : List.of(missing, duplicated, swapped)) {
-            assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), bad))
+            assertThatThrownBy(() -> draft(CASE_ID, GENERATION_ID, bad))
                     .isInstanceOf(IllegalArgumentException.class)
                     .message()
                     .doesNotContain("문장");   // 오류 메시지에 본문 글자를 넣지 않는다
         }
-        assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), missing))
+        assertThatThrownBy(() -> draft(CASE_ID, GENERATION_ID, missing))
                 .hasMessageContaining("SUMMARY");
-        assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), duplicated))
+        assertThatThrownBy(() -> draft(CASE_ID, GENERATION_ID, duplicated))
                 .hasMessageContaining("WHO");
     }
 
@@ -257,7 +273,7 @@ class StrDraftTest {
         List<NarrativeSection> reversed = new ArrayList<>(aiNarrative());
         Collections.reverse(reversed);                                          // CONCLUSION, …, SUMMARY
 
-        StrDraft draft = StrDraft.create(CASE_ID, GENERATION_ID, facts(), reversed);
+        StrDraft draft = draft(CASE_ID, GENERATION_ID, reversed);
 
         assertThat(draft.currentBody()).isEqualTo(aiNarrative());              // 순서까지 같다
         StrRevision rev = draft.revise(Map.of(StrSection.HOW, "고친 HOW"), INVESTIGATOR);
@@ -291,7 +307,7 @@ class StrDraftTest {
                             : n)
                     .toList();
 
-            assertThatThrownBy(() -> StrDraft.create(CASE_ID, GENERATION_ID, facts(), narrative))
+            assertThatThrownBy(() -> draft(CASE_ID, GENERATION_ID, narrative))
                     .isInstanceOf(InvalidSectionTextException.class)
                     .hasMessageContaining("HOW");
         }
@@ -301,7 +317,7 @@ class StrDraftTest {
     @Test
     void generationId가_비었으면_초안을_만들지_않는다() {
         for (String bad : Arrays.asList(null, "", "   ")) {
-            assertThatThrownBy(() -> StrDraft.create(CASE_ID, bad, facts(), aiNarrative()))
+            assertThatThrownBy(() -> draft(CASE_ID, bad, aiNarrative()))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("generationId");
         }
