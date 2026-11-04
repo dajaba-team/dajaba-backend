@@ -18,6 +18,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.IllegalTransactionStateException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -65,6 +68,9 @@ class TransactionLoadRepositoryTest {
     @Autowired
     JdbcTemplate jdbc;
 
+    @Autowired
+    PlatformTransactionManager transactionManager;
+
     @TempDir
     Path dir;
 
@@ -80,7 +86,7 @@ class TransactionLoadRepositoryTest {
         JsonNode expected = new ObjectMapper().readTree(FIXTURE_DIR.resolve("expected.json").toFile());
         stagePatternFile.execute(FIXTURE_DIR.resolve("HI-Small_Patterns.txt"));
 
-        TransactionLoadResult result = loadTransactionFile.execute(FIXTURE_DIR.resolve("HI-Small_Trans.csv"));
+        TransactionLoadResult result = inTx(FIXTURE_DIR.resolve("HI-Small_Trans.csv"));
 
         assertThat(result.fileRows()).isEqualTo(expected.get("rows").asLong());
         assertThat(result.insertedRows()).isEqualTo(expected.get("rows").asLong());
@@ -145,7 +151,7 @@ class TransactionLoadRepositoryTest {
     @Test
     void 소수_자릿수를_넘는_금액_필드_수를_돌려준다() throws Exception {
         TransactionLoadResult result = load("a.csv",
-                "2022/09/01 00:20,010,A1,020,B1,0.001234,Bitcoin,0.001234,Bitcoin,Bitcoin,0",
+                "2022/09/01 00:20,010,A1,020,B1,0.0012345,Bitcoin,0.0012345,Bitcoin,Bitcoin,0",
                 "2022/09/01 00:21,010,A1,020,B1,1.500000,Bitcoin,1.00,Euro,Bitcoin,0");
 
         assertThat(result.amountsRounded()).isEqualTo(2);
@@ -172,7 +178,7 @@ class TransactionLoadRepositoryTest {
         load("a.csv", ROW);
         Path same = Files.writeString(dir.resolve("renamed.csv"), content(ROW));
 
-        assertThatThrownBy(() -> loadTransactionFile.execute(same))
+        assertThatThrownBy(() -> inTx(same))
                 .isInstanceOf(SourceFileAlreadyLoadedException.class);
 
         load("b.csv", ROW, "2022/09/01 00:21,010,A2,020,B1,1.00,Euro,1.00,Euro,ACH,0");
@@ -197,13 +203,24 @@ class TransactionLoadRepositoryTest {
         load("ok.csv", ROW);
         Path file = Files.writeString(dir.resolve("broken.csv"), text);
 
-        assertThatThrownBy(() -> loadTransactionFile.execute(file))
+        assertThatThrownBy(() -> inTx(file))
                 .isInstanceOf(TransactionFileFormatException.class)
                 .hasMessageNotContaining("SECRET");
 
         assertThat(count("select count(*) from ops.transactions")).isEqualTo(1);
         assertThat(count("select count(*) from ops.source_files")).isEqualTo(1);
         assertThat(count("select count(*) from ops.transactions_staging")).isEqualTo(1);
+    }
+
+    @Test
+    void 트랜잭션_밖에서_부르면_바로_실패하고_남지_않는다() throws Exception {   // 혼자 불려 패턴 없이 적재되는 것 금지 (#38 리뷰)
+        Path file = Files.writeString(dir.resolve("a.csv"), content(ROW));
+
+        assertThatThrownBy(() -> loadTransactionFile.execute(file))
+                .isInstanceOf(IllegalTransactionStateException.class);
+
+        assertThat(count("select count(*) from ops.source_files")).isZero();
+        assertThat(count("select count(*) from ops.transactions")).isZero();
     }
 
     static Stream<Arguments> broken() {
@@ -224,8 +241,13 @@ class TransactionLoadRepositoryTest {
                 Arguments.of("라벨 오류", HEADER + "\n2022/09/01 00:20,010,SECRET1,020,B1,1.00,Euro,1.00,Euro,ACH,2\n"));
     }
 
+    /** 적재는 ImportIbmDataset 트랜잭션 안에서만 돈다(MANDATORY) — 테스트도 바깥 트랜잭션 하나로 감싼다. */
+    private TransactionLoadResult inTx(Path file) {
+        return new TransactionTemplate(transactionManager).execute(status -> loadTransactionFile.execute(file));
+    }
+
     private TransactionLoadResult load(String fileName, String... rows) throws IOException {
-        return loadTransactionFile.execute(Files.writeString(dir.resolve(fileName), content(rows)));
+        return inTx(Files.writeString(dir.resolve(fileName), content(rows)));
     }
 
     private static String content(String... rows) {

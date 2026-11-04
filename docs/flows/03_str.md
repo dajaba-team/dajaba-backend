@@ -45,7 +45,7 @@ sequenceDiagram
     STRC->>STRU: VerifyStrDraft  ⟵ 트랜잭션 밖
     STRU->>AI: POST /v1/str/verify {generation_id, revision_no, narrative(현재 수정본)} — facts는 AI가 generation_id로 꺼냄
     AI-->>STRU: {verification_id, generation_id, revision_no, narrative_sha256, passed, status, code_checks[5], llm_checks[5]}
-    STRU->>DB: INSERT verification_results (generation_id, revision_no, narrative_sha256, passed, payload) — V009
+    STRU->>DB: INSERT verification_results (generation_id, revision_no, narrative_sha256, status, verifier_version, produced_at, payload) — V008. passed는 status에서 자동
     STRU-->>FE: 200 {passed, 실패 항목}
     note right of AI: passed = 코드 5종 ∧ 평가자 5종 (안건 9). 호출 실패는 VERIFY_UNAVAILABLE
 
@@ -64,7 +64,7 @@ sequenceDiagram
         FE->>STRC: POST /approvals/{draftId}/approve
         STRC->>STRU: ApproveStr  ⟵ @Transactional 하나
         STRU->>STRU: 승인자 == 담당 조사역? → SelfApprovalException(409)
-        STRU->>DB: INSERT approvals(APPROVED)
+        STRU->>DB: INSERT approvals(APPROVED, revision_id, verification_result_id, narrative_sha256) — V009, 초안당 한 번
         STRU->>DB: str_drafts.status → LOCKED
         STRU->>CAS: Case.approve() → APPROVED
         STRU->>DB: case_history(APPROVED)
@@ -75,7 +75,7 @@ sequenceDiagram
         FE->>STRC: POST /approvals/{draftId}/reject {reason_code, comment}
         note over STRC: reason_code·comment 없거나 값이 틀리면 400 INVALID_REQUEST
         STRC->>STRU: RejectStr  ⟵ @Transactional 하나
-        STRU->>DB: INSERT approvals(REJECTED, reason_code, comment, narrative_sha256)
+        STRU->>DB: INSERT approvals(REJECTED, revision_id, reason_code, comment, narrative_sha256) — V009
         STRU->>CAS: Case.reject(reasonCode) → REJECTED (반려 코드는 케이스에도 저장)
         STRU-->>FE: 200
         alt NEED_REVISION (보완 요청)
@@ -84,7 +84,7 @@ sequenceDiagram
             Inv->>FE: "종료" + 사유
             FE->>STRC: 케이스 종료 요청
             STRC->>STRU: str 유스케이스 ⟵ @Transactional 하나
-            STRU->>CAS: Case.close(사유) → CLOSED (종료 사유에 반려 코드)
+            STRU->>CAS: Case.close(종결 사유 3개 중 하나) → CLOSED (반려 코드는 REJECT 이력에 있음)
             STRU->>DB: str_drafts.status → SUPERSEDED
         end
         note over CAS: 코드와 안 맞는 이동(NEED_REVISION인데 종료, NOT_REPORTABLE인데 수정)은 cases가 409로 막음.<br/>검사는 cases의 반려 코드로, approvals 값은 이력용

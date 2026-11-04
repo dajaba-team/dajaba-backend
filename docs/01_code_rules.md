@@ -46,7 +46,7 @@
 
 - 요청은 **api → application → domain → infrastructure** 한 방향.
 - 어디 둘지 판단하는 한 줄: **if 문에 업무 용어가 들어가면 domain, 여러 리포지토리를 묶어 부르면 application, 바깥과 통신하면 infrastructure, HTTP면 api.**
-- `@Transactional`은 **application 유스케이스 클래스에만**. 컨트롤러·리포지토리·엔티티에는 없어요. 읽기는 `@Transactional(readOnly = true)`.
+- `@Transactional`은 **application 유스케이스 클래스에만**. 컨트롤러·리포지토리·엔티티에는 없어요. 읽기는 `@Transactional(readOnly = true)`. 단, 열람 기록(`AccessLogWriter`)을 부르는 상세 조회는 readOnly 없이 — `03_shared.md` §9.
 - **AI 호출은 트랜잭션 안에서 하지 않아요.** 최대 90초 동안 DB 커넥션을 잡게 돼요. "DB 작업 → HTTP 호출 → DB 작업" 세 단계로 나눠요(예: `RequestStrDraft`(트랜잭션 없음) → `SaveStrDraft`(트랜잭션)).
 - 컨트롤러에 try-catch 없음. 예외는 `GlobalExceptionHandler`가 바꿔요.
 - 컨트롤러는 `@Valid`만 보고 바로 유스케이스를 불러요. "이 상태에서 가능한가"는 엔티티가 검사해요.
@@ -67,7 +67,7 @@
 
 - 형식: JSON 한 줄. `request_id`·`user_id`는 필터가 MDC에 넣어 자동으로 붙어요.
 - **로그에 쓰지 않는 것:** 거래 금액, 계좌번호, 고객명, `narrative` 본문, 비밀번호, 세션 ID, 내부 키. **ID와 건수만.**
-- 레벨: 상태 전이·AI 호출은 INFO, 예상된 도메인 예외는 WARN, 500은 ERROR. 스택 트레이스는 로그에만(응답에 없음).
+- 레벨: 상태 전이·AI 호출은 INFO, 예상된 도메인 예외는 WARN(403 거부는 `access denied code=…` 한 모양 — `03_shared.md` §8), 500은 ERROR. 스택 트레이스는 로그에만(응답에 없음).
 
 ## 7. 보안 [레퍼런스 §10]
 

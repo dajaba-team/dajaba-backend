@@ -49,16 +49,17 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 | V004_1 | source — `source_files` + `transaction_id` 자동 발급(`generated always as identity`) + `accounts.bank_country` (안건 1, 10/30 #개발 합의) | 준혁 | 적재 전 | PR #21 | — |
 | V004_2 | `ai_call_logs` (`generation_id` 포함) | 진희 (SCRUM-18) | W2 | PR #9 | V010 (`create_log_tables`) |
 | V004_3 | `access_logs` (진짜 로그인과 함께) | 진희 (SCRUM-19 B) | W2 | 머지됨 #27 | V010 (`create_log_tables`) |
-| V005 | detection — `rules`(+ 룰 8개 행), `alerts`, `alert_transactions`, `alert_no_seq` | 준혁 | W2 | 예약 | 같음 |
-| V005_1 | `alert_scores` | 준혁 | W3 (11/3) | 예약 | V007 |
-| V006 | cases — `cases`, `case_history`, `case_summaries`, `case_no_seq` (`REPORTED` CHECK 포함) | 지윤 | W2 | 예약 | 같음 |
+| V005 | detection — `rules`, `alerts`, `alert_transactions`, `alert_no_seq`. 룰 행은 룰 명세(SCRUM-73) 확정 후 별도 파일 | 준혁 (SCRUM-72) | W3 | 머지됨 #31 | 같음 |
+| V005_1 | `alert_scores` (경보당 1행, `score_band` 없음) | 준혁 (SCRUM-96) | W3 (11/3) | 머지됨 #36 | V007 |
+| V005_2 | `transactions` 금액 `numeric(18,2)` → `numeric(20,6)` (11/2 준혁·준영 합의) | 준혁 (SCRUM-97) | W3 (11/3) | 머지됨 #34 | — |
+| V006 | cases — `cases`, `case_history`, `case_summaries`, `case_no_seq` (`REPORTED` CHECK 포함) | 지윤 (SCRUM-48) | W3 | PR | 같음 |
 | V007 | **비움 — 쓰지 않아요** | — | — | 비움 | `create_alert_scores` |
-| V008 | str — `str_drafts`, `str_revisions`, `verification_results` + `cases.current_draft_id` FK | 채영 | W2 | 예약 | 같음 (W3) |
-| V009 | `approvals` (`reason_code`, `narrative_sha256` 포함) | 채영 | W2 | 예약 | 같음 (W4) |
+| V008 | str — `str_draft_requests`, `str_drafts`, `str_revisions`, `verification_results`, `ops.str_draft_id_seq` + `cases.current_draft_id` FK | 채영 | W2 | 예약 | 같음 (W3) |
+| V009 | `approvals` (`reason_code`, `narrative_sha256`, 그 초안의 수정본·검증 복합 FK, 초안당 승인 한 번) | 채영 | W2 | 예약 | 같음 (W4) |
 | 미배정 | `batch_runs` 재실행 인덱스 좁히기 (안건 14·21, 미결 4) | 진희·준혁 | 점수 배치 PR 직전 | 그때 다음 빈 번호 | — |
 | 미배정 | `str_reports` (확정 보고서 번호·마감·PDF) | 채영 | 서식 회의 뒤 | 그때 다음 빈 번호 | — |
 
-**머지 순서**: V004_1 → V004_2 → V004_3 → V005 → V005_1 → V006 → V008 → V009
+**머지 순서**: V004_1 → V004_2 → V004_3 → V005 → V005_1 → V005_2 → V006 → V008 → V009
 
 - **왜 이 순서** — `ai_call_logs`·`access_logs`는 탐지·케이스 테이블을 참조하지 않아서 V005 앞으로 당겼어요. 진희 PR이 준혁님 V005·지윤님 V006을 기다리지 않아도 돼요. 거의 다 된 `ai_call_logs`를 앞(4_2), 아직 안 만든 `access_logs`를 뒤(4_3)로 둬서 준비된 것부터 들어가요. 진희 파일이 늦어 V005를 막으면 §1 양보 규칙대로 진희가 옮겨요.
 - **`alert_scores`가 V005_1인 이유** — V005 바로 뒤라 채영님 V008·V009를 기다리지 않아요.

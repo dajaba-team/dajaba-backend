@@ -27,19 +27,20 @@ sequenceDiagram
 
     Inv->>FE: 케이스 클릭
     FE->>STR: GET /cases/{id} (화면 요청 하나)
-    note over STR,DB: 짧은 읽기 전용 REPEATABLE READ 트랜잭션 — 케이스와 초안을 같은 시점으로 (미결 17)
+    note over STR,DB: 짧은 REPEATABLE READ 트랜잭션(readOnly 아님 — 열람 기록이 참여, 03_shared §9) — 케이스와 초안을 같은 시점으로 (미결 17)
+    STR->>DB: INSERT access_logs VIEW(CASE) — 권한 검사 뒤·본문 읽기 전, 같은 트랜잭션 (03_shared §9)
     STR->>CAS: 공개 상세 조회 (str → cases)
     CAS->>DET: 유스케이스 호출 — 경보·점수·reasons·근거 거래 ID
     DET-->>CAS: AlertDetailView
     CAS->>DB: cases, case_history, case_summaries(최신 1건)
-    CAS-->>STR: 케이스 상세 DTO {case, alert, score, reasons, history, summary?, current_draft_id, version}
-    alt current_draft_id != null
-        STR->>DB: 현재 초안 (narrative, revisions, 검증 결과)
-        STR->>STR: 열람 권한 — 본문은 담당 조사역·승인자만, 그 밖에는 상태·날짜만 (서식 안건 4)
+    CAS-->>STR: 케이스 상세 DTO {case, alert, score, reasons, history, summary?, current_draft_no, version}
+    alt current_draft_no != null
+        STR->>STR: 열람 권한 — 본문은 담당 조사역·승인자만, 그 밖에는 상태·날짜만 (서식 안건 4) — 비담당은 META_ONLY
+        STR->>DB: (초안 본문을 줄 때만) INSERT access_logs STR_VIEW — 본문 읽기 전
+        STR->>DB: 현재 초안 (본문 권한이면 narrative·revisions·검증 결과, 아니면 상태·날짜만)
     else 초안 없음
         note over STR: current_draft = null (정상 조회)
     end
-    STR->>DB: INSERT access_logs (VIEW, 본문을 봤으면 STR 본문 열람도 — 이름은 SCRUM-19)
     STR-->>FE: CaseDetail {case, alert, score, reasons, history, summary?, current_draft}
     FE->>CAS: GET /cases/{id}/transactions?page=0 (근거 거래, 별도 페이징)
     CAS->>DET: 근거 거래 ID → source 거래 조회(읽기)

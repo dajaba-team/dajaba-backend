@@ -30,7 +30,7 @@
   | `LOGOUT` | 로그아웃 | — | `shared/security` |
   | `USER_CREATED`·`ROLE_CHANGED`·`USER_DEACTIVATED` | 사용자 관리 | `USER` / id | W4 사용자 관리 (값만 있음) |
 
-  권한이 없어 403이 난 시도는 아직 안 남겨요 — 어떤 action으로 남길지 미결 30.
+  권한이 없어 403이 난 시도는 **access_logs에 남기지 않고** 앱 경고 로그 한 줄로 남겨요(`access denied code=… method=… uri=…`. request_id가 붙고, 로그인 상태면 user_id도 붙어요 — 미결 30, 11/2 결정). 열람 기록과 성격이 달라서예요. STR을 비담당이 보는 건 403이 아니라 `META_ONLY` + `STR_VIEW` 한 줄이라 누설 감사는 그대로 돼요.
 
 ## 2. 역할 세 개 — 한 사람에 하나 [계정·권한 §2, 레퍼런스 §9.2]
 
@@ -71,7 +71,7 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 
 ## 4. 권한 표 [계정·권한 §4]
 
-프론트는 ○가 아닌 버튼을 숨기고, 백엔드는 ○가 아닌 요청에 403을 줘요. 괄호는 "조건부 ○" — URL로 못 막고 유스케이스가 확인해요.
+프론트는 서버가 주는 `available_actions`로 버튼을 켜고(아래 읽는 법), 백엔드는 ○가 아닌 요청에 403을 줘요. 12번 초안 열람만 403 대신 제한 응답(`META_ONLY`)이에요. 괄호는 "조건부 ○" — URL로 못 막고 유스케이스가 확인해요.
 
 | # | 기능 | API | 조사역 | 승인자 | 관리자 |
 |---|---|---|---|---|---|
@@ -84,18 +84,20 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 | 7 | 담당자 교체 | `POST /cases/{case_no}/reassign` | — | — | ○ |
 | 8 | 메모 작성 | `PUT /cases/{case_no}/notes` (CASES 명세 v0.5, `case_history` NOTE 행 — 미결 8) | ○ (담당만) | — | — |
 | 9 | 종료 (사유 필수, 초안 없음) | `POST /cases/{case_no}/close` | ○ (담당만, REVIEWING·ESCALATED) | — | — |
-| 9-1 | 초안 있는 케이스 종료 (사유 필수) | `POST /cases/{case_no}/close-with-draft` (str 컨트롤러, 미결 2) | ○ (담당만, DRAFTED·REJECTED — REJECTED는 보고 안 함 반려일 때만) | — | — |
+| 9-1 | 초안 있는 케이스 종료 (사유 필수) | `POST /cases/{case_no}/close-with-draft` (str 컨트롤러, 11/4 확정 — 계약서 A6) | ○ (담당만, DRAFTED·REJECTED — REJECTED는 보고 안 함 반려일 때만) | — | — |
 | 10 | 에스컬레이션 | `POST /cases/{case_no}/escalate` | ○ (담당만, REVIEWING) | — | — |
 | 11 | STR 초안 생성·재생성 | `POST /cases/{case_no}/str-drafts` | ○ (담당만, ESCALATED·DRAFTED·REJECTED — REJECTED는 보완 요청 반려일 때만) | — | — |
-| 12 | 초안 열람 (본문·수정 이력) | `GET /str-drafts/{draft_id}` | ○ (담당만) | ○ | — (상태·날짜만) — 서식 안건 4 |
-| 12-1 | 확정본 PDF 다운로드 | (STR 명세) | ○ (담당만) | ○ | — |
-| 12-2 | 모의 제출 (APPROVED → REPORTED) | `POST /approvals/{draft_id}/report` | — | ○ | — |
-| 13 | 초안 수정 | `PUT /str-drafts/{draft_id}/revisions` | ○ (담당만, ACTIVE·승인 대기 아님) | — | — |
-| 14 | 검증 | `POST /str-drafts/{draft_id}/verify` | ○ (담당만) | — | — |
-| 15 | 승인 요청 | `POST /str-drafts/{draft_id}/submit` | ○ (담당만, 현재 본문의 passed 검증이 있을 때) | — | — |
+| 12 | 초안 열람 (본문·수정 이력) | `GET /str-drafts/{draft_no}` | ○ (담당만 본문 · 그 밖은 상태·날짜만 `META_ONLY`) | ○ | ○ (상태·날짜만 `META_ONLY`) |
+| 12-1 | 확정본 PDF 다운로드 | `GET /str-drafts/{draft_no}/report.pdf` | ○ (담당만, `REPORTED`) | ○ (`REPORTED`) | — |
+| 12-1a | 제출 전 PDF 미리보기 | `GET /str-drafts/{draft_no}/report/preview.pdf` | ○ (담당만, `APPROVED`) | ○ (`APPROVED`) | — |
+| 12-2 | 모의 제출 (APPROVED → REPORTED) | `POST /approvals/{draft_no}/report` | — | ○ | — |
+| 12-3 | PDF 다시 만들기 | `POST /approvals/{draft_no}/report/pdf` | — | ○ (`REPORTED`, PDF `FAILED`일 때만) | — |
+| 13 | 초안 수정 | `PUT /str-drafts/{draft_no}/revisions` | ○ (담당만, ACTIVE·승인 대기 아님) | — | — |
+| 14 | 검증 | `POST /str-drafts/{draft_no}/verify` | ○ (담당만) | — | — |
+| 15 | 승인 요청 | `POST /str-drafts/{draft_no}/submit` | ○ (담당만, `DRAFTED`이고 현재 본문의 passed 검증이 있을 때 — 보완 요청 반려 뒤엔 본문을 저장해 `DRAFTED`가 된 다음) | — | — |
 | 16 | 승인 대기 목록 | `GET /approvals` (ADMIN·APPROVER) | — | ○ | ○ (조회만) |
-| 17 | 승인 | `POST /approvals/{draft_id}/approve` | — | ○ (담당 본인 제외) | — |
-| 18 | 반려 (`reason_code` + `comment` 필수) | `POST /approvals/{draft_id}/reject` | — | ○ (담당 본인 제외) | — |
+| 17 | 승인 | `POST /approvals/{draft_no}/approve` | — | ○ (담당 본인 제외) | — |
+| 18 | 반려 (`reason_code` + `comment` 필수) | `POST /approvals/{draft_no}/reject` | — | ○ (담당 본인 제외) | — |
 | 19 | 데이터 적재 | `POST /admin/batches/load` | — | — | ○ |
 | 20 | 룰 스캔·점수(보충 실행 포함)·케이스 생성 배치 | `POST /admin/batches/*` | — | — | ○ |
 | 21 | 배치 상태 | `GET /admin/batches/{id}` | — | — | ○ |
@@ -104,10 +106,11 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 | 24 | 접근 로그·AI 호출 로그 | `GET /admin/access-logs`, `/admin/ai-calls` | — | — | ○ |
 | 25 | swagger · health | `/swagger-ui.html`, `/actuator/health` | local에서만, 역할 무관 | | |
 
-- 5·8번 경로는 CASES 명세 v0.5, 9-1번은 미결 2, 12·12-1·12-2번은 서식 안건 4, 17·18번 `{draft_id}`는 미결 1 결정(10/30)이에요.
+- 5·8번 경로는 CASES 명세 v0.5, 9-1번은 계약서 A6(11/4 채영), 12·12-1·12-2·12-1a·12-3번 경로는 계약서 v0.2(11/4 채영), 경로 번호는 `draft_no`(`DRF-000123`, 계약서 2.2) — 10/30 미결 1은 '초안 기준'으로, 11/4에 이름이 `draft_no`로 정해졌어요.
 - 〔확인 필요: 7번 교체 본문 — 계정·권한 `{assignee_id}` vs CASES 명세 `{assignee: login_id, comment, version}`. 확정은 지윤님〕
+- 12번 중 수정 이력(`GET /str-drafts/{draft_no}/revisions`, S4)은 담당·승인자만 — 그 밖은 403 `NOT_ASSIGNEE`(S2 초안 보기의 `META_ONLY`와 다름), 없는 `revision_no`는 404 `REVISION_NOT_FOUND` [계약서 Q13, 11/4 채영]
 
-**읽는 법** — 관리자는 배정·교체는 하지만 조사·초안·승인은 안 해요. STR 본문(12)은 보기도 안 되고 상태·날짜만. 승인자는 읽고 결정만(2~4·12·12-1·12-2·16~18). "담당만"은 조사역 사이의 규칙이라, 남의 케이스를 직접 호출하면 403 `NOT_ASSIGNEE`. 프론트가 버튼을 정할 때는 `/auth/me`의 `role` + 케이스의 `assignee` + `status` 세 값을 봐요. 서버는 매번 다시 검사해요(버튼 숨김은 편의일 뿐).
+**읽는 법** — 관리자는 배정·교체는 하지만 조사·초안·승인은 안 해요. STR 본문(12)은 보기도 안 되고 상태·날짜만. 승인자는 읽고 결정만(2~4·12·12-1·12-1a·12-2·12-3·16~18). "담당만"은 조사역 사이의 규칙이라, 남의 케이스를 직접 호출하면 403 `NOT_ASSIGNEE` — **단 STR 초안 열람(12)은 403이 아니라 제한 응답**: 담당 아닌 조사역·관리자에게 `access: "META_ONLY"`, 본문 키(`facts`·`narrative`·`latest_verification`·`last_rejection`·`references`)는 빠지지 않고 `null`이에요(계약서 S2, `03_shared.md` §9 — 열람 기록 `strView` 한 줄은 제한 응답에도 남음). 수정 이력(S4)은 이 예외에 안 들어가고 403이에요. **버튼은 서버가 주는 `available_actions`만 보고 켜요**(케이스 상세 C2 — 8개: `ASSIGN`·`REASSIGN`·`UPDATE_NOTES`·`REFRESH_SUMMARY`·`ESCALATE`·`CLOSE`·`CLOSE_WITH_DRAFT`·`GENERATE_DRAFT`). 종료는 서버가 `CLOSE`/`CLOSE_WITH_DRAFT` 중 하나를 줘서 화면이 초안 유무를 보고 고르지 않아요. `/auth/me`의 `role`은 메뉴를 보일지 정할 때만 써요. STR 화면 버튼도 S2 응답의 `available_actions`로 켜요(계약서 Q16, 11/4 채영). 서버는 매번 다시 검사해요(버튼 숨김은 편의일 뿐).
 
 ## 5. 요청이 막히는 네 지점 [계정·권한 §5, 레퍼런스 §9.2]
 

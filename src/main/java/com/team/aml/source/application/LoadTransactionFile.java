@@ -8,6 +8,7 @@ import com.team.aml.source.domain.TransactionLoadRepository;
 import com.team.aml.source.domain.TransactionLoadResult;
 import com.team.aml.source.domain.TransactionStagingCheck;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.BufferedReader;
@@ -23,7 +24,12 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
-/** 거래 파일을 transactions로 적재한다. 패턴은 먼저 스테이징돼 있어야 하며 LoadIbmDataset 트랜잭션에 참여한다. */
+/**
+ * 거래 파일을 transactions로 적재한다. 패턴은 먼저 스테이징돼 있어야 하며 ImportIbmDataset 트랜잭션에 참여한다(MANDATORY).
+ * 트랜잭션 밖에서 부르면 IllegalTransactionStateException — 혼자 불려 패턴 없이 적재되는 것을 막는다.
+ * 스테이징은 비우지 않는다. 패턴 매칭 검증(PatternStagingRepository.matchStats)이 transactions_staging을 읽으므로,
+ * 검증이 끝난 뒤 부르는 쪽(ImportIbmDataset)이 같은 트랜잭션 안에서 비운다.
+ */
 @Service
 public class LoadTransactionFile {
 
@@ -38,7 +44,7 @@ public class LoadTransactionFile {
         this.sourceFiles = sourceFiles;
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.MANDATORY)
     public TransactionLoadResult execute(Path file) {
         try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
             if (!HEADER.equals(reader.readLine())) {

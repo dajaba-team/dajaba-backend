@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** 계좌 파일을 entities → accounts 순서로 적재한다. LoadIbmDataset 트랜잭션에 참여한다. */
+/** 계좌 파일을 entities → accounts 순서로 적재한다. ImportIbmDataset 트랜잭션에 참여한다. */
 @Service
 public class LoadAccountFile {
 

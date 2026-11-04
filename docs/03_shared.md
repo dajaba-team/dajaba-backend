@@ -69,11 +69,14 @@
 | 401 | `UNAUTHENTICATED`, `LOGIN_FAILED` | 인증 | 확정 [계정·권한 §3] |
 | 403 | `FORBIDDEN`, `CSRF_INVALID`, `NOT_ASSIGNEE`, `NOT_APPROVER` | 권한 (`NOT_ASSIGNEE`·`NOT_APPROVER`는 `ForbiddenException` 하위) | 확정 [계정·권한 §5, SCRUM-67] |
 | 404 | `CASE_NOT_FOUND`, `DRAFT_NOT_FOUND`, `USER_NOT_FOUND`, `EVIDENCE_NOT_FOUND`, `BATCH_RUN_NOT_FOUND`, `ALERT_NOT_FOUND`, `RULE_NOT_FOUND` | 각 기능 | 〔초안〕 |
+| 404 | `REVISION_NOT_FOUND` | str | 확정 [계약서 Q13, 11/4 채영] |
 | 409 | `INVALID_CASE_TRANSITION`, `CONCURRENT_UPDATE`, `SELF_APPROVAL`, `NARRATIVE_UNCHANGED`, `BATCH_ALREADY_DONE`, `BATCH_RUNNING` | 공통·cases·str·batch | 확정 [안건 24, 레퍼런스 §11.1] |
 | 409 | `DRAFT_NOT_VERIFIED`, `DRAFT_LOCKED`, `DRAFT_SUPERSEDED`, `DRAFT_IN_PROGRESS`, `VERIFY_IN_PROGRESS` | str | 〔초안〕 STR 명세 |
+| 409 | `REPORT_PDF_NOT_READY` (`details.pdf_status` `PENDING`·`FAILED`) | str — 확정본 PDF가 아직 없음 | 확정 [계약서 Q7, 11/4 채영] |
 | 409 | `GENERATION_IN_PROGRESS` → 프론트엔 `DRAFT_IN_PROGRESS` | AI가 주는 409. 자동 재시도 안 함, `AiClient`가 409로 그대로 전달 | 확정 [안건 23, 10/29] |
 | 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases | 〔초안〕 CASES 명세 "신규 제안" |
 | 400·409 | `DATE_OUT_OF_RANGE`, `INVALID_RULE_PARAMS`, `DATASET_NOT_LOADED`, `NO_ACTIVE_RULES`, `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
+| 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |
 | 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 거부), `AI_TIMEOUT`, `AI_BAD_RESPONSE` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정 |
 
 AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지고 `LLM_UNAVAILABLE`로 합쳐졌어요. `VERIFY_UNAVAILABLE`은 에러가 아니라 **검증 결과의 `status` 값**(200 응답)이라 검증 결과 한 줄로 저장해요 [§5.3].
@@ -161,7 +164,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | 케이스 생성 | `POST /api/v1/admin/batches/open-cases?date=` | cases | `OPEN_CASES` |
 | 상태 조회 | `GET /api/v1/admin/batches/{batch_run_id}`, 목록 `GET /api/v1/admin/batches` | shared | — |
 
-- 전부 **관리자가 API로 직접 실행**, 스케줄러 없음. 응답은 `batch_runs` 한 행. 적재는 `@Async` + 202, 룰 스캔·점수는 동기. [레퍼런스 §11] 〔초안: CASES 명세는 케이스 생성도 202 비동기 제안〕
+- 전부 **관리자가 API로 직접 실행**, 스케줄러 없음. 응답은 `batch_runs` 한 행. 적재·케이스 생성은 `@Async` + 202(`batch_run_id`로 상태 조회), 룰 스캔·점수는 동기. [레퍼런스 §11, 계약서 B4 — 11/4 준혁 제안·지윤 동의]
 - `batch_runs` 상태 기록은 본 작업과 **다른 트랜잭션**으로 커밋해요. 본 작업이 롤백돼도 "실패했다"는 기록이 남게. [SD 명세 §12 〔초안〕]
 - 앱이 배치 도중 죽으면 `RUNNING`이 남아요. 기동 시 오래된 `RUNNING`을 `FAILED`로 정리해요. [SD 명세 §12 〔초안〕, CASES 명세 §8.3]
 
@@ -180,7 +183,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 |---|---|---|
 | 경보 | `ALT-{배치일 YYYYMMDD}-{6자리}` | `ops.alert_no_seq` (V005) |
 | 케이스 | `CASE-{경보 기준 연도}-{6자리}` | `ops.case_no_seq` (V006) |
-| 초안 | `DRF-…` — 백엔드가 AI 호출 **전에** 시퀀스로 먼저 발급 [안건 23] | 〔초안: 형식·시퀀스는 STR 쪽에서 정함〕 |
+| 초안 | `DRF-{6자리}` (`DRF-000123`) ✅ [계약서 2.2, 11/4 채영] — 백엔드가 AI 호출 **전에** 시퀀스로 먼저 발급 [안건 23] | `ops.str_draft_id_seq` (V008 — #28 Draft, 머지 전) |
 
 - 시퀀스는 날짜별로 리셋하지 않아요. `MAX(id)+1` 방식은 금지(두 트랜잭션이 같은 번호를 받을 수 있음).
 - 〔미결: 확정 보고서 번호 `STR-{연도}-{6자리}` — 서식 안건 3·5-2〕
@@ -189,6 +192,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 
 - `request_id`·`user_id`를 MDC에 넣어 모든 로그에 붙여요. AI 호출 땐 같은 값을 `X-Request-Id`로 보내서 AI 로그와 짝을 맞춰요.
 - 로그 금지 항목은 `01_code_rules.md` §6.
+- **403 거부 로그** — URL 역할·CSRF·도메인(`ForbiddenException` 하위)·MVC 안 `AccessDeniedException` 모두 WARN `access denied code={코드} method={메서드} uri={경로}` 한 줄이에요. 쿼리스트링·요청 본문·토큰·쿠키 값·예외 메시지는 안 찍어요. request_id가 붙고, 로그인 상태면 user_id도 붙어요. CSRF는 `UserIdMdcFilter`보다 앞에서 막혀서 핸들러가 `CurrentUser`로 user_id를 넣어요. 로그인 전이거나 세션이 끊긴 요청은 user_id가 없어요. [미결 30, SCRUM-74]
 
 ## 9. 열람 기록 (`access_logs`) [레퍼런스 §3.4, 계정·권한 §1, 코드 `shared/audit`·`V004_3`, SCRUM-19]
 
@@ -203,11 +207,15 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | ADMIN 내보내기 | 내보내기 유스케이스 | `accessLog.export(type, id)` |
 
 - `AccessLogWriter`(`shared/audit`)를 주입받아 부르기만 해요. **사용자는 `CurrentUser`, IP는 지금 요청**에서 Writer가 꺼내요 — 호출부는 넘기지 않아요. action 문자열을 밖에서 넣는 메서드는 없어요.
-- 기록은 **별도 트랜잭션**(`REQUIRES_NEW`)이라 `@Transactional(readOnly = true)` 조회 안에서 불러도 저장돼요. 조회가 뒤에서 실패해도 "열람 시도" 기록은 남아요.
+- 기록은 **바깥 조회 트랜잭션에 참여**해요(`MANDATORY`, 같은 커넥션). 그래서 **열람 기록을 부르는 조회 유스케이스는 `@Transactional`(readOnly 아님)**이에요. 커넥션은 조회 하나에 하나, 기록과 조회는 **같이 성공·같이 실패**해요 — 기록 뒤에 조회가 실패하면 기록도 롤백되어 **본문을 실제로 돌려준 열람만** 남아요. [11/3, SCRUM-93]
+- **호출 순서** — 권한 검사(담당자·역할) **통과 뒤, 본문 데이터를 읽기 전에** 한 줄. 권한에 걸려 403이면 기록하지 않아요(미결 30 결정 — 경고 로그만). 대상이 없어 404여도 기록하지 않아요.
+- **상세 + 현재 초안 화면** — 케이스 상세는 `view(CASE)` 한 줄 — 같은 응답에 현재 초안 본문도 주면 `strView` 한 줄 더. STR 상세(`GET /str-drafts/{draft_no}`)는 본문 응답이든 상태·날짜만 주는 제한 응답(비담당·관리자, FR-APR-02)이든 `strView` 한 줄(미결 30 결정의 전제).
+- **사용자** — 로그인 사용자가 없으면 기록하지 않고 실패해요(`CurrentUser.require()`, `user_id` 없는 열람 행 금지). 배치·SYSTEM은 열람 기록을 부르지 않아요.
+- **자주 하는 실수** — ① `readOnly = true` 안에서 부르면 바로 `IllegalStateException`. ② 트랜잭션 밖(컨트롤러 등, `open-in-view: false`)에서 부르면 바로 `IllegalTransactionStateException`.
 - **열람 기록 저장이 실패하면 예외를 그대로 올려서 조회도 실패해요(기록 없는 열람 금지).** 반대로 로그인·로그아웃 기록은 실패해도 응답은 그대로이고 경고 로그만 남겨요. [11/2 진희]
 - 로그인·로그아웃 기록(`LOGIN_OK`·`LOGIN_FAIL`·`LOGOUT`)은 `shared/security`만 쓰는 `LoginAccessLogWriter`가 남겨요(ArchUnit으로 막음). 팀원 코드는 부를 일이 없어요.
 - 추가만 — `app_backend`는 UPDATE·DELETE 권한이 없어요. 비밀번호는 어디에도 저장·로그하지 않아요.
-- action 10개와 로그인 기록 규칙은 `04_auth_user.md` §1·§3. 권한이 없어 403이 난 시도는 아직 안 남겨요(미결 30).
+- action 10개와 로그인 기록 규칙은 `04_auth_user.md` §1·§3. 권한이 없어 403이 난 시도는 access_logs에 남기지 않고 앱 경고 로그 한 줄만 남겨요(미결 30, 11/2 결정) — 자세히는 §8 로그.
 
 ## 10. 마스킹 [레퍼런스 §10-2]
 

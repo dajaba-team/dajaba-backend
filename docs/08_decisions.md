@@ -22,7 +22,7 @@
 | 10/27 | 재실행 — 적재·룰 스캔은 성공 후 금지, 점수·케이스 생성은 남은 대상 재처리 허용. `SCORE_RETRY` 없이 점수 재실행 | 재시도 뒤 새 HIGH의 케이스 생성이 막히면 안 됨 | 안건 14·21 |
 | 10/27 | 메모는 `case_history` NOTE 행이 권장 — **이름 확인 남음** | 이력 원칙과 같음 | 안건 16 |
 | 10/27 | 초안 생성·검증 버튼 분리, 자동 검증 없음 | 90초 + 90초는 길다 | 안건 17 |
-| 10/27 | 금액 `numeric(18,2)` 유지 | 서비스 DB는 IBM만 | 안건 19 |
+| 10/27 | 금액 `numeric(18,2)` 유지 〔11/2 `numeric(20,6)`으로 바뀜 — 아래 11/2 줄〕 | 서비스 DB는 IBM만 | 안건 19 |
 | 10/27 | 룰 공통 네 가지(규약 번호·통화별·달력일·자기계좌 제외), 대표 룰 R02 | 백엔드 룰과 학습용 룰 정합 | 안건 20 |
 | 10/27 | `AiClient` 재시도 1회 — `LLM_UNAVAILABLE`·`MODEL_UNAVAILABLE`·연결 계열 5xx만, 그 밖 0회. `alert_scores.alert_id` UNIQUE 유지 | 현값 유지 | 안건 21, 규약 v0.2 §6.2 |
 | 10/27 | AI가 facts 계산, `draft_id` 백엔드 선발급, 검증은 `generation_id` + 본문 해시로 묶음 | facts·검증이 한 기준 | 안건 23 |
@@ -43,8 +43,13 @@
 | 10/31 | 진짜 로그인은 **JSON 로그인 필터**(`UsernamePasswordAuthenticationFilter` 상속)를 **`AbstractAuthenticationFilterConfigurer`로 등록** — 세션 ID 교체·`maximumSessions(1)`·세션 저장·CSRF 토큰 교체를 Spring 전략으로. 끊긴 세션은 401 `UNAUTHENTICATED` JSON. 비활성·SYSTEM은 없는 ID와 같은 401 `LOGIN_FAILED`. users 읽기는 `user/infrastructure/DbUserDetailsService`. 목업 로그인 삭제 | 필터를 `addFilterAt`으로만 끼우면 세션 전략이 빠져 로그인이 세션에 안 남음(테스트로 확인). shared → user 의존 금지 | SCRUM-19 |
 | 11/1 | 권한 문제(역할·담당자)로 막히는 도메인 예외는 shared `ForbiddenException` 하위 → **403**, 코드는 클래스 이름 규칙(`NOT_APPROVER`·`NOT_ASSIGNEE`). 상태·버전 충돌은 `DomainException` 409 그대로(`SELF_APPROVAL` 포함). 승인 게이트는 **같은 초안·같은 본문 해시의 검증 중 최신만** 인정 — 최신이 PASSED가 아니거나 요청 `verification_id`가 최신과 다르면 409 `DRAFT_NOT_VERIFIED` | 역할·담당자가 안 맞는 건 상태 충돌이 아니라 권한 문제라서 03_shared 표대로 403 [백엔드 #22 리뷰 11/1] | 백엔드 #22 리뷰(11/1), SCRUM-67 |
 | 11/2 | Flyway 번호 재배정 — `ai_call_logs` V007 → **V004_2**, `access_logs` **V004_3**, `alert_scores` **V005_1**, V007은 비움. 머지 순서 V004_1 → V004_2 → V004_3 → V005 → V005_1 → V006 → V008 → V009. **양보 규칙**: 하위 번호로 끼운 파일이 뒤 번호 머지를 막으면 끼운 쪽이 다음 빈 번호로 옮김 | 로그 테이블 둘은 탐지·케이스를 참조하지 않아 V005·V006을 기다릴 이유가 없음. `alert_scores`는 V008·V009를 기다리지 않게 V005 바로 뒤. V007을 당겨 채우면 V008·V009와 문서를 다 고쳐야 함 | SCRUM-56, `05_flyway.md` §1·§3 |
-| 11/2 | `access_logs`(V004_3) — action 이름 `STR_VIEW`·`PDF_DOWNLOAD`(나머지 8개 그대로). 기록은 모두 **별도 트랜잭션**(`REQUIRES_NEW`). 팀원은 `shared/audit/AccessLogWriter`의 action별 메서드(`view`·`strView`·`pdfDownload`·`export`)만 부르고 사용자·IP는 Writer가 꺼냄. 로그인용 `LoginAccessLogWriter`는 `shared/security`만. **`LOGIN_FAIL`은 인증까지 간 실패(401)만** — 400 형식 오류는 기록 안 함. `login_id_attempted`는 앞 64자, IP는 `getRemoteAddr()`. **열람 기록 저장이 실패하면 조회도 실패**(예외 전파), 로그인·로그아웃 기록 실패는 응답 그대로 + 경고 로그 | 조회 유스케이스는 보통 readOnly라 같은 트랜잭션에선 INSERT가 거부됨. 문자열 action을 밖에서 못 넣게 해 값이 흩어지지 않음. 400은 인증 시도가 아니라 형식 오류. 기록 없는 열람은 감사 공백이라 막음, 로그인은 기록 때문에 막히면 안 됨 | SCRUM-19, 미결 10, 11/2 진희 |
+| 11/2 | `access_logs`(V004_3) — action 이름 `STR_VIEW`·`PDF_DOWNLOAD`(나머지 8개 그대로). 기록은 모두 **별도 트랜잭션**(`REQUIRES_NEW`)〔열람 기록은 11/3에 바뀜 — 아래 줄〕. 팀원은 `shared/audit/AccessLogWriter`의 action별 메서드(`view`·`strView`·`pdfDownload`·`export`)만 부르고 사용자·IP는 Writer가 꺼냄. 로그인용 `LoginAccessLogWriter`는 `shared/security`만. **`LOGIN_FAIL`은 인증까지 간 실패(401)만** — 400 형식 오류는 기록 안 함. `login_id_attempted`는 앞 64자, IP는 `getRemoteAddr()`. **열람 기록 저장이 실패하면 조회도 실패**(예외 전파), 로그인·로그아웃 기록 실패는 응답 그대로 + 경고 로그 | 조회 유스케이스는 보통 readOnly라 같은 트랜잭션에선 INSERT가 거부됨. 문자열 action을 밖에서 못 넣게 해 값이 흩어지지 않음. 400은 인증 시도가 아니라 형식 오류. 기록 없는 열람은 감사 공백이라 막음, 로그인은 기록 때문에 막히면 안 됨 | SCRUM-19, 미결 10, 11/2 진희 |
 | 11/2 | 시퀀스로 미리 받은 번호를 id로 쓰는 엔티티(`str_drafts`·`str_draft_requests`)는 shared **`AssignedIdEntity`** 상속. 감사 4칸은 새 부모 `AuditedEntity`로 올리고 `BaseEntity`는 그 위에 IDENTITY id만(공개 메서드 그대로). **새 행 판단은 `Persistable.isNew()`** — 생성 직후 true, `@PostPersist`·`@PostLoad` 뒤 false. version 칸으로 판단하지 않음 | id를 직접 넣으면 `save()`가 `merge`로 가서 SELECT가 더 나가고 같은 id를 조용히 덮어씀. `str_draft_requests`엔 version 칸이 없어 "version null = 새 행"도 못 씀 | 백엔드 #28 리뷰(11/2), 미결 21, SCRUM-68 |
+| 11/2 | 거래 금액 `numeric(18,2)` → **`numeric(20,6)`** (V005_2). 원본 금액을 반올림하지 않음 | 실제 HI-Small에서 Bitcoin 소수 6자리 필드 294,217개 중 293,425개 값이 바뀌고 일부는 0.00이 됨. 정수부 최대 13자리라 14자리면 충분 | 안건 19, 준혁·준영 합의(ML 규약 하위 「B7 기준 및 후속 협의 사항」), SCRUM-97 |
+| 11/2 | 권한이 없어 403이 난 시도는 **`access_logs`에 남기지 않고** 앱 경고 로그 한 줄로 남김(`access denied code=… method=… uri=…`). 감사용 DB 기록이 꼭 필요해지면 W5에 ① `ACCESS_DENIED` action으로 올릴 수 있음 | `access_logs`는 "누가 무엇을 봤나" 기록인데 403은 대부분 고치려다 막힌 것(비담당 수정·승인자 아닌 승인·`/admin` 접근·CSRF). 가장 민감한 "남의 STR 보기"는 403이 아니라 200 `META_ONLY` + `STR_VIEW` 한 줄이라 누설 감사는 그대로 됨. 고르지 않은 안: ① `ACCESS_DENIED` action(V004_3 CHECK를 바꿔야 하고 CSRF 403까지 쌓임, URL 단계 403은 target을 못 채움) ② 원래 action + 결과 칸(URL·CSRF 단계에서는 원래 action을 알 수 없음 + 새 마이그레이션 필요(①은 V004_3 CHECK 변경, ②는 결과 칸 추가)) | 노션 미결 30(③, 11/2 진희) (구현 11/4 SCRUM-74) |
+| 11/3 | 열람 기록(`AccessLogWriter`의 `view`·`strView`·`pdfDownload`·`export`)은 **바깥 조회 트랜잭션에 참여**(`MANDATORY`) — 그래서 열람 기록을 부르는 조회 유스케이스는 **readOnly를 쓰지 않음**. readOnly 안·트랜잭션 밖에서 부르면 바로 실패. 기록과 조회는 같이 성공·실패(본문을 돌려준 열람만 남음). 로그인 사용자 필수(`CurrentUser.require()`). 호출은 권한 검사 뒤·본문 읽기 전, 403·404는 기록 안 함. 케이스 상세는 `view(CASE)`(현재 초안 본문도 주면 `strView` 더), STR 상세는 제한 응답이어도 `strView`(미결 30 전제). `AccessLog`·`AccessLogRepository`는 `shared/audit` 밖에서 못 씀(ArchUnit, `AccessLog.create` package-private). 로그인 기록·`ai_call_logs`는 `REQUIRES_NEW` 그대로 | `REQUIRES_NEW`는 바깥 조회가 커넥션을 쥔 채 두 번째 커넥션을 잡아, Hikari 10개에서 상세 조회 10건이 동시에 오면 풀이 고갈돼 멈춤. 호출처가 0곳인 지금이 바꾸기 가장 쌈. 고르지 않은 안: 풀만 키움(2배는 그대로), 조회 뒤 기록(유스케이스를 둘로 나눠야 함), `afterCommit` 기록(그때도 첫 커넥션 반납 전) | 3주차 리뷰 리스크 6, SCRUM-93, 11/3 진희 |
+| 11/3 | `NOT_REPORTABLE` 반려 건 종결도 `close_reason`은 `FALSE_POSITIVE`·`DUPLICATE`·`NO_ACTION` 중 조사역이 고름. 반려 코드는 REJECT 이력(`case_history.reason_code`)으로 봄 — V006 CHECK 그대로, `close-with-draft`도 `close_reason`을 받음 | 종결 사유(왜 닫았나)와 반려 코드(승인자 판단)는 다른 질문이고 반려 코드는 이미 이력에 있음. 고르지 않은 안: 종결 사유에 `NOT_REPORTABLE` 추가(성격이 다른 값이 섞이고 같은 값을 두 번 적음) | #39 리뷰 1번, 11/3 지윤·채영, SCRUM-48 |
+| 11/4 | 백엔드 docs를 프론트 API 계약서 v0.2 기준으로 맞춤 — 경로 번호 `draft_no`, 비담당 STR 열람 `META_ONLY`(403 아님), S4 비담당 403·`REVISION_NOT_FOUND`(Q13, 11/4 채영), 버튼은 `available_actions`(STR 화면 포함 — Q16, 11/4 채영), 케이스 생성 배치 202 | 계약서에서 정해진 값인데 docs에 예전 규칙이 남아 있으면 화면과 백엔드가 다른 규칙을 보게 됨 | 계약서 7절, 슬랙 계약서 스레드 11/4 지윤·채영, SCRUM-21 |
 
 ## 2. 문서끼리 다른 곳 — 이 docs에서 고른 것
 
@@ -72,8 +77,8 @@
 
 | # | 무엇 | 지금 상태 | 누구 |
 |---|---|---|---|
-| 1 | 승인·반려 경로 `{draft_id}` vs `{case_no}` | 계정·권한·STR 명세는 draft_id, CASES 명세는 case_no 유지안 제안 | 채영·지윤 |
-| 2 | 초안 있는 종료 경로 `POST /cases/{case_no}/close-with-draft` | CASES·STR 명세 공동 제안, 확인 요청 | 진희·지윤 |
+| 1 | ~~승인·반려 경로 `{draft_id}` vs `{case_no}`~~ | 정리됨 — 10/30 초안 기준, 11/4 경로 번호 `{draft_no}`(계약서 v0.2 2.2·7절) | 채영·지윤 |
+| 2 | ~~초안 있는 종료 경로~~ | 정리됨 — 11/4 `POST /cases/{case_no}/close-with-draft` `{close_reason, comment, version}`(계약서 A6, 채영) | 진희·지윤 |
 | 3 | ~~목록 응답 모양~~ | 코드를 문서에 맞춤(§1 표). SCRUM-39 머지되면 끝 | 진희 |
 | 4 | `batch_runs` 재실행 인덱스 | `V004`는 네 배치 다 막음 → 적재·룰 스캔으로 좁히는 새 파일 필요. `RUNNING` 조건 추가, `PARTIAL` 상태, `metrics jsonb`도 SD 명세 제안 | 진희·준혁 |
 | 5 | ~~AI 재시도 대상~~ | 규약 v0.2 §6.2로 정리됨(§1 표). 레퍼런스 §8.5 문구만 고치면 됨 | 진희 |
@@ -100,7 +105,7 @@
 | 26 | 경로형 경보 `paths` 계약 | 합집합 = `transaction_ids`·R04 3홉(백엔드·ML) vs 부분집합·길이 제한 없음(AI) — 400과 UNVERIFIED 경계 정하기 | 준혁·진희·준영 |
 | 28 | health 응답 버전 필드 | 백엔드 `HealthResponse`는 `generator_version`을 읽는데 AI `/v1/health`는 `server_version`·`model_version`·`feature_version`·`retrieval_version`을 줌 → 기동 로그에 null. SCRUM-17 코드라 SCRUM-22(BE↔AI 연결)에서 맞춤 (11/1 SCRUM-18 점검) | 진희(SCRUM-22) |
 | 29 | `ai_call_logs` drafts 대상 | 지금 `CASE`/`caseId`인데 안건 23 이후 백엔드가 `draft_id`를 먼저 발급함 → `AiDtos`를 규약 v0.2 모양으로 바꿀 때(SCRUM-22) `DRAFT`/`draft_id`로 갈지 정함 (11/1 SCRUM-18 점검) | 진희(SCRUM-22) |
-| 30 | 403 시도 기록 | "권한이 없어 403이 난 시도도 남김"(NFR-COM-01·FR-APR-02)인데 맞는 action이 없음 — 별도 `ACCESS_DENIED` 추가 vs 원래 action + 결과 칸. SCRUM-19 B에서는 뺌 | 진희 |
+| 30 | ~~403 시도 기록~~ | 정리됨 — 11/2 경고 로그(③), SCRUM-74(§1 표) | 진희 |
 
 ## 4. 이 docs 자체에 대한 결정
 
