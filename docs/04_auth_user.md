@@ -30,7 +30,7 @@
   | `LOGOUT` | 로그아웃 | — | `shared/security` |
   | `USER_CREATED`·`ROLE_CHANGED`·`USER_DEACTIVATED` | 사용자 관리 | `USER` / id | W4 사용자 관리 (값만 있음) |
 
-  권한이 없어 403이 난 시도는 아직 안 남겨요 — 어떤 action으로 남길지 미결 30.
+  권한이 없어 403이 난 시도는 **access_logs에 남기지 않고** 앱 경고 로그 한 줄로 남겨요(`access denied code=… method=… uri=…`. request_id가 붙고, 로그인 상태면 user_id도 붙어요 — 미결 30, 11/2 결정). 열람 기록과 성격이 달라서예요. STR을 비담당이 보는 건 403이 아니라 `META_ONLY` + `STR_VIEW` 한 줄이라 누설 감사는 그대로 돼요.
 
 ## 2. 역할 세 개 — 한 사람에 하나 [계정·권한 §2, 레퍼런스 §9.2]
 

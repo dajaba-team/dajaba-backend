@@ -6,6 +6,7 @@ import com.team.aml.shared.api.ErrorResponse;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.InternalAuthenticationServiceException;
 import org.springframework.security.web.AuthenticationEntryPoint;
@@ -34,10 +35,12 @@ public class JsonAuthHandlers {
     record LoginResult(Long id, String loginId, String displayName, String role) {}
 
     private final ObjectMapper om;
+    private final CurrentUser currentUser;
 
-    public JsonAuthHandlers(ObjectMapper om, LoginAccessLogWriter accessLog) {
+    public JsonAuthHandlers(ObjectMapper om, LoginAccessLogWriter accessLog, CurrentUser currentUser) {
         this.om = om;
         this.accessLog = accessLog;
+        this.currentUser = currentUser;
     }
 
     public AuthenticationEntryPoint entryPoint() {
@@ -81,9 +84,16 @@ public class JsonAuthHandlers {
     public AccessDeniedHandler accessDenied() {
         return (req, res, ex) -> {
             boolean csrf = ex instanceof org.springframework.security.web.csrf.CsrfException;
-            write(res, 403, csrf
-                    ? ErrorResponse.of("CSRF_INVALID", "CSRF 토큰이 없거나 다릅니다. XSRF-TOKEN 쿠키 값을 X-XSRF-TOKEN 헤더로 보내세요")
-                    : ErrorResponse.of("FORBIDDEN", "권한이 없습니다"));
+            String code = csrf ? "CSRF_INVALID" : "FORBIDDEN";
+            // CsrfFilter 는 UserIdMdcFilter 앞이라 아직 user_id 가 없다. 지우는 건 RequestIdFilter finally.
+            if (MDC.get("user_id") == null) {
+                currentUser.get().ifPresent(u -> MDC.put("user_id", String.valueOf(u.userId())));
+            }
+            // 403 은 access_logs 에 남기지 않고 경고 한 줄만 (미결 30). getRequestURI 는 쿼리스트링을 포함하지 않는다.
+            log.warn("access denied code={} method={} uri={}", code, req.getMethod(), req.getRequestURI());
+            write(res, 403, ErrorResponse.of(code, csrf
+                    ? "CSRF 토큰이 없거나 다릅니다. XSRF-TOKEN 쿠키 값을 X-XSRF-TOKEN 헤더로 보내세요"
+                    : "권한이 없습니다"));
         };
     }
 
