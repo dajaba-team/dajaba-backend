@@ -69,8 +69,10 @@
 | 401 | `UNAUTHENTICATED`, `LOGIN_FAILED` | 인증 | 확정 [계정·권한 §3] |
 | 403 | `FORBIDDEN`, `CSRF_INVALID`, `NOT_ASSIGNEE`, `NOT_APPROVER` | 권한 (`NOT_ASSIGNEE`·`NOT_APPROVER`는 `ForbiddenException` 하위) | 확정 [계정·권한 §5, SCRUM-67] |
 | 404 | `CASE_NOT_FOUND`, `DRAFT_NOT_FOUND`, `USER_NOT_FOUND`, `EVIDENCE_NOT_FOUND`, `BATCH_RUN_NOT_FOUND`, `ALERT_NOT_FOUND`, `RULE_NOT_FOUND` | 각 기능 | 〔초안〕 |
+| 404 | `REVISION_NOT_FOUND` | str | 확정 [계약서 Q13, 11/4 채영] |
 | 409 | `INVALID_CASE_TRANSITION`, `CONCURRENT_UPDATE`, `SELF_APPROVAL`, `NARRATIVE_UNCHANGED`, `BATCH_ALREADY_DONE`, `BATCH_RUNNING` | 공통·cases·str·batch | 확정 [안건 24, 레퍼런스 §11.1] |
 | 409 | `DRAFT_NOT_VERIFIED`, `DRAFT_LOCKED`, `DRAFT_SUPERSEDED`, `DRAFT_IN_PROGRESS`, `VERIFY_IN_PROGRESS` | str | 〔초안〕 STR 명세 |
+| 409 | `REPORT_PDF_NOT_READY` (`details.pdf_status` `PENDING`·`FAILED`) | str — 확정본 PDF가 아직 없음 | 확정 [계약서 Q7, 11/4 채영] |
 | 409 | `GENERATION_IN_PROGRESS` → 프론트엔 `DRAFT_IN_PROGRESS` | AI가 주는 409. 자동 재시도 안 함, `AiClient`가 409로 그대로 전달 | 확정 [안건 23, 10/29] |
 | 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases | 〔초안〕 CASES 명세 "신규 제안" |
 | 400·409 | `DATE_OUT_OF_RANGE`, `INVALID_RULE_PARAMS`, `DATASET_NOT_LOADED`, `NO_ACTIVE_RULES`, `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
@@ -162,7 +164,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | 케이스 생성 | `POST /api/v1/admin/batches/open-cases?date=` | cases | `OPEN_CASES` |
 | 상태 조회 | `GET /api/v1/admin/batches/{batch_run_id}`, 목록 `GET /api/v1/admin/batches` | shared | — |
 
-- 전부 **관리자가 API로 직접 실행**, 스케줄러 없음. 응답은 `batch_runs` 한 행. 적재는 `@Async` + 202, 룰 스캔·점수는 동기. [레퍼런스 §11] 〔초안: CASES 명세는 케이스 생성도 202 비동기 제안〕
+- 전부 **관리자가 API로 직접 실행**, 스케줄러 없음. 응답은 `batch_runs` 한 행. 적재·케이스 생성은 `@Async` + 202(`batch_run_id`로 상태 조회), 룰 스캔·점수는 동기. [레퍼런스 §11, 계약서 B4 — 11/4 준혁 제안·지윤 동의]
 - `batch_runs` 상태 기록은 본 작업과 **다른 트랜잭션**으로 커밋해요. 본 작업이 롤백돼도 "실패했다"는 기록이 남게. [SD 명세 §12 〔초안〕]
 - 앱이 배치 도중 죽으면 `RUNNING`이 남아요. 기동 시 오래된 `RUNNING`을 `FAILED`로 정리해요. [SD 명세 §12 〔초안〕, CASES 명세 §8.3]
 
@@ -181,7 +183,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 |---|---|---|
 | 경보 | `ALT-{배치일 YYYYMMDD}-{6자리}` | `ops.alert_no_seq` (V005) |
 | 케이스 | `CASE-{경보 기준 연도}-{6자리}` | `ops.case_no_seq` (V006) |
-| 초안 | `DRF-…` — 백엔드가 AI 호출 **전에** 시퀀스로 먼저 발급 [안건 23] | 〔초안: 형식·시퀀스는 STR 쪽에서 정함〕 |
+| 초안 | `DRF-{6자리}` (`DRF-000123`) ✅ [계약서 2.2, 11/4 채영] — 백엔드가 AI 호출 **전에** 시퀀스로 먼저 발급 [안건 23] | `ops.str_draft_id_seq` (V008 — #28 Draft, 머지 전) |
 
 - 시퀀스는 날짜별로 리셋하지 않아요. `MAX(id)+1` 방식은 금지(두 트랜잭션이 같은 번호를 받을 수 있음).
 - 〔미결: 확정 보고서 번호 `STR-{연도}-{6자리}` — 서식 안건 3·5-2〕

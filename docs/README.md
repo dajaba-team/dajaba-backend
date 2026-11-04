@@ -78,7 +78,7 @@
 
 자세한 건 `08_decisions.md` 미결 표에 있어요. 리뷰 기준을 정할 때 걸리는 것만 골랐어요.
 
-1. **승인·반려 API 경로** — `/approvals/{draft_id}/…`(계정·권한, STR 명세) vs `/approvals/{case_no}/…`(CASES 명세 제안). 채영·지윤
+1. ~~**승인·반려 API 경로** — `/approvals/{draft_id}/…`(계정·권한, STR 명세) vs `/approvals/{case_no}/…`(CASES 명세 제안). 채영·지윤~~ 정리됨 — 10/30 초안 기준, 11/4 경로 번호 `{draft_no}`(계약서 v0.2 2.2·7절)
 2. **목록 응답 모양** — 코드를 문서 모양 `{items, page, size, total}`으로 맞추는 중이에요([SCRUM-39](https://dajaba.atlassian.net/browse/SCRUM-39), 테스트 통과). `total_pages`는 없어지니 프론트에서 `ceil(total / size)`로 계산해 주세요. 진희
 3. **`batch_runs` 재실행 규칙** — 회의(안건 14·21)는 "적재·룰 스캔만 성공 후 재실행 금지, 점수·케이스 생성은 재실행 허용"인데 `V004` 인덱스는 네 배치 전부 막아요. SD 명세는 `SCORE_RETRY` 유형을 제안했는데 회의에서 없애기로 했어요. 준혁·진희
 4. **`transaction_id` 발급** — 레퍼런스·SD 명세는 "CSV 행 번호를 그대로", 안건 1·ML 규약은 "DB가 자동 발급 + `source_files`로 원본 행 추적". 최신인 후자를 따랐어요. 준혁

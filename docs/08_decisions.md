@@ -48,6 +48,7 @@
 | 11/2 | 거래 금액 `numeric(18,2)` → **`numeric(20,6)`** (V005_2). 원본 금액을 반올림하지 않음 | 실제 HI-Small에서 Bitcoin 소수 6자리 필드 294,217개 중 293,425개 값이 바뀌고 일부는 0.00이 됨. 정수부 최대 13자리라 14자리면 충분 | 안건 19, 준혁·준영 합의(ML 규약 하위 「B7 기준 및 후속 협의 사항」), SCRUM-97 |
 | 11/3 | 열람 기록(`AccessLogWriter`의 `view`·`strView`·`pdfDownload`·`export`)은 **바깥 조회 트랜잭션에 참여**(`MANDATORY`) — 그래서 열람 기록을 부르는 조회 유스케이스는 **readOnly를 쓰지 않음**. readOnly 안·트랜잭션 밖에서 부르면 바로 실패. 기록과 조회는 같이 성공·실패(본문을 돌려준 열람만 남음). 로그인 사용자 필수(`CurrentUser.require()`). 호출은 권한 검사 뒤·본문 읽기 전, 403·404는 기록 안 함. 케이스 상세는 `view(CASE)`(현재 초안 본문도 주면 `strView` 더), STR 상세는 제한 응답이어도 `strView`(미결 30 전제). `AccessLog`·`AccessLogRepository`는 `shared/audit` 밖에서 못 씀(ArchUnit, `AccessLog.create` package-private). 로그인 기록·`ai_call_logs`는 `REQUIRES_NEW` 그대로 | `REQUIRES_NEW`는 바깥 조회가 커넥션을 쥔 채 두 번째 커넥션을 잡아, Hikari 10개에서 상세 조회 10건이 동시에 오면 풀이 고갈돼 멈춤. 호출처가 0곳인 지금이 바꾸기 가장 쌈. 고르지 않은 안: 풀만 키움(2배는 그대로), 조회 뒤 기록(유스케이스를 둘로 나눠야 함), `afterCommit` 기록(그때도 첫 커넥션 반납 전) | 3주차 리뷰 리스크 6, SCRUM-93, 11/3 진희 |
 | 11/3 | `NOT_REPORTABLE` 반려 건 종결도 `close_reason`은 `FALSE_POSITIVE`·`DUPLICATE`·`NO_ACTION` 중 조사역이 고름. 반려 코드는 REJECT 이력(`case_history.reason_code`)으로 봄 — V006 CHECK 그대로, `close-with-draft`도 `close_reason`을 받음 | 종결 사유(왜 닫았나)와 반려 코드(승인자 판단)는 다른 질문이고 반려 코드는 이미 이력에 있음. 고르지 않은 안: 종결 사유에 `NOT_REPORTABLE` 추가(성격이 다른 값이 섞이고 같은 값을 두 번 적음) | #39 리뷰 1번, 11/3 지윤·채영, SCRUM-48 |
+| 11/4 | 백엔드 docs를 프론트 API 계약서 v0.2 기준으로 맞춤 — 경로 번호 `draft_no`, 비담당 STR 열람 `META_ONLY`(403 아님), S4 비담당 403·`REVISION_NOT_FOUND`(Q13, 11/4 채영), 버튼은 `available_actions`(STR 화면 포함 — Q16, 11/4 채영), 케이스 생성 배치 202 | 계약서에서 정해진 값인데 docs에 예전 규칙이 남아 있으면 화면과 백엔드가 다른 규칙을 보게 됨 | 계약서 7절, 슬랙 계약서 스레드 11/4 지윤·채영, SCRUM-21 |
 
 ## 2. 문서끼리 다른 곳 — 이 docs에서 고른 것
 
@@ -75,8 +76,8 @@
 
 | # | 무엇 | 지금 상태 | 누구 |
 |---|---|---|---|
-| 1 | 승인·반려 경로 `{draft_id}` vs `{case_no}` | 계정·권한·STR 명세는 draft_id, CASES 명세는 case_no 유지안 제안 | 채영·지윤 |
-| 2 | 초안 있는 종료 경로 `POST /cases/{case_no}/close-with-draft` | CASES·STR 명세 공동 제안, 확인 요청 | 진희·지윤 |
+| 1 | ~~승인·반려 경로 `{draft_id}` vs `{case_no}`~~ | 정리됨 — 10/30 초안 기준, 11/4 경로 번호 `{draft_no}`(계약서 v0.2 2.2·7절) | 채영·지윤 |
+| 2 | ~~초안 있는 종료 경로~~ | 정리됨 — 11/4 `POST /cases/{case_no}/close-with-draft` `{close_reason, comment, version}`(계약서 A6, 채영) | 진희·지윤 |
 | 3 | ~~목록 응답 모양~~ | 코드를 문서에 맞춤(§1 표). SCRUM-39 머지되면 끝 | 진희 |
 | 4 | `batch_runs` 재실행 인덱스 | `V004`는 네 배치 다 막음 → 적재·룰 스캔으로 좁히는 새 파일 필요. `RUNNING` 조건 추가, `PARTIAL` 상태, `metrics jsonb`도 SD 명세 제안 | 진희·준혁 |
 | 5 | ~~AI 재시도 대상~~ | 규약 v0.2 §6.2로 정리됨(§1 표). 레퍼런스 §8.5 문구만 고치면 됨 | 진희 |
