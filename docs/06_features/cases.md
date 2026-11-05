@@ -26,7 +26,7 @@
 | PENDING_APPROVAL → APPROVED | `approve` | APPROVER | 담당 ≠ 승인자, 초안 LOCKED 같은 트랜잭션 |
 | APPROVED → REPORTED | `report` 〔메서드는 API 12-2 구현 때 추가〕 | APPROVER | 승인 완료 건만. 제출 기록·Case REPORTED·이력 같은 트랜잭션(str 진행) |
 | PENDING_APPROVAL → REJECTED | `reject(code, comment)` | APPROVER | 코드·사유 필수 |
-| REJECTED → DRAFTED | `reopenDraft` | 담당 조사역 (str 진행) | `NEED_REVISION`만. 수정본·새 초안 저장과 같은 트랜잭션 |
+| REJECTED → DRAFTED | `reopenDraft` | 담당 조사역 (str 진행) | `NEED_REVISION`만. 수정본 저장(`TouchCaseForRevision`)·새 초안 저장(`AttachDraftToCase`)과 같은 트랜잭션 |
 | ESCALATED·DRAFTED → CLOSED | `close` | 담당 조사역 | 사유 필수. 초안 있으면 str 유스케이스가 SUPERSEDED와 같은 트랜잭션 |
 | REJECTED → CLOSED | `close` | 담당 조사역 (str 진행) | `NOT_REPORTABLE`만. 종결 사유는 아래 세 값 중 조사역이 고름, 반려 코드는 REJECT 이력에 이미 있음 |
 
@@ -76,6 +76,23 @@
 | 14 | `POST /admin/batches/open-cases?date=` | ADMIN |
 | 15 | `GET /cases/{case_no}/note-histories` | 조회 3역할 |
 
-**str에 주는 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`, `AttachDraftToCase`, `ReopenCaseDraft`, `SubmitCaseForApproval`, `ApproveCase`, `RejectCase`, `CloseCase`. Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
+**str에 주는 공개 기능 — 구현됨 (SCRUM-98)** 모두 `Propagation.MANDATORY`라 str 트랜잭션 안에서만 불러요(혼자 부르면 `IllegalTransactionStateException`).
+
+| 유스케이스 | 하는 일 | 검사 순서·오류 |
+|---|---|---|
+| `AttachDraftToCase.lock(caseId, expectedVersion)` | 초안 insert **전에** 케이스를 잠그고 붙일 수 있는지만 확인 (아무것도 안 바꿈) | 케이스 잠금 조회 404 `CASE_NOT_FOUND` → version 409 `CONCURRENT_UPDATE` → 담당자 403 `NOT_ASSIGNEE` → 상태 409 `INVALID_CASE_TRANSITION`. 허용: ESCALATED, DRAFTED(재생성), REJECTED+NEED_REVISION |
+| `AttachDraftToCase.execute(caseId, draftId, expectedVersion)` | 초안 insert **뒤에** 연결 → DRAFTED, 반려 코드 지움, `ATTACH_DRAFT` 이력 | `lock`과 같은 검사를 한 번 더 |
+| `TouchCaseForRevision.execute(caseId, draftId, expectedVersion)` | 수정본 저장 전에 잠그고 확인한 뒤 케이스 version +1. **DRAFTED**면 version만 +1(상태·이력 그대로), **보완 반려(REJECTED+NEED_REVISION)**면 DRAFTED로 되돌리고 반려 코드 지움 + `REOPEN_DRAFT` 이력 (version은 상태 변경으로 +1, 두 번 안 올림) | 404 → version 409 → 담당자 403 → DRAFTED 또는 REJECTED+NEED_REVISION이고 `current_draft_id == draftId`(아니면 409 `INVALID_CASE_TRANSITION`, `details.action = REVISE_DRAFT`). 동시 승인 요청과 version으로 부딪히게 해요(NFR-APR-02, 미결 20). str은 상태를 볼 수 없어서 수정본 저장 때는 상태와 상관없이 이것 하나만 불러요 [#43 리뷰 2번, 11/5 채영 확인 A안] |
+
+- **str 호출 순서: `lock` → 초안 insert → `execute`** (수정본은 `TouchCaseForRevision`을 트랜잭션 맨 앞에서). `str_drafts` insert는 FK 때문에 `cases` 행에 KEY SHARE를 잡고, `findForUpdate`의 `FOR UPDATE`는 그것과 충돌해요. 초안을 먼저 넣고 잠그면 같은 케이스에 동시에 온 두 저장이 서로를 기다리다 교착(40P01)이 돼요. 맨 앞에서 잠그면 뒤 요청은 `lock`에서 기다렸다가 version 검사에서 409가 돼요. [#43 리뷰 1번]
+- `draftId`는 같은 케이스의 초안이어야 해요(V008 `cases_current_draft_fk`). 이전 초안 SUPERSEDED는 str 몫이에요(`str_drafts_one_active_uq`).
+- str은 `cases.domain`·`cases.infrastructure`가 아니라 이 유스케이스만 불러요. 담당자·상태 확인도 잠근 뒤 여기서 해요(str은 볼 방법이 없음). [#43 리뷰 2번]
+
+**저장 매핑 (SCRUM-98)**
+- `Case`는 이력을 컬렉션으로 들고 있지 않아요. 업무 메서드가 만든 이력은 `getPendingHistories()`에 쌓이고, 유스케이스가 `caseRepository.save(c)` 뒤 `caseHistoryRepository.saveAll(c.takePendingHistories())`로 같은 트랜잭션에서 넣어요.
+- JPQL에서 `CASE`가 예약어라 엔티티 이름은 `InvestigationCase`예요(`select c from InvestigationCase c`).
+- `case_history.case_version_before`는 **그 변경 직전**의 `cases.version`이에요. `@Version`은 flush 때 올라가서, 한 트랜잭션에서 전이가 두 번 일어나면 두 행에 같은 번호가 남아요.
+
+**아직 남은 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`, `SubmitCaseForApproval`, `ApproveCase`, `RejectCase`, `CloseCase`. Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
 
 **〔확인 필요〕** 상세 화면에 "현재 초안"을 합치는 위치(cases → str 의존 금지라 상위 조합 계층 필요 — 권장은 str 조회 유스케이스가 조합. 같은 시점 보장은 한 SQL·REPEATABLE READ·조합 후 버전 재확인 중 하나로, 기본 READ COMMITTED에선 한 트랜잭션만으로는 부족 — 노션 미결 17번), 메모·요약을 편집할 수 있는 상태 범위, 화면 집계 규칙(유입은 받은 금액, 유출은 보낸 금액, 자기계좌 제외 — STR facts와 같은 규칙인지). AI facts는 **같은 법인의 다른 계좌**와 오간 거래를 `internal`로 따로 빼서 입출금에 넣지 않아요(dajaba-AI `docs/str/04_facts.md`). 그래서 같은 경보라도 화면과 STR 숫자가 다를 수 있어요 — 각 숫자가 무엇을 포함하는지 이름·설명을 정하고, 같은 법인 계좌 간 이체·복수 통화 사례로 같이 확인해요.
