@@ -20,9 +20,11 @@
 | `AuditedEntity` | 직접 상속하지 않음 — 아래 `BaseEntity`·`AssignedIdEntity`의 부모 [SCRUM-68] | `created_at`, `created_by`, `updated_at`, `updated_by` — 자동 채움 (id 없음) |
 | `BaseEntity` | 사람이 고치는 테이블 (`cases`, `users`, `rules` …) — `AuditedEntity` + DB 자동 발급(IDENTITY) `id` | `id`, `created_at`, `created_by`, `updated_at`, `updated_by` — 자동 채움 |
 | `AssignedIdEntity` | 시퀀스로 **미리 받은 번호**를 id로 쓰는 테이블 (`str_drafts`, `str_draft_requests`) — `AuditedEntity` + 생성자로 받는 `id`. 새 행 판단은 `Persistable` [SCRUM-68] | `id`, `created_at`, `created_by`, `updated_at`, `updated_by` — 감사 4칸 자동 채움 |
-| `CreatedOnlyEntity` | 사람이 추가만 하는 테이블 (`case_history`, `str_revisions`, `approvals` …) | `id`, `created_at`, `created_by` |
+| `CreatedOnlyEntity` | 사람이 추가만 하는 테이블 (`str_revisions`, `approvals` …). `case_history`는 예외 — 아래 | `id`, `created_at`, `created_by` |
 | (상속 없음, `@Immutable`) | 원천 4개 | 원천 컬럼 그대로 |
 | (상속 없음) | 운영 로그 (`ai_call_logs`, `batch_runs`) — `created_by` 없이 `created_at`만 [레퍼런스 §3.4] | 테이블 컬럼 그대로 |
+
+`case_history`는 추가만 하지만 `CreatedOnlyEntity`를 상속하지 않아요. `created_by`가 로그인한 사람이 아니라 업무상 행위자(승인자, 생성 배치는 SYSTEM)라서 업무 메서드가 받은 값을 그대로 넣어요(SCRUM-98).
 
 - **`AssignedIdEntity`** — id를 직접 넣은 엔티티로 `save()`를 부르면 Spring Data가 "이미 있는 행"으로 보고 `merge`(SELECT 한 번 더, 같은 id면 조용히 덮어씀)로 가요. 그래서 `Persistable.isNew()`로 "만들고 아직 저장 안 함 = 새 행"을 알려 줘요 → INSERT 한 번, 같은 id를 또 새로 만들어 저장하면 PK 위반. 생성자에 null을 넣으면 `IllegalArgumentException`. 낙관적 락이 필요한 테이블(`str_drafts`)은 하위 엔티티에 `@Version`을 따로 둬요.
 - id 컬럼 이름이 `id`가 아니면 하위 엔티티에 `@AttributeOverride`를 붙여요:
@@ -77,6 +79,7 @@
 | 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases | 〔초안〕 CASES 명세 "신규 제안" |
 | 400·409 | `DATE_OUT_OF_RANGE`, `INVALID_RULE_PARAMS`, `DATASET_NOT_LOADED`, `NO_ACTIVE_RULES`, `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
 | 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |
+| 409 | `CASE_ALREADY_OPENED` | detection `MarkCaseOpened` — 이미 케이스가 생긴 경보. 케이스 생성 트랜잭션째 롤백 | 확정 [SCRUM-108] |
 | 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 거부), `AI_TIMEOUT`, `AI_BAD_RESPONSE` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정 |
 
 AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지고 `LLM_UNAVAILABLE`로 합쳐졌어요. `VERIFY_UNAVAILABLE`은 에러가 아니라 **검증 결과의 `status` 값**(200 응답)이라 검증 결과 한 줄로 저장해요 [§5.3].

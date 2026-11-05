@@ -30,8 +30,16 @@ public enum CaseStatus {
             REJECTED, Set.of(DRAFTED, CLOSED),
             CLOSED, Set.of());
 
+    // 상태가 그대로인 동작이 허용되는 상태. 전이 표(NEXT)와 같은 곳에 둔다 (3주차 리뷰 질문 2).
+    private static final Set<CaseStatus> REASSIGNABLE = Set.of(REVIEWING, ESCALATED, DRAFTED, REJECTED);
+
     public boolean isTerminal() {
         return NEXT.get(this).isEmpty();
+    }
+
+    /** ADMIN 재배정이 가능한 상태 (API-04). 상태는 바뀌지 않는다. */
+    public boolean isReassignable() {
+        return REASSIGNABLE.contains(this);
     }
 
     /**

@@ -9,13 +9,56 @@ import java.util.Map;
 public class InvalidCaseTransitionException extends DomainException {
 
     public InvalidCaseTransitionException(CaseStatus from, CaseStatus to, RejectionReasonCode rejectionCode) {
-        super("허용되지 않는 케이스 상태 변경입니다: " + from + " → " + to, details(from, to, rejectionCode));
+        super("허용되지 않는 케이스 상태 변경입니다: " + from + " → " + to, details(from, to, rejectionCode, null));
+    }
+
+    private InvalidCaseTransitionException(String message, Map<String, Object> details) {
+        super(message, details);
+    }
+
+    /**
+     * 상태가 그대로인 동작(재배정 등)이 지금 상태에서 안 될 때. "OPEN → OPEN" 같은 메시지 대신 동작 이름을 쓴다.
+     * details: from_status, action (to_status 없음).
+     */
+    public static InvalidCaseTransitionException notAllowedIn(CaseStatus status, CaseHistoryAction action,
+                                                              RejectionReasonCode rejectionCode) {
+        return new InvalidCaseTransitionException(
+                "지금 상태(" + status + ")에서는 할 수 없는 작업입니다: " + action,
+                details(status, null, rejectionCode, action));
+    }
+
+    /**
+     * 수정본 저장이 지금 케이스에서 안 될 때 — DRAFTED·보완 반려(REJECTED+NEED_REVISION)가 아니거나,
+     * 요청한 초안이 케이스의 현재 초안이 아니다.
+     * details: from_status, action=REVISE_DRAFT, draft_id, current_draft_id(있으면).
+     */
+    public static InvalidCaseTransitionException revisionNotAllowed(CaseStatus status, RejectionReasonCode rejectionCode,
+                                                                    Long draftId, Long currentDraftId) {
+        Map<String, Object> details = new HashMap<>(details(status, null, rejectionCode, null));
+        details.put("action", "REVISE_DRAFT");
+        if (draftId != null) {
+            details.put("draft_id", draftId);
+        }
+        if (currentDraftId != null) {
+            details.put("current_draft_id", currentDraftId);
+        }
+        boolean revisableStatus = status == CaseStatus.DRAFTED
+                || (status == CaseStatus.REJECTED && rejectionCode == RejectionReasonCode.NEED_REVISION);
+        String reason = revisableStatus
+                ? "케이스의 현재 초안이 아닙니다: " + draftId
+                : "지금 상태(" + status + (rejectionCode != null ? "+" + rejectionCode : "")
+                  + ")에서는 수정본을 저장할 수 없습니다";
+        return new InvalidCaseTransitionException(reason, Map.copyOf(details));
     }
 
     // Map.copyOf 는 null 값을 못 넣는다. 값이 있는 것만 담는다(반려 코드는 REJECTED 일 때만 있음).
-    private static Map<String, Object> details(CaseStatus from, CaseStatus to, RejectionReasonCode rejectionCode) {
+    private static Map<String, Object> details(CaseStatus from, CaseStatus to, RejectionReasonCode rejectionCode,
+                                               CaseHistoryAction action) {
         Map<String, Object> details = new HashMap<>();
         details.put("from_status", from);
+        if (action != null) {
+            details.put("action", action);
+        }
         if (to != null) {
             details.put("to_status", to);
         }
