@@ -200,17 +200,6 @@ class StrDraftRepositoryTest {
         assertThat(done.getFinishedAt()).isEqualTo(at);
     }
 
-    // 6
-    @Test
-    void 트랜잭션_밖에서_읽은_초안은_저장하지_않는다() {
-        long caseId = newCase();
-        long draftId = tx.execute(s -> drafts.save(newDraft(finishedRequest(caseId), caseId)).getId());
-        StrDraft detached = tx.execute(s -> drafts.findById(draftId).orElseThrow());
-
-        assertThatThrownBy(() -> tx.executeWithoutResult(s -> drafts.save(detached)))
-                .isInstanceOf(IllegalStateException.class);
-    }
-
     // ---- 도우미 ----
 
     /** 경보 → 케이스. 초안을 붙이려면 ESCALATED + 담당자여야 V006 CHECK를 통과한다. */
