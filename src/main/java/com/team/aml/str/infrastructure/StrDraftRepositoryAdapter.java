@@ -29,9 +29,12 @@ public class StrDraftRepositoryAdapter implements StrDraftRepository {
     @Override
     public StrDraft save(StrDraft draft) {
         if (draft.isNew()) {
+            // 재생성: 같은 트랜잭션에서 예전 초안을 supersede() 했으면 그 UPDATE 를 먼저 내보낸다.
+            // persist 는 수정본 1번(IDENTITY) 때문에 INSERT 를 바로 내보내므로, flush 없이는
+            // 새 초안 INSERT 가 SUPERSEDED UPDATE 보다 먼저 나가 str_drafts_one_active_uq(케이스당 ACTIVE 하나)에 걸린다 (#53 리뷰)
+            em.flush();
             em.persist(draft);                 // 수정본 1번도 같이 (cascade PERSIST)
         } else if (!em.contains(draft)) {
-            // 화면 요청마다 읽어서 고치고 같은 트랜잭션에서 저장한다. 떨어진 엔티티를 merge 하지 않는다.
             throw new IllegalStateException("읽어 온 트랜잭션 밖의 초안은 저장하지 않는다: " + draft.getId());
         }
         em.flush();                            // ①·② INSERT — 수정본 id 가 생긴다

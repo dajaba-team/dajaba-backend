@@ -24,6 +24,10 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import java.sql.SQLException;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import java.time.Instant;
 import java.util.Arrays;
@@ -38,6 +42,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * StrDraft·StrRevision 매핑을 실제 PostgreSQL(V001~V009)에서 확인한다.
  * 저장 → 영속성 컨텍스트를 비운 새 트랜잭션에서 다시 읽기 → 값 비교. 로그인이 없어 감사 칸은 SYSTEM(1).
+ * 앱은 운영과 같은 app_backend 계정으로 붙는다 — V008 의 revoke(수정본 UPDATE·초안 DELETE 금지)가 테스트에도 걸린다 (#53 리뷰).
  */
 @Testcontainers
 @SpringBootTest
@@ -47,9 +52,9 @@ class StrDraftRepositoryTest {
     private static final AtomicInteger SEQ = new AtomicInteger();
     private static final Long INVESTIGATOR_REVISER = 1L;      // 수정자. users 에 있는 번호여야 해서 SYSTEM 을 쓴다
     private static final Instant PRODUCED_AT = Instant.parse("2026-11-03T01:10:00Z");
+    private static final String INSUFFICIENT_PRIVILEGE = "42501";
 
     @Container
-    @ServiceConnection
     static PostgreSQLContainer<?> db = new PostgreSQLContainer<>("postgres:16")
             .withDatabaseName("aml").withUsername("postgres").withPassword("postgres")
             .withEnv("APP_MIGRATE_PASSWORD", "migrate")
@@ -57,6 +62,17 @@ class StrDraftRepositoryTest {
             .withEnv("APP_AI_PASSWORD", "ai")
             .withCopyFileToContainer(MountableFile.forHostPath("db/init/01_roles.sh", 0755),
                     "/docker-entrypoint-initdb.d/01_roles.sh");
+
+    // 앱(JPA·JdbcTemplate)은 app_backend, Flyway(DDL)는 app_migrate — application.yml 과 같은 계정 구성
+    @DynamicPropertySource
+    static void accounts(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", db::getJdbcUrl);
+        registry.add("spring.datasource.username", () -> "app_backend");
+        registry.add("spring.datasource.password", () -> "backend");
+        registry.add("spring.flyway.url", db::getJdbcUrl);
+        registry.add("spring.flyway.user", () -> "app_migrate");
+        registry.add("spring.flyway.password", () -> "migrate");
+    }
 
     @Autowired StrDraftRepository drafts;
     @Autowired StrDraftRequestRepository requests;
@@ -173,6 +189,45 @@ class StrDraftRepositoryTest {
                 .isEqualTo("SUPERSEDED");
     }
 
+    // 5
+    @Test
+    void 재생성하면_한_트랜잭션에서_예전_초안은_SUPERSEDED_새_초안이_사용_중이_된다() {
+        long caseId = newCase();
+        long oldId = tx.execute(s -> drafts.save(newDraft(finishedRequest(caseId), caseId)).getId());
+        long newId = finishedRequest(caseId);              // 재생성 요청도 끝난 상태로
+
+        // SaveStrDraft 의 재생성 흐름: 예전 초안 대체 → 새 초안 저장, 한 트랜잭션
+        tx.executeWithoutResult(s -> {
+            drafts.findActiveByCaseId(caseId).orElseThrow().supersede();
+            drafts.save(newDraft(newId, caseId));          // save 의 flush 가 없으면 여기서 str_drafts_one_active_uq 위반
+        });
+
+        Optional<Long> activeId = tx.execute(s -> drafts.findActiveByCaseId(caseId).map(StrDraft::getId));
+        assertThat(activeId).contains(newId);
+        assertThat(jdbc.queryForObject("select status from ops.str_drafts where id=?", String.class, oldId))
+                .isEqualTo("SUPERSEDED");
+        assertThat(jdbc.queryForObject("select count(*) from ops.str_drafts where case_id=? and status='ACTIVE'",
+                Integer.class, caseId)).isEqualTo(1);
+    }
+
+    // 6
+    @Test
+    void 앱_계정은_수정본을_고치거나_지울_수_없고_초안도_지울_수_없다() {
+        assertThat(jdbc.queryForObject("select current_user", String.class)).isEqualTo("app_backend");
+        long caseId = newCase();
+        long draftId = tx.execute(s -> drafts.save(newDraft(finishedRequest(caseId), caseId)).getId());
+
+        assertThat(sqlState(catchThrowable(() -> jdbc.update(
+                "update ops.str_revisions set narrative_after = '[]' where draft_id=?", draftId))))
+                .isEqualTo(INSUFFICIENT_PRIVILEGE);
+        assertThat(sqlState(catchThrowable(() -> jdbc.update(
+                "delete from ops.str_revisions where draft_id=?", draftId))))
+                .isEqualTo(INSUFFICIENT_PRIVILEGE);
+        assertThat(sqlState(catchThrowable(() -> jdbc.update(
+                "delete from ops.str_drafts where id=?", draftId))))
+                .isEqualTo(INSUFFICIENT_PRIVILEGE);
+    }
+
     // ---- 도우미 ----
 
     /** 경보 → 케이스. 초안을 붙이려면 ESCALATED + 담당자여야 V006 CHECK를 통과한다. */
@@ -218,5 +273,15 @@ class StrDraftRepositoryTest {
         return Arrays.stream(StrSection.values())
                 .map(s -> new NarrativeSection(s, "AI " + s + " 문장", List.of(5_120_000L + s.ordinal(), 5_121_000L)))
                 .toList();
+    }
+
+    /** 예외 사슬에서 SQLSTATE 를 꺼낸다. 스프링이 42501 을 어떤 예외로 바꾸든 상관없이 DB 코드로 확인. */
+    private static String sqlState(Throwable thrown) {
+        for (Throwable t = thrown; t != null; t = t.getCause()) {
+            if (t instanceof SQLException e) {
+                return e.getSQLState();
+            }
+        }
+        return null;
     }
 }
