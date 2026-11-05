@@ -20,7 +20,7 @@ import java.util.List;
 
 /**
  * IBM HI-Small 적재 (SD 명세 §3). start()가 RUNNING을 커밋하고, run()이 적재 후 결과를 기록한다.
- * 컨트롤러는 start() 뒤 run()을 비동기로 부르고 202를 돌려준다 (SCRUM-70).
+ * RequestIbmDatasetLoad가 start() 뒤 run()을 비동기로 부르고 컨트롤러가 202를 돌려준다 (SCRUM-70).
  */
 @Service
 public class LoadIbmDataset {
