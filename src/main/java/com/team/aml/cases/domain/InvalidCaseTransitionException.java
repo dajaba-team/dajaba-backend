@@ -28,7 +28,8 @@ public class InvalidCaseTransitionException extends DomainException {
     }
 
     /**
-     * 수정본 저장이 지금 케이스에서 안 될 때 — DRAFTED 가 아니거나, 요청한 초안이 케이스의 현재 초안이 아니다.
+     * 수정본 저장이 지금 케이스에서 안 될 때 — DRAFTED·보완 반려(REJECTED+NEED_REVISION)가 아니거나,
+     * 요청한 초안이 케이스의 현재 초안이 아니다.
      * details: from_status, action=REVISE_DRAFT, draft_id, current_draft_id(있으면).
      */
     public static InvalidCaseTransitionException revisionNotAllowed(CaseStatus status, RejectionReasonCode rejectionCode,
@@ -41,9 +42,12 @@ public class InvalidCaseTransitionException extends DomainException {
         if (currentDraftId != null) {
             details.put("current_draft_id", currentDraftId);
         }
-        String reason = status != CaseStatus.DRAFTED
-                ? "지금 상태(" + status + ")에서는 수정본을 저장할 수 없습니다"
-                : "케이스의 현재 초안이 아닙니다: " + draftId;
+        boolean revisableStatus = status == CaseStatus.DRAFTED
+                || (status == CaseStatus.REJECTED && rejectionCode == RejectionReasonCode.NEED_REVISION);
+        String reason = revisableStatus
+                ? "케이스의 현재 초안이 아닙니다: " + draftId
+                : "지금 상태(" + status + (rejectionCode != null ? "+" + rejectionCode : "")
+                  + ")에서는 수정본을 저장할 수 없습니다";
         return new InvalidCaseTransitionException(reason, Map.copyOf(details));
     }
 

@@ -132,19 +132,30 @@ public class Case extends BaseEntity {
     }
 
     /**
-     * 지금 초안의 수정본을 저장할 수 있는지 본다(아무것도 바꾸지 않음). DRAFTED 이고 현재 초안이 draftId 일 때만.
-     * 보완 반려(REJECTED+NEED_REVISION) 뒤 첫 수정은 reopenDraft 몫이다.
+     * 지금 초안의 수정본을 저장할 수 있는지 본다(아무것도 바꾸지 않음).
+     * DRAFTED 또는 보완 반려(REJECTED+NEED_REVISION)이고, 현재 초안이 draftId 일 때만.
+     * 보완 반려 상태면 부르는 쪽(TouchCaseForRevision)이 이어서 reopenDraft 로 DRAFTED 로 되돌린다 (#43, 채영 확인 A안).
      */
     public void requireRevisable(Long draftId) {
-        if (status != CaseStatus.DRAFTED || !Objects.equals(currentDraftId, draftId)) {
+        if (!isRevisableStatus() || !Objects.equals(currentDraftId, draftId)) {
             throw InvalidCaseTransitionException.revisionNotAllowed(status, rejectionReasonCode, draftId, currentDraftId);
         }
+    }
+
+    /** 수정본 저장이 가능한 상태인가 — DRAFTED, 또는 보완 반려(REJECTED+NEED_REVISION). */
+    private boolean isRevisableStatus() {
+        return status == CaseStatus.DRAFTED || isRejectedForRevision();
+    }
+
+    /** 보완 반려(REJECTED+NEED_REVISION) 상태인가. */
+    public boolean isRejectedForRevision() {
+        return status == CaseStatus.REJECTED && rejectionReasonCode == RejectionReasonCode.NEED_REVISION;
     }
 
     /** 보완 반려 뒤 같은 초안의 수정본 저장 → DRAFTED. REJECTED+NEED_REVISION 에서만. */
     public void reopenDraft(Long actorId) {
         // ESCALATED·DRAFTED → DRAFTED 도 enum 상으론 허용이라 여기서 한 번 더 막는다
-        if (status != CaseStatus.REJECTED || rejectionReasonCode != RejectionReasonCode.NEED_REVISION) {
+        if (!isRejectedForRevision()) {
             throw new InvalidCaseTransitionException(status, CaseStatus.DRAFTED, rejectionReasonCode);
         }
         moveTo(CaseStatus.DRAFTED, CaseHistoryAction.REOPEN_DRAFT, null, null, actorId);

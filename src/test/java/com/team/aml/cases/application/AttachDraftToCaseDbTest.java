@@ -33,6 +33,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -380,14 +381,76 @@ class AttachDraftToCaseDbTest {
     }
 
     @Test
-    void 실패_DRAFTED가_아니면_409_보완_반려_뒤_첫_수정은_ReopenCaseDraft_몫() {
+    void 정상_보완_반려_뒤_첫_수정본이면_DRAFTED로_돌아가고_반려_코드를_지우고_REOPEN_DRAFT_이력_version_1_증가() {
+        // #43 리뷰 2번, 채영 확인 A안: str 은 상태를 모르므로 수정본 저장 때 이것 하나만 부른다
         Case c = prepare(CaseStatus.REJECTED);   // NEED_REVISION
+        int historyCount = histories.findByCaseIdOrderByIdAsc(c.getId()).size();
         loginAs(inv);
 
-        assertThatThrownBy(() -> inTx(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion())))
+        inTx(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion()));
+
+        Case after = cases.findById(c.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.DRAFTED);
+        assertThat(after.getRejectionReasonCode()).isNull();
+        assertThat(after.getCurrentDraftId()).isEqualTo(c.getCurrentDraftId());
+        assertThat(after.getVersion()).isEqualTo(c.getVersion() + 1);   // 상태 변경으로 한 번만 오른다(+2 아님)
+
+        List<CaseHistory> rows = histories.findByCaseIdOrderByIdAsc(c.getId());
+        assertThat(rows).hasSize(historyCount + 1);
+        CaseHistory last = rows.get(rows.size() - 1);
+        assertThat(last.getAction()).isEqualTo(CaseHistoryAction.REOPEN_DRAFT);
+        assertThat(last.getFromStatus()).isEqualTo(CaseStatus.REJECTED);
+        assertThat(last.getToStatus()).isEqualTo(CaseStatus.DRAFTED);
+    }
+
+    @Test
+    void 정상_보완_반려에서_되돌린_뒤_두_번째_수정본은_version만_오른다() {
+        Case c = prepare(CaseStatus.REJECTED);   // NEED_REVISION
+        loginAs(inv);
+        inTx(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion()));
+        long version = cases.findById(c.getId()).orElseThrow().getVersion();
+        int historyCount = histories.findByCaseIdOrderByIdAsc(c.getId()).size();
+
+        inTx(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), version));
+
+        Case after = cases.findById(c.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.DRAFTED);
+        assertThat(after.getVersion()).isEqualTo(version + 1);
+        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId())).hasSize(historyCount);
+    }
+
+    @Test
+    void 실패_보고_대상_아님_반려나_승인_대기면_409이고_아무것도_안_바뀐다() {
+        Case notReportable = prepare(CaseStatus.REJECTED, RejectionReasonCode.NOT_REPORTABLE);
+        Case pending = prepare(CaseStatus.PENDING_APPROVAL);
+        loginAs(inv);
+
+        for (Case c : List.of(notReportable, pending)) {
+            int historyCount = histories.findByCaseIdOrderByIdAsc(c.getId()).size();
+            assertThatThrownBy(() -> inTx(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion())))
+                    .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
+                            e -> assertThat(e.details()).containsEntry("action", "REVISE_DRAFT"));
+            Case after = cases.findById(c.getId()).orElseThrow();
+            assertThat(after.getStatus()).isEqualTo(c.getStatus());
+            assertThat(after.getRejectionReasonCode()).isEqualTo(c.getRejectionReasonCode());
+            assertThat(after.getVersion()).isEqualTo(c.getVersion());
+            assertThat(histories.findByCaseIdOrderByIdAsc(c.getId())).hasSize(historyCount);
+        }
+    }
+
+    @Test
+    void 실패_보완_반려라도_현재_초안이_아니면_409이고_반려_상태_그대로() {
+        Case c = prepare(CaseStatus.REJECTED);   // NEED_REVISION
+        long other = newDraft(c.getId());        // 같은 케이스의 다른 초안(현재 초안 아님)
+        loginAs(inv);
+
+        assertThatThrownBy(() -> inTx(() -> touchForRevision.execute(c.getId(), other, c.getVersion())))
                 .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
-                        e -> assertThat(e.details()).containsEntry("action", "REVISE_DRAFT"));
-        assertThat(cases.findById(c.getId()).orElseThrow().getVersion()).isEqualTo(c.getVersion());
+                        e -> assertThat(e.details()).containsEntry("current_draft_id", c.getCurrentDraftId()));
+        Case after = cases.findById(c.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.REJECTED);
+        assertThat(after.getRejectionReasonCode()).isEqualTo(RejectionReasonCode.NEED_REVISION);
+        assertThat(after.getVersion()).isEqualTo(c.getVersion());
     }
 
     @Test
@@ -440,7 +503,8 @@ class AttachDraftToCaseDbTest {
         Long id = tx().execute(s -> {
             Case c = Case.open("CASE-2022-%06d".formatted(SEQ.incrementAndGet()), alertId, "010_A", null, SYSTEM);
             if (target != CaseStatus.OPEN) c.assign(inv, inv);
-            if (target == CaseStatus.ESCALATED || target == CaseStatus.DRAFTED || target == CaseStatus.REJECTED) {
+            if (target == CaseStatus.ESCALATED || target == CaseStatus.DRAFTED || target == CaseStatus.REJECTED
+                    || target == CaseStatus.PENDING_APPROVAL) {
                 c.escalate(inv, "STR 초안 작성 필요");
             }
             Case saved = cases.save(c);
@@ -448,13 +512,15 @@ class AttachDraftToCaseDbTest {
             return saved.getId();
         });
         // 초안이 있어야 하는 상태는 케이스 id 가 생긴 뒤 진짜 초안을 만들어 붙인다 (V008 cases_current_draft_fk).
-        if (target == CaseStatus.DRAFTED || target == CaseStatus.REJECTED) {
+        if (target == CaseStatus.DRAFTED || target == CaseStatus.REJECTED || target == CaseStatus.PENDING_APPROVAL) {
             long draftId = newDraft(id);
             tx().executeWithoutResult(s -> {
                 Case c = cases.findById(id).orElseThrow();
                 c.attachDraft(draftId, inv);
-                if (target == CaseStatus.REJECTED) {
+                if (target == CaseStatus.REJECTED || target == CaseStatus.PENDING_APPROVAL) {
                     c.submitForApproval(inv);
+                }
+                if (target == CaseStatus.REJECTED) {
                     c.reject(apr, rejection, "보완 필요");
                 }
                 Case saved = cases.save(c);

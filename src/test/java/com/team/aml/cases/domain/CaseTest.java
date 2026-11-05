@@ -348,6 +348,31 @@ class CaseTest {
                 .isInstanceOf(InvalidCaseTransitionException.class);
     }
 
+    // ── 수정본 저장 가능 여부 (TouchCaseForRevision, #43 A안) ──────
+
+    @Test
+    void 수정본은_DRAFTED와_보완_반려에서_현재_초안일_때만_저장할_수_있다() {
+        drafted().requireRevisable(DRAFT_ID);
+        Case r = rejected(NEED_REVISION);
+        r.requireRevisable(DRAFT_ID);
+
+        assertThat(r.isRejectedForRevision()).isTrue();
+        assertThat(drafted().isRejectedForRevision()).isFalse();
+        assertThat(r.getStatus()).isEqualTo(REJECTED);   // 확인만 하고 바꾸지 않는다
+    }
+
+    @Test
+    void 보고_대상_아님_반려_승인_대기_다른_초안이면_수정본_저장은_409_REVISE_DRAFT() {
+        for (Case c : List.of(rejected(NOT_REPORTABLE), pending(), escalated())) {
+            assertThatThrownBy(() -> c.requireRevisable(DRAFT_ID))
+                    .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
+                            e -> assertThat(e.details()).containsEntry("action", "REVISE_DRAFT"));
+        }
+        assertThatThrownBy(() -> rejected(NEED_REVISION).requireRevisable(NEW_DRAFT_ID))
+                .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
+                        e -> assertThat(e.details()).containsEntry("current_draft_id", DRAFT_ID));
+    }
+
     @Test
     void 보완_반려는_새_초안으로_재생성해도_DRAFTED가_되고_반려코드가_지워진다() {
         Case c = rejected(NEED_REVISION);
