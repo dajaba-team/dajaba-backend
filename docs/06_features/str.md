@@ -38,16 +38,20 @@
 | # | API | 누가 |
 |---|---|---|
 | 1 | `POST /cases/{case_no}/str-drafts` (최대 90초) | 담당 |
-| 2 | `GET /str-drafts/{draft_no}` | 로그인 사용자 (열람 기록) |
-| 3 | `PUT /str-drafts/{draft_no}/revisions` (고친 섹션만) | 담당 |
-| 4 | `GET /str-drafts/{draft_no}/revisions` (`?revision_no=` 전·후 본문) | 로그인 사용자 |
+| 2 | `GET /str-drafts/{draft_no}` | 담당·승인자는 본문, 관리자·비담당 조사역은 상태·날짜만(`META_ONLY`). 열람 기록 `strView` |
+| 3 | `PUT /str-drafts/{draft_no}/revisions` `{case_version, sections:[{section, text}]}` (고친 섹션만) | 담당 |
+| 4 | `GET /str-drafts/{draft_no}/revisions` (`?revision_no=` 전·후 본문) | 담당·승인자. 그 밖은 403 `NOT_ASSIGNEE`, 없는 번호는 404 `REVISION_NOT_FOUND` |
 | 5 | `POST /str-drafts/{draft_no}/verify` (body `{}`) | 담당 |
-| 6 | `POST /str-drafts/{draft_no}/submit` `{case_version, verification_id}` | 담당 |
-| 7 | `POST /approvals/{draft_no}/approve` | APPROVER |
-| 8 | `POST /approvals/{draft_no}/reject` `{case_version, reason_code, comment}` | APPROVER |
-| 9 | `POST /cases/{case_no}/close-with-draft` (컨트롤러·유스케이스는 str) | 담당 |
+| 6 | `POST /str-drafts/{draft_no}/submit` `{case_version, verification_id, suspicion_types, suspicion_level_branch}` | 담당, `DRAFTED`일 때만 |
+| 7 | `POST /approvals/{draft_no}/approve` `{case_version, suspicion_level_hq}` | APPROVER (담당 본인 제외) |
+| 8 | `POST /approvals/{draft_no}/reject` `{case_version, reason_code, comment}` | APPROVER (담당 본인 제외) |
+| 9 | `POST /cases/{case_no}/close-with-draft` `{close_reason, comment, version}` (컨트롤러·유스케이스는 str) | 담당 |
+| 10 | `POST /approvals/{draft_no}/report` `{case_version}` — 모의 제출 (P4) | APPROVER, `APPROVED`일 때 |
+| 11 | `GET /str-drafts/{draft_no}/report/preview.pdf` — 제출 전 미리보기 (S7, 저장 안 함) | 담당·승인자, `APPROVED`일 때 |
+| 12 | `GET /str-drafts/{draft_no}/report.pdf` — 확정본 (S8). 아직이면 409 `REPORT_PDF_NOT_READY` | 담당·승인자, `REPORTED`일 때. 열람 기록 `pdfDownload` |
+| 13 | `POST /approvals/{draft_no}/report/pdf` — 다시 만들기 (P5) → 202 `{pdf_status}` | APPROVER, PDF `FAILED`일 때만 |
 
-**〔확인 필요〕** 승인·반려 경로 `{draft_id}` vs `{case_no}`, `close-with-draft` 경로 확정(진희·지윤), 조사역이 바뀐 케이스의 승인자 제한(논의 중), `reasons` 형식(안건 3은 10/28 확정 — 관측·기준·기여 분리, STR은 관측값만).
+경로 번호는 `draft_no`(`DRF-000312`) [계약서 2.2, 11/3], `close-with-draft` 경로는 미결 2(10/29) 확정, `reasons`는 안건 3(10/28) 확정 — STR은 관측값만. **〔확인 필요〕** 조사역이 바뀐 케이스의 승인자 제한(논의 중).
 
 **〔확인 필요 — 설계 피드백 10/29〕**
 - **본문 수정 ↔ 승인 요청 동시 요청** — 수정은 `str_drafts`, 승인 요청은 `cases`를 바꿔서 버전 검사가 둘 다 통과할 수 있어요. 권장: 두 작업 모두 짧은 저장 트랜잭션에서 `cases` 행을 먼저 잠그고(AI 기다리는 동안은 안 잠금) 잠근 뒤 상태·담당자·버전·현재 본문을 다시 확인. 잠금만으로는 409가 안 나니 수정도 케이스 버전을 올리고, 뒤 요청은 잠금 후 요청 버전을 다시 비교. 늦게 온 `narrative_refs`는 같은 저장 트랜잭션에서 **현재 `draft_id`·`generation_id`·본문 해시가 검증 요청과 모두 같고** 지금 상태에서 반영이 허용될 때만 반영(문장이 우연히 같아도 다른 생성본이면 facts·근거가 다름 — ApprovalGate와 같은 원칙). 테스트는 수정이 먼저·승인 요청이 먼저 두 경우. (채영·지윤, 노션 미결 20번)
