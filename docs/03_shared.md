@@ -20,11 +20,11 @@
 | `AuditedEntity` | 직접 상속하지 않음 — 아래 `BaseEntity`·`AssignedIdEntity`의 부모 [SCRUM-68] | `created_at`, `created_by`, `updated_at`, `updated_by` — 자동 채움 (id 없음) |
 | `BaseEntity` | 사람이 고치는 테이블 (`cases`, `users`, `rules` …) — `AuditedEntity` + DB 자동 발급(IDENTITY) `id` | `id`, `created_at`, `created_by`, `updated_at`, `updated_by` — 자동 채움 |
 | `AssignedIdEntity` | 시퀀스로 **미리 받은 번호**를 id로 쓰는 테이블 (`str_drafts`, `str_draft_requests`) — `AuditedEntity` + 생성자로 받는 `id`. 새 행 판단은 `Persistable` [SCRUM-68] | `id`, `created_at`, `created_by`, `updated_at`, `updated_by` — 감사 4칸 자동 채움 |
-| `CreatedOnlyEntity` | 사람이 추가만 하는 테이블 (`str_revisions`, `approvals` …). `case_history`는 예외 — 아래 | `id`, `created_at`, `created_by` |
+| `CreatedOnlyEntity` | 사람이 추가만 하는 테이블 (`approvals` …). `case_history`·`str_revisions`는 예외 — 아래 | `id`, `created_at`, `created_by` |
 | (상속 없음, `@Immutable`) | 원천 4개 | 원천 컬럼 그대로 |
 | (상속 없음) | 운영 로그 (`ai_call_logs`, `batch_runs`) — `created_by` 없이 `created_at`만 [레퍼런스 §3.4] | 테이블 컬럼 그대로 |
 
-`case_history`는 추가만 하지만 `CreatedOnlyEntity`를 상속하지 않아요. `created_by`가 로그인한 사람이 아니라 업무상 행위자(승인자, 생성 배치는 SYSTEM)라서 업무 메서드가 받은 값을 그대로 넣어요(SCRUM-98).
+`case_history`는 추가만 하지만 `CreatedOnlyEntity`를 상속하지 않아요. `created_by`가 로그인한 사람이 아니라 업무상 행위자(승인자, 생성 배치는 SYSTEM)라서 업무 메서드가 받은 값을 그대로 넣어요(SCRUM-98). `str_revisions`도 같은 이유로 상속하지 않아요 — 수정본 1번(AI 원문)은 SYSTEM, 그 뒤는 수정자를 업무 메서드가 직접 넣어요(미결 25).
 
 - **`AssignedIdEntity`** — id를 직접 넣은 엔티티로 `save()`를 부르면 Spring Data가 "이미 있는 행"으로 보고 `merge`(SELECT 한 번 더, 같은 id면 조용히 덮어씀)로 가요. 그래서 `Persistable.isNew()`로 "만들고 아직 저장 안 함 = 새 행"을 알려 줘요 → INSERT 한 번, 같은 id를 또 새로 만들어 저장하면 PK 위반. 생성자에 null을 넣으면 `IllegalArgumentException`. 낙관적 락이 필요한 테이블(`str_drafts`)은 하위 엔티티에 `@Version`을 따로 둬요.
 - id 컬럼 이름이 `id`가 아니면 하위 엔티티에 `@AttributeOverride`를 붙여요:
@@ -186,7 +186,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 |---|---|---|
 | 경보 | `ALT-{배치일 YYYYMMDD}-{6자리}` | `ops.alert_no_seq` (V005) |
 | 케이스 | `CASE-{경보 기준 연도}-{6자리}` | `ops.case_no_seq` (V006) |
-| 초안 | `DRF-{6자리}` (`DRF-000123`) ✅ [계약서 2.2, 11/4 채영] — 백엔드가 AI 호출 **전에** 시퀀스로 먼저 발급 [안건 23] | `ops.str_draft_id_seq` (V008 — #28 Draft, 머지 전) |
+| 초안 | `DRF-{6자리}` (`DRF-000123`) ✅ [계약서 2.2, 11/4 채영] — 백엔드가 AI 호출 **전에** 시퀀스로 먼저 발급 [안건 23] | `ops.str_draft_id_seq` (V008, 머지됨 #28) |
 
 - 시퀀스는 날짜별로 리셋하지 않아요. `MAX(id)+1` 방식은 금지(두 트랜잭션이 같은 번호를 받을 수 있음).
 - 〔미결: 확정 보고서 번호 `STR-{연도}-{6자리}` — 서식 안건 3·5-2〕
