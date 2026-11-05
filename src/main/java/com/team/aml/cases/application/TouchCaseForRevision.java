@@ -46,8 +46,9 @@ public class TouchCaseForRevision {
     /**
      * @param draftId         수정하려는 초안 id. 케이스의 현재 초안이어야 한다
      * @param expectedVersion 화면·요청이 들고 온 cases.version(case_version). 다르면 409
+     * @return 새 cases.version — str 이 수정본 저장 응답의 case_version 에 그대로 싣는다 (SCRUM-141)
      */
-    public void execute(long caseId, long draftId, long expectedVersion) {
+    public long execute(long caseId, long draftId, long expectedVersion) {
         Case c = cases.findForUpdate(caseId).orElseThrow(() -> new CaseNotFoundException(caseId));
         if (c.getVersion() != expectedVersion) {
             throw new OptimisticLockException("케이스가 그 사이 바뀌었습니다: " + c.getCaseNo()
@@ -60,10 +61,11 @@ public class TouchCaseForRevision {
         c.requireRevisable(draftId);
         if (c.isRejectedForRevision()) {
             c.reopenDraft(actorId);                       // → DRAFTED, 반려 코드 지움, REOPEN_DRAFT 이력
-            cases.save(c);                                // 상태가 바뀌었으니 커밋 때 @Version 이 +1
-            histories.saveAll(c.takePendingHistories());
-        } else {
-            cases.bumpVersion(c);                         // 상태는 그대로, version 만 +1
+            Case saved = cases.saveAndFlush(c);           // 상태가 바뀌었으니 flush 때 @Version 이 +1
+            histories.saveAll(saved.takePendingHistories());
+            return saved.getVersion();
         }
+        cases.bumpVersion(c);                             // 상태는 그대로, version 만 +1 (바로 UPDATE)
+        return c.getVersion();
     }
 }
