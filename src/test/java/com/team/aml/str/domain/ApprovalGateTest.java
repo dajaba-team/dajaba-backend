@@ -2,10 +2,12 @@ package com.team.aml.str.domain;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.shared.domain.ForbiddenException;
 import com.team.aml.user.domain.Role;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -33,8 +35,23 @@ public class ApprovalGateTest {
                 .toList();
     }
 
+    private static final Long DRAFT_ID = 100L;
+    private static final String GENERATOR_VERSION = "test-v1";
+    private static final Instant PRODUCED_AT = Instant.parse("2026-11-03T01:10:00Z");
+
+    /** AI 응답 전체. facts 는 payload 안에 들어 있다 (StrDraft.create 규칙). */
+    private static JsonNode payload() {
+        ObjectNode payload = new ObjectMapper().createObjectNode();
+        payload.set("facts", facts());
+        return payload;
+    }
+
+    private static StrDraft draft(Long caseId, String generationId, List<NarrativeSection> narrative) {
+        return StrDraft.create(DRAFT_ID, caseId, generationId, GENERATOR_VERSION, PRODUCED_AT, payload(), narrative);
+    }
+
     private static StrDraft newDraft() {
-        return StrDraft.create(10L, GENERATION_ID, facts(), aiNarrative());
+        return draft(10L, GENERATION_ID, aiNarrative());
     }
 
     /** 이 초안의 "지금 본문"을 검사한 검증 결과. 상태만 바꿔 가며 쓴다. */
@@ -90,7 +107,7 @@ public class ApprovalGateTest {
     @Test
     void 본문이_같아도_다른_초안의_검증이면_DraftNotVerifiedException() {
         StrDraft draft = newDraft();                                                         // gen-1
-        StrDraft regenerated = StrDraft.create(10L, "gen-2", facts(), aiNarrative());       // 같은 문장으로 재생성
+        StrDraft regenerated = draft(10L, "gen-2", aiNarrative());       // 같은 문장으로 재생성
         VerificationResult otherDraftsPass = verificationOf(regenerated, VerificationStatus.PASSED);
 
         // 전제: 본문이 같아서 해시도 같다 — 해시만 보면 통과해 버리는 경우
