@@ -77,7 +77,6 @@ public class WebClientAiClient implements AiClient {
             ObjectNode req = om.createObjectNode();
             req.put("batch_run_id", batchRunId);
             req.set("alerts", om.valueToTree(chunk));
-            // TODO(점수 연동): AlertPayload.created_at 등 나머지 필드 최종 확인 (score_request.json). batch_run_id 는 반영됨.
             JsonNode resp = post("/v1/scores", req, "BATCH_RUN", String.valueOf(batchRunId));
             require(resp, "scores");
             for (JsonNode s : resp.path("scores")) {
@@ -89,18 +88,32 @@ public class WebClientAiClient implements AiClient {
 
     @Override
     public StrDraftResponse createDraft(StrDraftRequest request) {
-        JsonNode r = post("/v1/str/drafts", request, "CASE", request.caseId());
+        JsonNode r = post("/v1/str/drafts", request, "DRAFT", request.draftId());
         require(r, "draft_id");
-        return new StrDraftResponse(text(r, "draft_id"), text(r, "generation_id"), text(r, "generator_version"),
-                text(r, "produced_at"), r.get("facts"), r.get("narrative"), r);
+        try {
+            return om.treeToValue(injectRaw(r), StrDraftResponse.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new AiClientException("AI_BAD_RESPONSE", "AI 초안 응답 파싱 실패", Map.of(), 502);
+        }
     }
 
     @Override
-    public VerifyResponse verify(VerifyRequest request) {
-        JsonNode r = post("/v1/str/verify", request, "DRAFT", request.draftId());
+    public VerifyResponse verify(String draftId, VerifyRequest request) {
+        JsonNode r = post("/v1/str/verify", request, "DRAFT", draftId);
         require(r, "verification_id");
-        return new VerifyResponse(text(r, "verification_id"), r.path("passed").asBoolean(false),
-                text(r, "verifier_version"), text(r, "produced_at"), r);
+        try {
+            return om.treeToValue(injectRaw(r), VerifyResponse.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new AiClientException("AI_BAD_RESPONSE", "AI 검증 응답 파싱 실패", Map.of(), 502);
+        }
+    }
+
+    /** `raw` 칸에 응답 전체를 넣어 record 로 역직렬화. 원문 전체 보존(원칙 4, SCRUM-151). */
+    private JsonNode injectRaw(JsonNode body) {
+        if (!(body instanceof ObjectNode obj)) return body;
+        ObjectNode copy = obj.deepCopy();
+        copy.set("raw", obj);
+        return copy;
     }
 
     @Override

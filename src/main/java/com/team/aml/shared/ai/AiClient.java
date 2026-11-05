@@ -23,7 +23,11 @@ public interface AiClient {
 
     StrDraftResponse createDraft(StrDraftRequest request);
 
-    VerifyResponse verify(VerifyRequest request);
+    /**
+     * 검증 호출. `draftId` 는 `ai_call_logs.target_id` 에 쓰이고 요청 본문엔 **들어가지 않음** —
+     * AI 쪽 `StrictModel` 이 모르는 칸이면 422. str 은 검증할 때 항상 draftId 를 알고 있다 (SCRUM-151).
+     */
+    VerifyResponse verify(String draftId, VerifyRequest request);
 
     CaseSummaryResponse caseSummary(CaseSummaryRequest request);
 

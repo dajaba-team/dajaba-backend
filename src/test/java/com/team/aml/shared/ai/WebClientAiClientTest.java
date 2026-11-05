@@ -13,6 +13,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.net.ConnectException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
@@ -78,11 +80,13 @@ class WebClientAiClientTest {
 
     private AlertPayload alert(String id) {
         return new AlertPayload(id, "010_ACCT", "ENT-1", "R02_FAN_IN_24H", "1", "FAN_IN",
-                "2022-09-02T00:00:00", "2022-09-02T23:59:59", "2022-09-02T23:59:59", List.of(1L, 2L), null);
+                "2022-09-02T00:00:00", "2022-09-02T23:59:59", "2022-09-02T23:59:59", List.of(1L, 2L), null,
+                "2026-11-03T01:00:00Z");
     }
 
     private StrDraftRequest draftReq() {
-        return new StrDraftRequest("CASE-2022-000057", null, null, null, null, "조사 메모", null);
+        return new StrDraftRequest("DRF-000312", "CASE-2022-000057", alert("ALT-1"),
+                List.of(1L, 2L), null, 0, "조사 메모", "Bank");
     }
 
     // --- 정상 ---------------------------------------------------------------
@@ -99,6 +103,55 @@ class WebClientAiClientTest {
         assertThat(req.getPath()).isEqualTo("/v1/str/drafts");
         assertThat(req.getHeader("X-Internal-Key")).isEqualTo("test-internal-key-0123456789abcd");
         assertThat(req.getHeader("X-Request-Id")).isNotBlank();
+    }
+
+    private static String example(String name) throws Exception {
+        return Files.readString(Path.of("contracts/examples", name));
+    }
+
+    @Test
+    void 정상_초안_요청_본문이_계약_예시와_같고_응답_칸을_읽는다() throws Exception {
+        server.enqueue(json(200, example("draft_response.json")));
+        StrDraftRequest request = om.readValue(example("draft_request.json"), StrDraftRequest.class);
+
+        StrDraftResponse res = client.createDraft(request);
+
+        assertThat(om.readTree(server.takeRequest().getBody().readUtf8()))
+                .isEqualTo(om.readTree(example("draft_request.json")));
+        assertThat(res.draftId()).isEqualTo("DRF-000312");
+        assertThat(res.promptVersion()).isEqualTo("narrative_v1");
+        assertThat(res.narrative().get(0).cites()).isNotEmpty();
+        assertThat(res.raw()).isEqualTo(om.readTree(example("draft_response.json")));
+    }
+
+    @Test
+    void 정상_검증_요청_본문에_draft_id가_없고_기록_대상은_DRAFT다() throws Exception {
+        server.enqueue(json(200, example("verify_response.json")));
+        VerifyRequest request = om.readValue(example("verify_request.json"), VerifyRequest.class);
+
+        VerifyResponse res = client.verify("DRF-000312", request);
+
+        RecordedRequest req = server.takeRequest();
+        assertThat(req.getPath()).isEqualTo("/v1/str/verify");
+        assertThat(om.readTree(req.getBody().readUtf8())).isEqualTo(om.readTree(example("verify_request.json")));
+        assertThat(res.status()).isEqualTo("CODE_FAILED");
+        assertThat(res.passed()).isFalse();
+        assertThat(res.raw()).isEqualTo(om.readTree(example("verify_response.json")));
+        AiCallLog row = writer.rows.get(0);
+        assertThat(row.getTargetType()).isEqualTo("DRAFT");
+        assertThat(row.getTargetId()).isEqualTo("DRF-000312");
+        assertThat(row.getAiVersion()).isEqualTo(res.verifierVersion());
+    }
+
+    @Test
+    void 실패_초안_응답_칸_타입이_틀리면_AI_BAD_RESPONSE_502() {
+        server.enqueue(json(200, "{\"draft_id\":\"DRF-000312\",\"narrative\":\"문자열\"}"));
+
+        assertThatThrownBy(() -> client.createDraft(draftReq()))
+                .isInstanceOfSatisfying(AiClientException.class, e -> {
+                    assertThat(e.code()).isEqualTo("AI_BAD_RESPONSE");
+                    assertThat(e.httpStatus()).isEqualTo(502);
+                });
     }
 
     @Test
@@ -269,8 +322,8 @@ class WebClientAiClientTest {
         assertThat(row.getGenerationId()).isEqualTo("G1");
         assertThat(row.getAiVersion()).isEqualTo("P1");
         assertThat(row.getEndpoint()).isEqualTo("/v1/str/drafts");
-        assertThat(row.getTargetType()).isEqualTo("CASE");
-        assertThat(row.getTargetId()).isEqualTo(draftReq().caseId());
+        assertThat(row.getTargetType()).isEqualTo("DRAFT");
+        assertThat(row.getTargetId()).isEqualTo(draftReq().draftId());
         assertThat(row.getRequestId()).isEqualTo(server.takeRequest().getHeader("X-Request-Id"));
         assertThat(row.getDurationMs()).isNotNegative();
         assertThat(row.getCreatedAt()).isNotNull();
