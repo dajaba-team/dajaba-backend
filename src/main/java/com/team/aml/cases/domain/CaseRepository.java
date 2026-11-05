@@ -9,6 +9,12 @@ import java.util.Optional;
  */
 public interface CaseRepository {
     Case save(Case c);
+
+    /**
+     * 저장하고 바로 DB 에 반영한다(flush). 상태가 바뀐 케이스의 @Version 은 flush 때 오르므로,
+     * 같은 트랜잭션 안에서 새 cases.version 을 돌려줘야 하는 유스케이스(AttachDraftToCase 등, SCRUM-141)가 쓴다.
+     */
+    Case saveAndFlush(Case c);
     Optional<Case> findById(Long id);
 
     /**
