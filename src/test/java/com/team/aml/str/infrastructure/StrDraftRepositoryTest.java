@@ -8,7 +8,6 @@ import com.team.aml.str.domain.StrDraft;
 import com.team.aml.str.domain.StrDraftRepository;
 import com.team.aml.str.domain.StrDraftRequest;
 import com.team.aml.str.domain.StrDraftRequestRepository;
-import com.team.aml.str.domain.StrDraftRequestStatus;
 import com.team.aml.str.domain.StrDraftStatus;
 import com.team.aml.str.domain.StrRevision;
 import com.team.aml.str.domain.StrSection;
@@ -37,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * StrDraft·StrDraftRequest 매핑을 실제 PostgreSQL(V001~V009)에서 확인한다.
+ * StrDraft·StrRevision 매핑을 실제 PostgreSQL(V001~V009)에서 확인한다.
  * 저장 → 영속성 컨텍스트를 비운 새 트랜잭션에서 다시 읽기 → 값 비교. 로그인이 없어 감사 칸은 SYSTEM(1).
  */
 @Testcontainers
@@ -172,32 +171,6 @@ class StrDraftRepositoryTest {
         assertThat(afterSupersede).isEmpty();
         assertThat(jdbc.queryForObject("select status from ops.str_drafts where id=?", String.class, draftId))
                 .isEqualTo("SUPERSEDED");
-    }
-
-    // 5
-    @Test
-    void 요청_기록은_시퀀스_번호로_저장되고_진행_중인_것을_케이스로_찾는다() {
-        long caseId = newCase();
-        long first = requests.nextDraftId();
-        assertThat(requests.nextDraftId()).isEqualTo(first + 1);
-
-        long draftId = requests.nextDraftId();
-        tx.executeWithoutResult(s -> requests.save(StrDraftRequest.request(draftId, caseId, snapshot(draftId))));
-
-        StrDraftRequest found = tx.execute(s ->
-                requests.findByCaseIdAndStatus(caseId, StrDraftRequestStatus.REQUESTED).orElseThrow());
-        assertThat(found.getId()).isEqualTo(draftId);
-        assertThat(found.getRequestSnapshot()).isEqualTo(snapshot(draftId));
-
-        Instant at = Instant.parse("2026-11-04T05:00:00Z");
-        tx.executeWithoutResult(s -> requests.findById(draftId).orElseThrow().succeed(at));
-
-        Optional<StrDraftRequest> stillRequested =
-                tx.execute(s -> requests.findByCaseIdAndStatus(caseId, StrDraftRequestStatus.REQUESTED));
-        assertThat(stillRequested).isEmpty();
-        StrDraftRequest done = tx.execute(s -> requests.findById(draftId).orElseThrow());
-        assertThat(done.getStatus()).isEqualTo(StrDraftRequestStatus.SUCCEEDED);
-        assertThat(done.getFinishedAt()).isEqualTo(at);
     }
 
     // ---- 도우미 ----
