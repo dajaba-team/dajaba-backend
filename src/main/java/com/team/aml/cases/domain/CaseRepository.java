@@ -9,6 +9,12 @@ import java.util.Optional;
  */
 public interface CaseRepository {
     Case save(Case c);
+
+    /**
+     * 저장하고 바로 DB 에 반영한다(flush). 상태가 바뀐 케이스의 @Version 은 flush 때 오르므로,
+     * 같은 트랜잭션 안에서 새 cases.version 을 돌려줘야 하는 유스케이스(AttachDraftToCase 등, SCRUM-141)가 쓴다.
+     */
+    Case saveAndFlush(Case c);
     Optional<Case> findById(Long id);
 
     /**
@@ -26,4 +32,10 @@ public interface CaseRepository {
     void bumpVersion(Case c);
     Optional<Case> findByCaseNo(String caseNo);
     boolean existsByAlertId(Long alertId);
+
+    /**
+     * 케이스 번호 일련번호 (ops.case_no_seq, V006). 번호 형식은 DisplayNumber.caseNo 한 곳.
+     * 시퀀스라 롤백돼도 번호는 되돌아가지 않는다(빈 번호가 생길 수 있음 — 레퍼런스 8.7, MAX+1 금지).
+     */
+    long nextCaseNoSeq();
 }

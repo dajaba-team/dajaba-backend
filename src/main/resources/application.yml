@@ -48,6 +48,11 @@ aml:
     timeout-seconds: 90
     max-batch: 500
   dataset-dir: ${AML_DATASET_DIR:./data}
+  # 운영 등급 경계값 (CasePolicy, 미결 23). 평가 뒤 확정이라 기본값 없음 — 비어 있으면 케이스 생성 배치가 POLICY_NOT_CONFIGURED
+  case-policy:
+    version: ${AML_CASE_POLICY_VERSION:}
+    low-to-medium: ${AML_CASE_POLICY_LOW_TO_MEDIUM:}
+    medium-to-high: ${AML_CASE_POLICY_MEDIUM_TO_HIGH:}
 
 springdoc:
   api-docs:
