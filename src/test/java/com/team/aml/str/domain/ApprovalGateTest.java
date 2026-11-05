@@ -28,7 +28,7 @@ public class ApprovalGateTest {
 
     /** AI 원문. StrDraftTest와 같은 모양: 단락 전부에 문장과 근거 번호. */
     private static List<NarrativeSection> aiNarrative() {
-        return Arrays.stream(StrSection.values())
+        return StrSection.V1.stream()
                 .map(s -> new NarrativeSection(s, "AI " + s + " 문장", List.of(5_120_000L + s.ordinal())))
                 .toList();
     }

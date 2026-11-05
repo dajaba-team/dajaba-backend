@@ -16,46 +16,21 @@ import java.util.*;
 
 /**
  * 본문 해시 (10/27 안건 23, 규약 v0.2 §5.3).
- * 규칙: 섹션 6개를 정해진 순서로, section·text만(evidence_ids 제외), NFC 정규화, 공백 없는 JSON, UTF-8 SHA-256.
- * Java와 Python이 같은 값을 내야 한다 → NarrativeHashTest 5번(테스트 벡터)으로 확인.
+ * 규칙: 섹션(V1 6개 또는 V2 7개 — 한 세트만)을 정해진 순서로, section·text만(evidence_ids 제외), NFC 정규화, 공백 없는 JSON, UTF-8 SHA-256.
+ * Java와 Python이 같은 값을 내야 한다 → NarrativeHashTest 5번(v1)·7번(v2) 테스트 벡터로 확인.
  */
 
 public final class NarrativeHash {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final ObjectWriter CANONICAL_WRITER = JSON.writer().with(new LowercaseHexEscapes());
-    private static final int SECTION_COUNT = StrSection.values().length;   // 6
 
     private NarrativeHash() {}
 
-    /** 본문 → 16진수 소문자 64자리 해시. 단락이 6개 각각 한 번씩이 아니면 IllegalArgumentException. */
+    /** 본문 → 16진수 소문자 64자리 해시. V1(6섹션)·V2(7항목) 중 한 세트가 각각 한 번씩이 아니면 IllegalArgumentException. */
     public static String of(List<NarrativeSection> narrative) {
-        requireEachSectionOnce(narrative);
+        NarrativeSections.requireOneSet(narrative, "본문 단락");
         return sha256Hex(toCanonicalJson(narrative));
-    }
-
-    /**
-     * 6개 단락이 각각 한 번씩인지 (AI docs/shared/01 "narrative 해시" 5번, 10/29).
-     * 메시지에는 단락 이름과 개수만 넣는다 — 본문 문장은 로그에 남기지 않는다.
-     */
-    private static void requireEachSectionOnce(List<NarrativeSection> narrative) {
-        Map<StrSection, Integer> counts = new EnumMap<>(StrSection.class);
-        for (NarrativeSection n : narrative) {
-            counts.merge(n.section(), 1, Integer::sum);
-        }
-        List<StrSection> missing = Arrays.stream(StrSection.values())
-                .filter(s -> !counts.containsKey(s))
-                .toList();
-        List<StrSection> duplicated = counts.entrySet().stream()
-                .filter(e -> e.getValue() > 1)
-                .map(Map.Entry::getKey)
-                .toList();
-
-        if (narrative.size() != SECTION_COUNT || !missing.isEmpty() || !duplicated.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "본문 단락은 " + SECTION_COUNT + "개가 각각 한 번씩이어야 한다"
-                            + " (받은 개수 " + narrative.size() + ", 빠짐 " + missing + ", 중복 " + duplicated + ")");
-        }
     }
 
     /**
@@ -64,7 +39,7 @@ public final class NarrativeHash {
      */
     private static String toCanonicalJson(List<NarrativeSection> narrative) {
         ArrayNode array = JSON.createArrayNode();
-        for (NarrativeSection n : inSectionOrder(narrative)) {      // ← 바뀐 줄
+        for (NarrativeSection n : NarrativeSections.inSectionOrder(narrative)) {
             array.addObject()
                     .put("section", n.section().name())
                     .put("text", Normalizer.normalize(n.text(), Normalizer.Form.NFC));
@@ -76,12 +51,6 @@ public final class NarrativeHash {
         }
     }
 
-    /** 단락 순서(enum 선언 순서) 그대로 줄 세운 새 목록. 받은 목록은 건드리지 않는다. */
-    private static List<NarrativeSection> inSectionOrder(List<NarrativeSection> narrative) {
-        return narrative.stream()
-                .sorted(Comparator.comparing(NarrativeSection::section))
-                .toList();
-    }
 
     private static String sha256Hex(String json) {
         try {
