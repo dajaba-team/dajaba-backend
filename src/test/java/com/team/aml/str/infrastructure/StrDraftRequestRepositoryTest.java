@@ -79,7 +79,7 @@ class StrDraftRequestRepositoryTest {
         tx.executeWithoutResult(s -> requests.save(StrDraftRequest.request(draftId, caseId, snapshot(draftId))));
 
         StrDraftRequest found = tx.execute(s ->
-                requests.findByCaseIdAndStatus(caseId, StrDraftRequestStatus.REQUESTED).orElseThrow());
+                requests.findRequestedByCaseId(caseId).orElseThrow());
         assertThat(found.getId()).isEqualTo(draftId);
         assertThat(found.isNew()).isFalse();
         assertThat(found.getRequestSnapshot()).isEqualTo(snapshot(draftId));   // jsonb 왕복
@@ -98,7 +98,7 @@ class StrDraftRequestRepositoryTest {
         tx.executeWithoutResult(s -> requests.findById(draftId).orElseThrow().succeed(at));   // 변경 감지로 UPDATE
 
         Optional<StrDraftRequest> stillRequested =
-                tx.execute(s -> requests.findByCaseIdAndStatus(caseId, StrDraftRequestStatus.REQUESTED));
+                tx.execute(s -> requests.findRequestedByCaseId(caseId));
         assertThat(stillRequested).isEmpty();
         StrDraftRequest done = tx.execute(s -> requests.findById(draftId).orElseThrow());
         assertThat(done.getStatus()).isEqualTo(StrDraftRequestStatus.SUCCEEDED);
@@ -121,7 +121,7 @@ class StrDraftRequestRepositoryTest {
         tx.executeWithoutResult(s -> requests.findById(firstId).orElseThrow().fail(Instant.parse("2026-11-04T05:00:00Z")));
         long thirdId = requests.nextDraftId();
         tx.executeWithoutResult(s -> requests.save(StrDraftRequest.request(thirdId, caseId, snapshot(thirdId))));
-        Optional<Long> active = tx.execute(s -> requests.findByCaseIdAndStatus(caseId, StrDraftRequestStatus.REQUESTED)
+        Optional<Long> active = tx.execute(s -> requests.findRequestedByCaseId(caseId)
                 .map(StrDraftRequest::getId));
         assertThat(active).contains(thirdId);
     }
