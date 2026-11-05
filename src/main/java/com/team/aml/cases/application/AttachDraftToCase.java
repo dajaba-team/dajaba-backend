@@ -54,12 +54,14 @@ public class AttachDraftToCase {
      *
      * @param draftId         str 이 저장한 초안 id (V008 FK 가 같은 케이스의 초안인지 막는다)
      * @param expectedVersion lock 에 넘긴 것과 같은 값
+     * @return 연결 뒤 새 cases.version — str 이 생성 응답의 case_version 에 그대로 싣는다 (SCRUM-141)
      */
-    public void execute(long caseId, long draftId, long expectedVersion) {
+    public long execute(long caseId, long draftId, long expectedVersion) {
         Case c = lockAndCheck(caseId, expectedVersion);
         c.attachDraft(draftId, currentUser.require().userId());
-        cases.save(c);
-        histories.saveAll(c.takePendingHistories());
+        Case saved = cases.saveAndFlush(c);   // @Version 은 flush 때 오른다 — 그 뒤 값을 돌려준다
+        histories.saveAll(saved.takePendingHistories());
+        return saved.getVersion();
     }
 
     private Case lockAndCheck(long caseId, long expectedVersion) {

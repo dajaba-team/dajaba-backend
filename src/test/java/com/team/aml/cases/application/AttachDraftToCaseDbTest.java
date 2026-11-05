@@ -491,6 +491,46 @@ class AttachDraftToCaseDbTest {
         assertThat(cases.findById(c.getId()).orElseThrow().getVersion()).isEqualTo(c.getVersion());
     }
 
+    // ── 새 cases.version 반환 (SCRUM-141 — str 이 응답 case_version 에 싣는다) ──
+
+    @Test
+    void 정상_초안을_붙이면_돌려준_version이_커밋된_cases_version과_같고_그걸로_다음_요청이_통과한다() {
+        Case c = prepare(CaseStatus.ESCALATED);
+        long d = newDraft(c.getId());
+        loginAs(inv);
+
+        long returned = tx().execute(s -> attachDraft.execute(c.getId(), d, c.getVersion()));
+
+        assertThat(returned).isEqualTo(dbVersion(c.getId())).isEqualTo(c.getVersion() + 1);
+        // 화면이 돌려받은 값을 들고 바로 수정본을 저장해도 409 가 나지 않는다
+        long next = tx().execute(s -> touchForRevision.execute(c.getId(), d, returned));
+        assertThat(next).isEqualTo(dbVersion(c.getId())).isEqualTo(returned + 1);
+    }
+
+    @Test
+    void 정상_DRAFTED_수정본이면_돌려준_version이_커밋된_cases_version과_같다() {
+        Case c = prepare(CaseStatus.DRAFTED);
+        loginAs(inv);
+
+        long returned = tx().execute(s -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion()));
+
+        assertThat(returned).isEqualTo(dbVersion(c.getId())).isEqualTo(c.getVersion() + 1);
+    }
+
+    @Test
+    void 정상_보완_반려_뒤_첫_수정본이면_돌려준_version이_커밋된_cases_version과_같다() {
+        Case c = prepare(CaseStatus.REJECTED);   // NEED_REVISION
+        loginAs(inv);
+
+        long returned = tx().execute(s -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion()));
+
+        assertThat(returned).isEqualTo(dbVersion(c.getId())).isEqualTo(c.getVersion() + 1);
+    }
+
+    private long dbVersion(long caseId) {
+        return cases.findById(caseId).orElseThrow().getVersion();
+    }
+
     // ── 도우미 ────────────────────────────────────────────────
 
     private Case prepare(CaseStatus target) {

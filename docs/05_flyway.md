@@ -52,10 +52,10 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 | V005 | detection — `rules`, `alerts`, `alert_transactions`, `alert_no_seq`. 룰 행은 룰 명세(SCRUM-73) 확정 후 별도 파일 | 준혁 (SCRUM-72) | W3 | 머지됨 #31 | 같음 |
 | V005_1 | `alert_scores` (경보당 1행, `score_band` 없음) | 준혁 (SCRUM-96) | W3 (11/3) | 머지됨 #36 | V007 |
 | V005_2 | `transactions` 금액 `numeric(18,2)` → `numeric(20,6)` (11/2 준혁·준영 합의) | 준혁 (SCRUM-97) | W3 (11/3) | 머지됨 #34 | — |
-| V006 | cases — `cases`, `case_history`, `case_summaries`, `case_no_seq` (`REPORTED` CHECK 포함) | 지윤 (SCRUM-48) | W3 | PR | 같음 |
+| V006 | cases — `cases`, `case_history`, `case_summaries`, `case_no_seq` (`REPORTED` CHECK 포함) | 지윤 (SCRUM-48) | W3 | 머지됨 #39 | 같음 |
 | V007 | **비움 — 쓰지 않아요** | — | — | 비움 | `create_alert_scores` |
-| V008 | str — `str_draft_requests`, `str_drafts`, `str_revisions`, `verification_results`, `ops.str_draft_id_seq` + `cases.current_draft_id` FK | 채영 | W2 | 예약 | 같음 (W3) |
-| V009 | `approvals` (`reason_code`, `narrative_sha256`, 그 초안의 수정본·검증 복합 FK, 초안당 승인 한 번) | 채영 | W2 | 예약 | 같음 (W4) |
+| V008 | str — `str_draft_requests`, `str_drafts`, `str_revisions`, `verification_results`, `ops.str_draft_id_seq` + `cases.current_draft_id` FK | 채영 (SCRUM-31) | W2 | 머지됨 #28 | 같음 (W3) |
+| V009 | `approvals` (`reason_code`, `narrative_sha256`, 그 초안의 수정본·검증 복합 FK, 초안당 승인 한 번) | 채영 (SCRUM-32) | W2 | 머지됨 #33 | 같음 (W4) |
 | 미배정 | `batch_runs` 재실행 인덱스 좁히기 (안건 14·21, 미결 4) | 진희·준혁 | 점수 배치 PR 직전 | 그때 다음 빈 번호 | — |
 | 미배정 | `str_reports` (확정 보고서 번호·마감·PDF) | 채영 | 서식 회의 뒤 | 그때 다음 빈 번호 | — |
 
