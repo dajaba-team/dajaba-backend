@@ -53,6 +53,7 @@
 | 11/3 | `NOT_REPORTABLE` 반려 건 종결도 `close_reason`은 `FALSE_POSITIVE`·`DUPLICATE`·`NO_ACTION` 중 조사역이 고름. 반려 코드는 REJECT 이력(`case_history.reason_code`)으로 봄 — V006 CHECK 그대로, `close-with-draft`도 `close_reason`을 받음 | 종결 사유(왜 닫았나)와 반려 코드(승인자 판단)는 다른 질문이고 반려 코드는 이미 이력에 있음. 고르지 않은 안: 종결 사유에 `NOT_REPORTABLE` 추가(성격이 다른 값이 섞이고 같은 값을 두 번 적음) | #39 리뷰 1번, 11/3 지윤·채영, SCRUM-48 |
 | 11/4 | 백엔드 docs를 프론트 API 계약서 v0.2 기준으로 맞춤 — 경로 번호 `draft_no`, 비담당 STR 열람 `META_ONLY`(403 아님), S4 비담당 403·`REVISION_NOT_FOUND`(Q13, 11/4 채영), 버튼은 `available_actions`(STR 화면 포함 — Q16, 11/4 채영), 케이스 생성 배치 202 | 계약서에서 정해진 값인데 docs에 예전 규칙이 남아 있으면 화면과 백엔드가 다른 규칙을 보게 됨 | 계약서 7절, 슬랙 계약서 스레드 11/4 지윤·채영, SCRUM-21 |
 | 11/5 | 수정본 저장 전 케이스 확인은 **`TouchCaseForRevision` 하나로**. DRAFTED면 version만 +1, 보완 반려(REJECTED+NEED_REVISION)면 DRAFTED로 되돌리고 반려 코드 지움 + `REOPEN_DRAFT` 이력(version +1 한 번). `ReopenCaseDraft`는 따로 두지 않음 | str은 케이스 상태를 볼 수 없어서 Touch·Reopen 중 뭘 부를지 미리 알 수 없음 — 입구가 둘이면 Touch → 409 → Reopen 두 번 호출이 됨 | #43 리뷰 2번(진희), 11/5 채영 확인 A안, SCRUM-98 |
+| 11/5 | 케이스 생성 배치는 **경보 1건마다 트랜잭션**(`REQUIRES_NEW`), 배치 전체엔 트랜잭션 없음. 실패가 한 건이라도 있으면 `batch_runs` FAILED(건수 메시지)로 남겨 다시 돌릴 수 있게 함 | `MarkCaseOpened` 409가 트랜잭션째 롤백이라 묶으면 한 건 때문에 전부 되돌아감. 성공한 날 재실행은 V004 인덱스가 막음 | #46, 슬랙 11/5, SCRUM-105 |
 
 ## 2. 문서끼리 다른 곳 — 이 docs에서 고른 것
 

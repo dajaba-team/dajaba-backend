@@ -49,8 +49,13 @@
 - 〔초안 — CASES 명세 §7.1〕 `0 ≤ low_to_medium < medium_to_high ≤ 1`, `score ≥ medium_to_high → HIGH` … 경계값은 아직 협의 전이라 **임의 기본값을 두지 않아요.** 정책이 없으면 LOW가 아니라 명시 실패(`POLICY_NOT_CONFIGURED` 제안).
 
 **케이스 생성 배치 (`OPEN_CASES`)** [레퍼런스 §11, 안건 14, CASES 명세 API-14 〔초안〕]
-- `SCORED` · 미생성 경보 → CasePolicy로 분류 → **HIGH만** 케이스. 경보별로 `Case` + OPEN 이력 + `MarkCaseOpened`를 한 트랜잭션.
-- `cases.alert_id` UNIQUE로 중복 방지. 성공한 날짜도 남은 대상 **보충 실행 허용**.
+- `SCORED` · 미생성 경보(detection `FindAlertsForCaseOpening`) → CasePolicy로 분류 → **HIGH만** 케이스. 경보별로 `Case` + OPEN 이력 + `MarkCaseOpened`를 한 트랜잭션.
+- **배치 전체에는 트랜잭션을 걸지 않아요.** 경보 1건 = `OpenCaseForAlert`(`REQUIRES_NEW`) 한 트랜잭션이라, 한 건이 실패해도 그 건만 롤백되고 다음 경보로 가요. `MarkCaseOpened`의 409는 트랜잭션째 롤백이라 배치를 하나로 묶으면 앞에서 만든 케이스까지 되돌아가요. [#46, 슬랙 11/5]
+- 경보별 결과: HIGH 아님 → 안 만듦 · 409 `CASE_ALREADY_OPENED` 또는 `cases.alert_id` 중복(그 경보 케이스가 실제로 있을 때) → 건너뜀 · 그 밖 → 실패로 세고 계속.
+- `batch_runs`(`OPEN_CASES`): 실패가 한 건이라도 있으면 **FAILED**(건수 메시지 `대상 · 생성 · HIGH 아님 · 이미 있음 · 실패`), 없으면 SUCCEEDED(`rows_in` 대상, `rows_out` 생성). FAILED인 날은 다시 돌리면 남은 대상만 처리.
+- `cases.alert_id` UNIQUE로 중복 방지. 성공한 날짜의 남은 대상 **보충 실행**은 안건 21 결정이지만, 지금은 V004 `batch_runs_succeeded_uq` 때문에 409 `BATCH_ALREADY_DONE` 〔인덱스를 좁히는 마이그레이션 필요〕.
+- 시작 전 거절(행 안 만듦): 정책 비어 있음 `POLICY_NOT_CONFIGURED`, 실행 중 409 `BATCH_RUNNING`, 이미 성공 409 `BATCH_ALREADY_DONE`. 케이스 번호 연도 = 경보 `reference_ts` 연도, 행위자 SYSTEM.
+- 경계값 설정 `aml.case-policy.{version, low-to-medium, medium-to-high}` — 기본값 없음(평가 뒤 확정, 미결 23). 생성 당시 점수·모델·정책 버전 저장 칸은 〔다음 PR — Flyway 번호 예약 후〕. 컨트롤러 `POST /admin/batches/open-cases`(202, `@Async`)도 다음 PR. [SCRUM-105]
 
 **메모** [안건 16 — 일부 미결]
 - 결정표 권장은 `case_history`의 `NOTE` 행(메모 전체를 매번 저장). 지윤 의견은 `case_note_history` 분리. **이름(A/B)이 엇갈려서 최종 확인 필요** — 지윤·진희.

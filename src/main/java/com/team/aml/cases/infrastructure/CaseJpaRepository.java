@@ -20,4 +20,8 @@ public interface CaseJpaRepository extends Repository<Case, Long>, CaseRepositor
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from InvestigationCase c where c.id = :id")
     Optional<Case> findForUpdate(@Param("id") Long id);
+
+    @Override
+    @Query(value = "select nextval('ops.case_no_seq')", nativeQuery = true)
+    long nextCaseNoSeq();
 }

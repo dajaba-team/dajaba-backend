@@ -26,4 +26,10 @@ public interface CaseRepository {
     void bumpVersion(Case c);
     Optional<Case> findByCaseNo(String caseNo);
     boolean existsByAlertId(Long alertId);
+
+    /**
+     * 케이스 번호 일련번호 (ops.case_no_seq, V006). 번호 형식은 DisplayNumber.caseNo 한 곳.
+     * 시퀀스라 롤백돼도 번호는 되돌아가지 않는다(빈 번호가 생길 수 있음 — 레퍼런스 8.7, MAX+1 금지).
+     */
+    long nextCaseNoSeq();
 }
