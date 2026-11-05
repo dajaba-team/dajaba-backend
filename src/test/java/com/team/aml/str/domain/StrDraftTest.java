@@ -359,4 +359,37 @@ class StrDraftTest {
         assertThat(draft.getStatus()).isEqualTo(StrDraftStatus.SUPERSEDED);
     }
 
+    // 19: 저장에 필요한 AI 응답 값이 없으면 초안을 만들지 않는다 (str_drafts not null 칸, facts 는 payload 안)
+    @Test
+    void payload에_facts가_없거나_생성_버전이_비면_초안을_만들지_않는다() {
+        JsonNode noFacts = new ObjectMapper().createObjectNode().put("generation_id", GENERATION_ID);
+
+        assertThatThrownBy(() -> StrDraft.create(DRAFT_ID, CASE_ID, GENERATION_ID, GENERATOR_VERSION, PRODUCED_AT, noFacts, aiNarrative()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("facts");
+        for (String bad : Arrays.asList(null, "", "   ")) {
+            assertThatThrownBy(() -> StrDraft.create(DRAFT_ID, CASE_ID, GENERATION_ID, bad, PRODUCED_AT, payload(), aiNarrative()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("generatorVersion");
+        }
+        assertThatThrownBy(() -> StrDraft.create(null, CASE_ID, GENERATION_ID, GENERATOR_VERSION, PRODUCED_AT, payload(), aiNarrative()))
+                .isInstanceOf(IllegalArgumentException.class);      // 미리 받은 draft_id 없음 (AssignedIdEntity)
+    }
+
+    // 20: 새 초안은 저장 전이라 새 행이고, AI 값은 그대로 들고 있다
+    @Test
+    void 새_초안은_새_행이고_AI_응답_값을_그대로_가진다() {
+        StrDraft draft = newDraft();
+
+        assertThat(draft.getId()).isEqualTo(DRAFT_ID);
+        assertThat(draft.isNew()).isTrue();                          // 첫 save() 는 INSERT
+        assertThat(draft.getGeneratorVersion()).isEqualTo(GENERATOR_VERSION);
+        assertThat(draft.getProducedAt()).isEqualTo(PRODUCED_AT);
+        assertThat(draft.getPayload()).isEqualTo(payload());
+        assertThat(draft.getFacts()).isEqualTo(facts());             // payload 의 facts 와 같다
+        assertThat(draft.getRevisions()).hasSize(1);
+        assertThat(draft.getCurrentRevisionId()).isNull();           // 수정본 id 는 저장 뒤에 생긴다
+        assertThat(draft.getSuspicionTypes()).isEmpty();
+    }
+
 }

@@ -82,6 +82,6 @@ public class StrRevision {
     public List<StrSection> getEditedSections() {
         return Arrays.stream(changedSections).map(StrSection::valueOf).toList();
     }
-    public Long getRevisedBy() { return revisedBy; }
+    public Long getRevisedBy() { return revisedBy; } // 1번은 SYSTEM(1)
     public Instant getCreatedAt() { return createdAt; }
 }

@@ -187,7 +187,7 @@ public class StrDraft extends AssignedIdEntity {
         return Normalizer.normalize(text, Normalizer.Form.NFC).length();
     }
 
-    /** lock이면 거부. */
+    /** 승인될 때 부른다. 되돌리는 메서드는 없다 */
     public void lock() {
         requireActive();
         this.status = StrDraftStatus.LOCKED;

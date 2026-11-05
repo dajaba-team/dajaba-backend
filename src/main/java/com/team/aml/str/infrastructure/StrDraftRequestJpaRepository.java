@@ -1,5 +1,7 @@
-package com.team.aml.str.domain;
+package com.team.aml.str.infrastructure;
 
+import com.team.aml.str.domain.StrDraftRequest;
+import com.team.aml.str.domain.StrDraftRequestRepository;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 

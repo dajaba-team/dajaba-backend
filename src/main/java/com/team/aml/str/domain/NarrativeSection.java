@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 /**
  * 본문 단락 하나: 단락 이름, 문장, 근거 거래 번호(transaction_id, bigint).
  * str_revisions 의 jsonb 에는 {"section","text","evidence_ids"} 로 저장한다 — 규약 0절 snake_case, Hibernate 의 ObjectMapper 설정과 상관없이.
- * */
+ **/
 public record NarrativeSection(StrSection section, String text,
                                @JsonProperty("evidence_ids")
                                List<Long> evidenceIds) {
