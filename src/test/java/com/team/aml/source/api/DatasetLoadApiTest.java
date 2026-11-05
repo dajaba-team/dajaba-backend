@@ -102,6 +102,7 @@ class DatasetLoadApiTest {
                 .andReturn(), 202);
         long id = accepted.get("batch_run_id").asLong();
         assertThat(accepted.get("batch_type").asText()).isEqualTo("LOAD_DATASET");
+        assertThat(accepted.get("status").asText()).isEqualTo("RUNNING");   // 작업을 넘기기 전에 읽은 상태
         assertThat(accepted.get("started_at").asText()).matches(SYSTEM_TIME);
 
         JsonNode done = waitUntilFinished(id);

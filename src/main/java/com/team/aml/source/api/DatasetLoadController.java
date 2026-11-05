@@ -1,6 +1,5 @@
 package com.team.aml.source.api;
 
-import com.team.aml.shared.batch.BatchRunQuery;
 import com.team.aml.shared.batch.BatchRunView;
 import com.team.aml.source.application.RequestIbmDatasetLoad;
 import io.swagger.v3.oas.annotations.Operation;
@@ -18,19 +17,17 @@ import org.springframework.web.bind.annotation.RestController;
 public class DatasetLoadController {
 
     private final RequestIbmDatasetLoad requestLoad;
-    private final BatchRunQuery batchRuns;
 
-    public DatasetLoadController(RequestIbmDatasetLoad requestLoad, BatchRunQuery batchRuns) {
+    public DatasetLoadController(RequestIbmDatasetLoad requestLoad) {
         this.requestLoad = requestLoad;
-        this.batchRuns = batchRuns;
     }
 
     @Operation(summary = "IBM 데이터 적재",
-            description = "202 로 접수하고 뒤에서 적재한다. 파일 없음 409 DATASET_FILES_MISSING, "
-                    + "이미 적재 409 BATCH_ALREADY_DONE, 실행 중 409 BATCH_RUNNING")
+            description = "202 로 접수하고 RUNNING 상태의 배치를 돌려준 뒤 뒤에서 적재한다. 결과는 배치 조회로 확인. "
+                    + "파일 없음 409 DATASET_FILES_MISSING, 이미 적재 409 BATCH_ALREADY_DONE, 실행 중 409 BATCH_RUNNING")
     @PostMapping("/load")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public BatchRunView load() {
-        return batchRuns.get(requestLoad.execute());
+        return requestLoad.execute();
     }
 }
