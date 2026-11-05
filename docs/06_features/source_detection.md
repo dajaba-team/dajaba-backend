@@ -16,6 +16,7 @@
 - 적재는 JPA가 아니라 `CopyManager`(COPY)로. `transactions_staging`(unlogged)을 거쳐 `INSERT … SELECT`로 변환. [레퍼런스 §11.2]
 - 서비스 DB에는 **HI-Small만** 들어가요(SAML-D·LI는 학습 전용). 준영이 준 검증값(`expected.json`)으로 적재 결과를 같이 확인해요. [안건 12·13]
 - 금액은 `numeric(20,6)`. 원본 금액을 반올림하지 않아요(Bitcoin 소수 6자리). [안건 19, 11/2 준혁·준영 합의, V005_2] 〔10/27의 `numeric(18,2)` 유지는 실제 파일에서 293,425개 필드가 바뀌어 변경〕
+- **은행 ID는 앞 0을 빼고 정규화**해 `account_key`를 만들어요(`023842` → `23842`, 예 `10_8000EBD30`). 거래·계좌 파일에 같은 규칙, 원본 표기는 `from_bank_id_raw`·`to_bank_id_raw`(V004_1), 계좌번호는 원문 그대로. 11/2 전체 파일에서 키 충돌·거래 계좌 미연결 0을 확인했고 ML 규약도 같은 규칙이에요. [미결 6, 서식 안건 5-1, SCRUM-54] 〔SD 명세 §11.2·공통 규약 §0의 "앞 0 보존"은 그 전 안 — 공통 규약은 반영 요청(SCRUM-71)〕
 - **`transaction_id` — DB가 자동 발급.** 원본 추적은 `source_files` 테이블로: `source_files(id, file_name, file_hash CHAR(64) UNIQUE)`, `transactions.source_file_id`(FK), `source_row_number`, `UNIQUE(source_file_id, source_row_number)`. CSV 행 번호·적재 순서로 ID를 추정하지 않아요. [안건 1, ML 규약 §1.1] 〔레퍼런스 §2·SD 명세 §11.2의 "CSV 행 번호를 그대로 PK"는 그 전 안〕
 - `customer_attributes`는 백엔드가 만드는 **가상 KYC**(`entity_id` 해시를 시드로 — 다시 만들어도 같은 값). AI 피처로는 안 써요. [레퍼런스 §3.1, ML 규약 §1]
 
@@ -46,7 +47,6 @@
 | 패턴 미매칭 / 다중매칭 행 | 0 / 0 |
 
 **〔확인 필요〕**
-- **은행 ID 앞자리 0** — 거래 파일은 `023842`, 계좌 파일은 `23842`처럼 달라서, 그대로 이으면 계좌 연결이 **100% 실패**하고 앞 0을 빼면 100% 연결돼요(10/28 전체 검증). [서식 안건 5-1] 그런데 SD 명세 §11.2·ML 규약 §0은 "`account_key`는 앞 0 보존"이라고 적혀 있어요. **어느 쪽 형식으로 맞출지** 정해야 경보 화면부터 이름이 나와요. 준혁
 - **통화 표기** — DB엔 IBM 원문 이름(`US Dollar`)이 들어가요. 규약 v0.2의 STR facts는 ISO 코드(`USD`)라 AI 서버가 읽을 때 바꿔요. 백엔드 화면·`rule_facts`의 통화를 원문으로 둘지 코드로 바꿀지, 매핑표를 누가 관리할지 정해야 해요. [CASES 명세 §4는 "SOURCE 매핑표를 따른다"]
 - 서식 반영 — `entity_type` 6종 → 서식 표기(5-6), `accounts.bank_country`(5-10), `customer_attributes`를 508만 건 전체 계좌에 만들지(5-7). 서식 회의 전.
 
