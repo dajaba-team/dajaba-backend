@@ -31,9 +31,12 @@
 - [ ] 클래스가 맞는 계층에 있음 (if 문에 업무 용어 → domain, 여러 리포지토리 → application, 바깥 → infrastructure, HTTP → api)
 - [ ] 다른 기능은 **application 유스케이스로만** 부름. 다른 기능 엔티티의 상태를 바꾸지 않음
 - [ ] 다른 애그리거트는 **ID로** 참조(`caseId`), 객체 참조 아님
-- [ ] **컨트롤러가 리포지토리를 직접 부르지 않음** (ArchitectureTest가 못 잡음)
+- [ ] **컨트롤러가 리포지토리를 직접 부르지 않음** (ArchUnit이 잡음, SCRUM-94)
+- [ ] 컨트롤러가 다른 기능을 부르지 않음. `user`·`shared`는 허용 (ArchUnit이 잡음, SCRUM-94)
+- [ ] `Case`·`StrDraft`의 상태 변경 메서드를 자기 기능 밖·컨트롤러에서 직접 부르지 않음 — str은 `AttachDraftToCase`·`TouchCaseForRevision`으로 (ArchUnit이 잡음, SCRUM-94)
 - [ ] **엔티티를 응답으로 그대로 내보내지 않음** (응답 record) (못 잡음)
 - [ ] `shared/`를 고쳤다면 진희 확인
+- [ ] `shared`에 기능 이름 분기(`if (type == CASE)`) 금지 — `shared`는 기능을 몰라요 (ArchUnit은 import만 봐서 문자열·enum 분기는 못 잡음)
 
 ## 3. 엔티티·도메인 [README 규칙 2, 가이드 §4, 레퍼런스 §5]
 
@@ -47,7 +50,7 @@
 
 ## 4. 트랜잭션·AI 호출 [가이드 §5, 레퍼런스 §8.4]
 
-- [ ] `@Transactional`은 application에만, 읽기는 `readOnly = true` (못 잡음). 단, 열람 기록(`AccessLogWriter`)을 부르는 상세 조회는 readOnly 없이 — `03_shared.md` §9 (readOnly면 테스트에서 바로 실패)
+- [ ] `@Transactional`은 application에만 — 위치는 ArchUnit(SCRUM-94), 예외는 `08_decisions.md` 11/5 목록 / 읽기는 `readOnly = true` — 리뷰로(못 잡음). 단, 열람 기록(`AccessLogWriter`)을 부르는 상세 조회는 readOnly 없이 — `03_shared.md` §9 (readOnly면 테스트에서 바로 실패)
 - [ ] 상세 조회는 권한 검사 뒤·데이터 읽기 전에 `accessLog.*` 한 줄 (못 잡음)
 - [ ] **AI 호출이 트랜잭션 밖** ("DB → HTTP → DB") (못 잡음)
 - [ ] AI 응답 저장 때 상태·담당자·version을 다시 확인 → 그사이 종료됐으면 저장 거절

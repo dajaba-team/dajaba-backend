@@ -1,15 +1,25 @@
 package com.team.aml;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
+import com.tngtech.archunit.core.domain.JavaFieldAccess;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import com.tngtech.archunit.lang.ArchRule;
 import com.tngtech.archunit.library.Architectures;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+
+import static com.tngtech.archunit.base.DescribedPredicate.describe;
+import static com.tngtech.archunit.base.DescribedPredicate.not;
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
+import static com.tngtech.archunit.lang.conditions.ArchConditions.accessTargetWhere;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
 
 /**
  * 폴더 규칙을 CI 가 잡는다 (레퍼런스 4.1, 4.2, 6.1). DB 없이 돈다.
@@ -23,7 +33,12 @@ class ArchitectureTest {
 
     @BeforeAll
     static void load() {
-        classes = new ClassFileImporter()
+        classes = mainClasses();
+    }
+
+    /** 본 검사가 읽는 클래스. 테스트 클래스·가짜 클래스(archfixture)는 안 들어간다. */
+    static JavaClasses mainClasses() {
+        return new ClassFileImporter()
                 .withImportOption(ImportOption.Predefined.DO_NOT_INCLUDE_TESTS)
                 .importPackages("com.team.aml");
     }
@@ -105,5 +120,74 @@ class ArchitectureTest {
                 .or().haveFullyQualifiedName("com.team.aml.shared.audit.AccessLogRepository")
                 .should().onlyHaveDependentClassesThat().resideInAPackage("..aml.shared.audit..")
                 .check(classes);
+    }
+
+    @Test
+    void api_는_Repository_에_의존하지_않는다() {   // SCRUM-94
+        apiRepositoryRules().forEach(rule -> rule.check(classes));
+    }
+
+    @Test
+    void Transactional_은_application_에만() {   // SCRUM-94
+        transactionalRules().forEach(rule -> rule.check(classes));
+    }
+
+    @Test
+    void Case_StrDraft_상태_변경은_자기_기능_안에서만() {   // SCRUM-94
+        caseStrDraftRules().forEach(rule -> rule.check(classes));
+    }
+
+    @Test
+    void api_는_다른_기능에_의존하지_않는다() {   // SCRUM-94
+        apiOtherFeatureRules().forEach(rule -> rule.check(classes));
+    }
+
+    // 규칙이 실제로 잡는지는 ArchitectureRulesTest 가 가짜 클래스(archfixture)로 확인한다.
+
+    static List<ArchRule> apiRepositoryRules() {
+        return List.of(noClasses().that().resideInAPackage("..aml.*.api..")
+                .should().dependOnClassesThat().haveSimpleNameEndingWith("Repository").allowEmptyShould(true));
+    }
+
+    static List<ArchRule> transactionalRules() {
+        var exceptions = List.of(
+                // 공통 기록기: 호출자 트랜잭션에 참여하거나 분리하기 위한 예외
+                "com.team.aml.shared.audit.AccessLogWriter", "com.team.aml.shared.audit.LoginAccessLogWriter",
+                "com.team.aml.shared.ai.AiCallLogWriter",
+                // 프레임워크가 호출하는 진입점
+                "com.team.aml.user.infrastructure.DbUserDetailsService", "com.team.aml.user.infrastructure.DevUserSeeder");
+        var forbidden = not(resideInAPackage("..aml.*.application.."))
+                .and(describe("not an exact transactional exception", c -> !exceptions.contains(c.getName())));
+        List<ArchRule> rules = new ArrayList<>();
+        for (String annotation : List.of("org.springframework.transaction.annotation.Transactional", "jakarta.transaction.Transactional")) {
+            rules.add(noClasses().that(forbidden).should().beAnnotatedWith(annotation).allowEmptyShould(true));
+            rules.add(noMethods().that().areDeclaredInClassesThat(forbidden)
+                    .should().beAnnotatedWith(annotation).allowEmptyShould(true));
+        }
+        return rules;
+    }
+
+    static List<ArchRule> caseStrDraftRules() {
+        List<ArchRule> rules = new ArrayList<>();
+        for (String feature : List.of("cases", "str")) {
+            String owner = "com.team.aml." + feature + ".domain." + (feature.equals("cases") ? "Case" : "StrDraft");
+            rules.add(noClasses().that().resideOutsideOfPackages("..aml." + feature + ".application..",
+                            "..aml." + feature + ".domain..", "..aml." + feature + ".infrastructure..")
+                    .should(accessTargetWhere(describe("access non-getter methods of " + owner, access -> {
+                        String name = access.getTarget().getName();
+                        return !(access instanceof JavaFieldAccess) && access.getTargetOwner().getName().equals(owner)
+                                && !name.startsWith("get") && !name.startsWith("is")
+                                && !List.of("<init>", "equals", "hashCode", "toString").contains(name);
+                    }))).allowEmptyShould(true));
+        }
+        return rules;
+    }
+
+    static List<ArchRule> apiOtherFeatureRules() {
+        return List.of("source", "detection", "cases", "str", "user").stream().<ArchRule>map(feature ->
+                noClasses().that().resideInAPackage("..aml." + feature + ".api..")
+                        .should().dependOnClassesThat().resideInAnyPackage(List.of("source", "detection", "cases", "str")
+                                .stream().filter(target -> !target.equals(feature)).map(target -> "..aml." + target + "..")
+                                .toArray(String[]::new)).allowEmptyShould(true)).toList();
     }
 }

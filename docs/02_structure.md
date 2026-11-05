@@ -83,6 +83,12 @@ DB 없이 돌고, 어기면 빌드가 빨갛게 돼요. 아직 클래스가 없�
 | `다른_기능의_infrastructure_직접_호출_금지` | 기능 폴더 밖에서 그 기능의 `infrastructure` 패키지를 쓰는 것 |
 | `계층_의존_방향` | 기능마다: `api`는 누구도 못 부름 · `application`은 `api`만 부름 · `domain`은 api·application·infrastructure가 씀 · `infrastructure`는 누구도 못 부름 |
 | `domain_은_Spring_을_모른다` | `*.domain` 패키지가 `org.springframework.web/stereotype/transaction/security`를 쓰는 것 (JPA·Spring Data 애노테이션은 허용) |
+| `로그인_기록은_security_만_부른다` | `LoginAccessLogWriter`를 `shared.security`·`shared.audit` 밖에서 쓰는 것 [SCRUM-19] |
+| `열람_기록_엔티티와_저장소는_audit_안에서만_쓴다` | `AccessLog`·`AccessLogRepository`를 `shared.audit` 밖에서 쓰는 것 [SCRUM-93] |
+| `api_는_Repository_에_의존하지_않는다` | `*.api` 클래스가 이름이 `Repository`로 끝나는 클래스를 쓰는 것 [SCRUM-94] |
+| `Transactional_은_application_에만` | `@Transactional`(Spring·jakarta 둘 다)이 붙은 클래스·메서드가 `*.application` 밖에 있는 것. 예외 5개는 `08_decisions.md` 11/5 [SCRUM-94] |
+| `Case_StrDraft_상태_변경은_자기_기능_안에서만` | `Case`·`StrDraft`의 getter가 아닌 메서드(`get`·`is`로 시작하지 않는 것, `require*`·`currentBody`·static 팩토리 포함)를 자기 기능의 application·domain·infrastructure 밖에서 부르는 것. 메서드 참조도 잡아요 [SCRUM-94] |
+| `api_는_다른_기능에_의존하지_않는다` | `X.api`가 `source`·`detection`·`cases`·`str` 중 X가 아닌 기능을 쓰는 것. `user`·`shared`는 허용 [SCRUM-94] |
 
 ## 6. `ArchitectureTest`가 **못** 막는 것 — 리뷰에서 봐야 해요
 
@@ -90,25 +96,26 @@ DB 없이 돌고, 어기면 빌드가 빨갛게 돼요. 아직 클래스가 없�
 
 | 못 막는 것 | 왜 통과하나 | 규칙 출처 |
 |---|---|---|
-| 컨트롤러가 **리포지토리 인터페이스**를 바로 부름 | 리포지토리 인터페이스가 `domain`에 있고, `api → domain`은 허용 | 가이드 §3 실수, 레퍼런스 §4.2 |
 | 엔티티를 응답으로 그대로 반환 | 계층 규칙만 봄 | 레퍼런스 §4.2 |
-| `@Transactional`이 컨트롤러·리포지토리 구현에 붙음 | domain만 `spring.transaction`을 막음 | 레퍼런스 §8.4 |
 | 트랜잭션 안에서 `AiClient` 호출 | 실행 흐름은 정적 분석으로 안 보임 | 가이드 §5 |
 | 엔티티에 public setter, `setStatus()` | 검사 규칙 없음 | README 규칙 2 |
-| 다른 기능의 엔티티 상태를 바꾸는 메서드 호출 | `domain` 읽기 참조는 허용이라 호출도 통과 | 레퍼런스 §4.1 |
+| `Case`·`StrDraft` 밖의 다른 기능 엔티티 상태를 바꾸는 메서드 호출 | `domain` 읽기 참조는 허용이라 호출도 통과. 두 엔티티만 규칙으로 막음(SCRUM-94) | 레퍼런스 §4.1 |
+| `shared`의 기능 이름 분기(`if (type == CASE)`) | ArchUnit은 import만 봐서 문자열·enum 분기는 안 보임 | 11/2 리뷰 질문 1 |
 | 애그리거트 간 객체 참조(`@ManyToOne Case case`) | 같은 규칙 | 레퍼런스 §4.3 |
 | 응답에 정답 라벨·계좌번호 원문 노출 | 데이터 규칙 | 레퍼런스 §10 |
 
 ## 7. 자동 검사로 옮길 후보 〔제안〕
 
-위 표 중 ArchUnit으로 잡을 수 있는 것들이에요. 리뷰에서 사람이 매번 보는 것보다 CI가 막는 게 확실해요. 팀이 좋다고 하면 진희가 `ArchitectureTest`에 추가 PR을 올릴게요.
+ArchUnit으로 잡을 수 있는 것들이에요. 리뷰에서 사람이 매번 보는 것보다 CI가 막는 게 확실해요. "옮김" 줄은 `ArchitectureTest`에 들어갔어요(SCRUM-94). 나머지는 팀이 좋다고 하면 진희가 추가 PR을 올릴게요.
 
-| 후보 규칙 | 막는 것 | 난이도 |
+| 후보 규칙 | 막는 것 | 난이도·상태 |
 |---|---|---|
-| `api` 패키지 클래스는 `*Repository`에 의존하지 않는다 | 컨트롤러가 리포지토리 직접 호출 | 쉬움 |
-| `@Transactional`은 `application` 패키지에만 | 컨트롤러·리포지토리 구현의 트랜잭션 | 쉬움 |
-| `@Entity` 클래스에 `public void set*` 메서드가 없다 (Lombok `@Setter` 포함) | `setStatus()` | 쉬움 |
+| `api` 패키지 클래스는 `*Repository`에 의존하지 않는다 | 컨트롤러가 리포지토리 직접 호출 | 옮김(SCRUM-94) |
+| `@Transactional`은 `application` 패키지에만 | 컨트롤러·리포지토리 구현의 트랜잭션 | 옮김(SCRUM-94) |
+| `Case`·`StrDraft`의 getter가 아닌 메서드는 자기 기능 안에서만 호출 | str이 `AttachDraftToCase` 대신 `case.attachDraft()`를 바로 부르는 것, 컨트롤러에서 부르는 것 | 옮김(SCRUM-94) |
+| `api`는 다른 기능에 의존하지 않는다 | 컨트롤러가 다른 기능을 바로 부르는 것. 기능 간 호출은 application에서 | 옮김(SCRUM-94) |
+| `@Entity` 클래스에 `public void set*` 메서드가 없다 (Lombok `@Setter` 포함) | `setStatus()` | 쉬움 — 위반 0 확인(11/5) |
 | `@RestController` 메서드의 반환 타입이 `@Entity`가 아니다 | 엔티티 노출 | 보통 |
-| 다른 기능의 `domain` 클래스는 읽기 전용 메서드만 호출 | 다른 기능 엔티티 상태 변경 | 어려움 — 리뷰로 |
+| 다른 기능의 `domain` 클래스는 읽기 전용 메서드만 호출 | 다른 기능 엔티티 상태 변경 | `Case`·`StrDraft`는 옮김(SCRUM-94), 다른 엔티티는 리뷰로 |
 
 리뷰에서 **서로 다른 사람에게 같은 지적이 두 번** 나오면 이 표에 올려요.
