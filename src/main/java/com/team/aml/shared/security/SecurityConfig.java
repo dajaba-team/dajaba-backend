@@ -19,6 +19,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.ExceptionTranslationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.savedrequest.NullRequestCache;
 import org.springframework.security.web.session.HttpSessionEventPublisher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -103,6 +104,8 @@ public class SecurityConfig {
             .exceptionHandling(e -> e
                 .authenticationEntryPoint(handlers.entryPoint())
                 .accessDeniedHandler(handlers.accessDenied()))
+            // 401 때 "로그인 뒤 돌아갈 요청"을 세션에 저장하지 않는다 — JSON API라 안 쓰고, 비로그인 요청마다 세션이 생겼다 (SCRUM-157)
+            .requestCache(c -> c.requestCache(new NullRequestCache()))
             .with(new JsonLoginConfigurer<>(om), l -> l
                 .successHandler(handlers.loginSuccess())
                 .failureHandler(handlers.loginFailure()))
