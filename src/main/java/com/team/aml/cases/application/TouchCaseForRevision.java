@@ -66,6 +66,7 @@ public class TouchCaseForRevision {
             return saved.getVersion();
         }
         cases.bumpVersion(c);                             // 상태는 그대로, version 만 +1 (바로 UPDATE)
+        // force increment 뒤 엔티티 version 도 새 값으로 바뀜 (테스트: 정상_DRAFTED_수정본이면_돌려준_version이_커밋된_cases_version과_같다)
         return c.getVersion();
     }
 }
