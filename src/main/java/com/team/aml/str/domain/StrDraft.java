@@ -5,8 +5,6 @@ import com.team.aml.shared.domain.AssignedIdEntity;
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
-
-import java.text.Normalizer;
 import java.text.Normalizer;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -97,9 +95,6 @@ public class StrDraft extends AssignedIdEntity {
         this.revisions.add(StrRevision.aiOriginal(aiNarrative)); // 수정본 1번 = AI 원문
     }
 
-    /**
-     * AI 응답으로 초안을 만든다. draftId 는 AI 를 부르기 전에 받은 번호, payload 는 AI 응답 전체(facts 포함).
-     */
     /**
      * AI 응답으로 초안을 만든다. draftId 는 AI 를 부르기 전에 받은 번호, payload 는 AI 응답 전체(facts 포함).
      */
