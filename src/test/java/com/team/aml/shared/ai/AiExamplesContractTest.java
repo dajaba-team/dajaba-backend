@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -96,5 +97,67 @@ class AiExamplesContractTest {
         assertThat(dto.status()).isEqualTo("PASSED");
         assertThat(dto.verifierVersion()).isEqualTo("verify-2026.11.1+judge_v2");
         assertThat(dto.raw().toString()).isEqualTo(original.toString());
+    }
+
+    // --- SCRUM-128 점수 응답 (규약 §3) -------------------------------------------
+
+    @Test
+    void score_response_fields_populated_and_raw_has_original() throws Exception {
+        JsonNode original = readExample("score_response.json");
+        List<ScoreResult> items = WebClientAiClient.readScoreBatch(om, original);
+        assertThat(items).hasSize(2);
+
+        ScoreResult ok = items.get(0);
+        assertThat(ok.alertId()).isEqualTo("ALT-20220903-000142");
+        assertThat(ok.predictionId()).isEqualTo("p-9f3a2c");
+        assertThat(ok.score()).isEqualTo(0.91);
+        assertThat(ok.threshold()).isEqualTo(0.7);
+        assertThat(ok.dataQualityStatus()).isEqualTo("OK");
+        assertThat(ok.failureCode()).isNull();
+        assertThat(ok.reasons()).isEqualTo(original.at("/scores/0/reasons"));
+        assertThat(ok.evidenceTransactionIds()).containsExactly(104221L, 104233L, 104301L);
+        assertThat(ok.contextTransactionIds()).containsExactly(103998L, 104002L);
+        assertThat(ok.raw()).isEqualTo(original.at("/scores/0"));   // 항목 원문 그대로
+
+        ScoreResult failed = items.get(1);
+        assertThat(failed.alertId()).isEqualTo("ALT-20220903-000143");
+        assertThat(failed.predictionId()).isNull();
+        assertThat(failed.score()).isNull();
+        assertThat(failed.threshold()).isEqualTo(0.7);
+        assertThat(failed.dataQualityStatus()).isEqualTo("FAILED");
+        assertThat(failed.failureCode()).isEqualTo("TRANSACTION_NOT_FOUND");
+        assertThat(failed.reasons()).isEmpty();
+        assertThat(failed.evidenceTransactionIds()).isEmpty();
+        assertThat(failed.contextTransactionIds()).isEmpty();
+        assertThat(failed.raw()).isEqualTo(original.at("/scores/1"));
+
+        for (ScoreResult r : items) {   // 맨 위 scoring_meta 네 칸 + produced_at 이 항목마다
+            assertThat(r.meta().modelVersion()).isEqualTo("xgb-2026-11-05");
+            assertThat(r.meta().featureVersion()).isEqualTo("f1");
+            assertThat(r.meta().serverVersion()).isEqualTo("a1b2c3d");
+            assertThat(r.meta().latencyMs()).isEqualTo(1840);
+            assertThat(r.producedAt()).isEqualTo("2026-11-03T01:05:00Z");
+        }
+        assertThat(ok.meta()).isSameAs(failed.meta());   // 같은 묶음은 같은 객체
+    }
+
+    @Test
+    void score_response_scoring_meta_roundtrip() throws Exception {
+        JsonNode original = readExample("score_response.json").get("scoring_meta");
+        ScoringMeta dto = om.treeToValue(original, ScoringMeta.class);
+        assertThat(om.valueToTree(dto).toString()).isEqualTo(original.toString());
+    }
+
+    @Test
+    void score_payload_for_storage_is_item_plus_scoring_meta_and_produced_at() throws Exception {
+        JsonNode original = readExample("score_response.json");
+        ScoreResult ok = WebClientAiClient.readScoreBatch(om, original).get(0);
+
+        ObjectNode expected = (ObjectNode) original.at("/scores/0").deepCopy();
+        expected.set("scoring_meta", original.get("scoring_meta"));
+        expected.set("produced_at", original.get("produced_at"));
+
+        assertThat(ok.payloadForStorage()).isEqualTo(expected);
+        assertThat(ok.raw()).isEqualTo(original.at("/scores/0"));   // raw 는 바뀌지 않음
     }
 }

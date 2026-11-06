@@ -119,7 +119,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 
 | 메서드 | AI 엔드포인트 | 부르는 쪽 |
 |---|---|---|
-| `scores(alerts)` | `POST /v1/scores` — 500개씩 나눠 보냄 | detection `RequestScores` |
+| `scores(batchRunId, alerts)` | `POST /v1/scores` — 500개씩 나눠 보냄 | detection `RequestScores` |
 | `createDraft(request)` | `POST /v1/str/drafts` | str `RequestStrDraft` |
 | `verify(draftId, request)` | `POST /v1/str/verify` — `draftId` 는 인자로 따로(요청 본문엔 안 넣음 — AI StrictModel, SCRUM-151) | str `VerifyStrDraft` |
 | `caseSummary(request)` | `POST /v1/cases/summary` | cases `RefreshCaseSummary` |
@@ -149,6 +149,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   모델 이름·`feature_version` 같은 나머지 버전은 저장하지 않아요. `generation_id`·`request_id`로 AI 쪽 기록에서 찾아요.
 - 기록은 **별도 트랜잭션**(`AiCallLogWriter`, `REQUIRES_NEW`)으로, AI 응답을 받은 **호출 스레드에서** 해요(reactor 연산자 안에서 JPA 금지). 바깥 작업이 롤백돼도 실패 행은 남고, 기록이 실패해도 AI 결과·예외는 그대로예요(`WebClientAiClient`가 삼키고 경고 로그). [SCRUM-18]
 - `AiDtos`는 규약 v0.4 모양(SCRUM-151) — 초안 요청은 `draftId·caseNo·alert(AlertPayload+createdAt)·evidenceTransactionIds·reasons·priorAlertCount·investigatorNotes·reportingInstitution` record, 검증 요청은 `generationId·revisionNo·narrative` record(`draftId` 는 인자로 따로). 응답은 백엔드가 쓰는 칸만 record 필드로 뽑고 원문은 `raw: JsonNode` 로 둠(원칙 4). `narrative[]` 는 `NarrativeSectionDto(section: String, text, cites, evidenceIds)` — `section` 이 String 인 이유는 enum(`str.domain.StrSection`) 을 shared 에서 참조하면 ArchitectureTest 위반이기 때문. 섹션 이름 검사는 str 도메인 몫.
+- **점수 응답 매핑** (규약 §3, SCRUM-128) — 요청은 `ScoresRequest(batchRunId, alerts)`. AI 응답은 묶음(500개)마다 `{batch_run_id, scores[], scoring_meta, produced_at}` 이고, `WebClientAiClient` 가 묶음마다 `scoring_meta`·`produced_at` 을 그 묶음 **항목마다** 붙여 `ScoreResult` 하나로 돌려줘요 — `alertId·predictionId·score·threshold·dataQualityStatus·failureCode·reasons(JsonNode)·evidenceTransactionIds·contextTransactionIds·meta(modelVersion·featureVersion·serverVersion·latencyMs)·producedAt·raw`. `alert_scores` 한 행은 항목 하나로 채우고, `payload` 는 `payloadForStorage()`(항목 원문 + `scoring_meta` + `produced_at`). **`score_band` 는 AI가 주지 않아요** — `CasePolicy` 몫. 묶음마다 응답 `batch_run_id` 가 보낸 값과 다르거나, `scoring_meta` 가 없거나, `scores[]` 의 `alert_id` 집합이 보낸 경보와 다르면(빠짐·남음·중복) 502 `AI_BAD_RESPONSE`. `scores()` 는 안에서 500개씩 나눠 보내고 **전부 합쳐** 돌려주므로, 묶음마다 커밋하려면 부르는 쪽이 500개 이하로 나눠 호출해요.
 
 **트랜잭션 패턴 — "DB → HTTP → DB"** 네 군데 [레퍼런스 §8.4]
 1. 점수 요청: `RequestScores` (500개 묶음마다 커밋)

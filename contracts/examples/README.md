@@ -18,5 +18,6 @@ AI 리포 `dajaba-AI/contracts/examples/` 와 **바이트 그대로 같은** 예
 | `verify_request.json` | §5.3 검증 요청 (`draftId` 는 본문에 없음 — 인자로) | `AiExamplesContractTest.verify_request_roundtrip_has_no_draft_id_field` |
 | `verify_response.json` | §5.3 검증 응답 — CODE_FAILED 예시 | `AiExamplesContractTest.verify_response_code_failed_fields_populated` |
 | `verify_response_passed.json` | §5.3 검증 응답 — PASSED 예시 (narrative v2 7섹션 + narrative_refs·judge_meta 실측) | `AiExamplesContractTest.verify_response_passed_fields_populated` |
-| `score_request.json` | §2 경보 JSON 묶음 — `AlertPayload` 모양 (`created_at` 포함) | `AlertPayloadScoreRequestTest` |
+| `score_request.json` | §2 경보 JSON 묶음 — `ScoresRequest`·`AlertPayload` 모양 (`created_at` 포함) | `AlertPayloadScoreRequestTest` |
+| `score_response.json` | §3 점수 응답 — OK·FAILED 항목 + `scoring_meta` + `produced_at` | `AiExamplesContractTest.score_response_fields_populated_and_raw_has_original` |
 | `narrative_hash.json` | 본문 해시 테스트 벡터 (v1) | `NarrativeHashTest` |
