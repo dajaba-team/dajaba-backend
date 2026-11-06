@@ -20,6 +20,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -165,6 +167,15 @@ class CaseApiTest {
 
         assertThat(jdbc.queryForMap("select status, version from ops.cases where case_no = ?", caseNo))
                 .containsEntry("status", "REVIEWING").containsEntry("version", 1L);
+    }
+
+    @Test
+    void swagger_목록_파라미터는_쿼리_칸만_보인다_검증용_메서드는_없다() throws Exception {
+        // 프론트가 swagger 를 보고 MSW 목업을 맞추므로, CaseListQuery 의 검증 메서드(isPeriodInOrder)가 파라미터로 새지 않아야 한다
+        JsonNode params = json.readTree(body(get("/v3/api-docs"), 200)).at("/paths/~1api~1v1~1cases/get/parameters");
+        List<String> names = new ArrayList<>();
+        params.forEach(p -> names.add(p.get("name").asText()));
+        assertThat(names).containsExactlyInAnyOrder("status", "assignee", "from", "to", "sort", "page", "size");
     }
 
     // ── 준비 ──────────────────────────────────────────────────

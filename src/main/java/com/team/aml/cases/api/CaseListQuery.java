@@ -2,6 +2,7 @@ package com.team.aml.cases.api;
 
 import com.team.aml.cases.application.ListCases;
 import com.team.aml.cases.domain.CaseStatus;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -27,6 +28,8 @@ public record CaseListQuery(List<CaseStatus> status,
 
     static final int DEFAULT_SIZE = 20;
 
+    /** 검증 전용(from ≤ to). 쿼리 파라미터가 아니라서 swagger·MSW 목업에 보이지 않게 숨긴다 (#66 리뷰). */
+    @Schema(hidden = true)
     @AssertTrue(message = "from 은 to 보다 늦을 수 없습니다")
     public boolean isPeriodInOrder() {
         return from == null || to == null || !from.isAfter(to);
