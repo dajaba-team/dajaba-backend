@@ -49,7 +49,7 @@
 
 | 예외 | HTTP | `code` |
 |---|---|---|
-| `@Valid` 실패, JSON 파싱 실패 | 400 | `INVALID_REQUEST` |
+| `@Valid` 실패, JSON 파싱 실패, 쿼리·경로 파라미터 오류(`details.parameter`에 틀린 파라미터 이름) | 400 | `INVALID_REQUEST` |
 | `NotFoundException` 하위 | 404 | 하위 클래스가 정함 (`CASE_NOT_FOUND`, `DRAFT_NOT_FOUND` …) |
 | `ForbiddenException` 하위 | **403** | 클래스 이름 UPPER_SNAKE (`NOT_APPROVER`, `NOT_ASSIGNEE` …) [SCRUM-67] |
 | `DomainException` 하위 전부 (위 둘 제외) | **409** | 클래스 이름 UPPER_SNAKE (`INVALID_CASE_TRANSITION`, `SELF_APPROVAL` …) |

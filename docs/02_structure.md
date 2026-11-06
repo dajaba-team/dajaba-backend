@@ -13,10 +13,10 @@ com.team.aml
 ├─ user        로그인·사용자          진희 (W4 사용자 관리는 "먼저 끝난 사람, 없으면 진희")
 └─ shared      공통                  진희 — 다른 사람은 PR로 요청
    ├─ domain    BaseEntity, CreatedOnlyEntity, DomainException, NotFoundException, DisplayNumber
-   ├─ api       GlobalExceptionHandler, ErrorResponse, PageResponse
+   ├─ api       GlobalExceptionHandler, ErrorResponse, PageResponse, BatchRunController(배치 상태 조회)
    ├─ security  SecurityConfig, AppUserDetails, CurrentUser, SessionAuditorAware, 401/403 JSON, request_id·user_id 필터
    ├─ config    JPA Auditing, OpenAPI, AmlProperties
-   ├─ batch     BatchRun, BatchRunRepository, BatchType, BatchStatus, 409 예외 2개
+   ├─ batch     BatchRun, BatchRunRepository, BatchType, BatchStatus, 409 예외 2개, BatchRunQuery·BatchRunView·404 예외 — BatchRunQuery는 화면용 읽기 전용 조회라 컨트롤러가 바로 불러도 됨(쓰기 없음)
    └─ ai        AiClient, AiDtos, MockAiClient, AiHealthCheck (WebClient 구현·ai_call_logs는 W3)
 
 각 기능 폴더 안은 똑같이:

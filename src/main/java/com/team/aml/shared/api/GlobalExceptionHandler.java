@@ -15,8 +15,11 @@ import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -24,7 +27,7 @@ import java.util.Map;
 /**
  * 예외 → HTTP 변환은 전부 여기 (레퍼런스 8.2). 컨트롤러에 try-catch 는 없다.
  *
- *  @Valid 실패, JSON 파싱 실패      → 400 INVALID_REQUEST
+ *  @Valid 실패, JSON 파싱 실패, 쿼리 파라미터 오류 → 400 INVALID_REQUEST
  *  *NotFoundException              → 404 <CLASS_NAME>
  *  ForbiddenException 하위         → 403 <CLASS_NAME> (역할·담당자 같은 업무 권한, SCRUM-67)
  *  DomainException 나머지          → 409 <CLASS_NAME>
@@ -46,6 +49,24 @@ public class GlobalExceptionHandler {
         }
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ErrorResponse.of("INVALID_REQUEST", "요청 값이 올바르지 않습니다", fields));
+    }
+
+    /**
+     * 쿼리·경로 파라미터 오류 — 없는 enum 값, 날짜 형식, @Min·@Max·@Pattern 위반. 처리가 없으면 500 이 된다.
+     * 틀린 파라미터 이름을 details.parameter 에 넣는다. 검증 위반이 여러 개면 첫 번째만.
+     */
+    @ExceptionHandler({MethodArgumentTypeMismatchException.class, MissingServletRequestParameterException.class,
+            HandlerMethodValidationException.class})
+    public ResponseEntity<ErrorResponse> invalidParameter(Exception e) {
+        String parameter = e instanceof MethodArgumentTypeMismatchException mismatch ? mismatch.getName()
+                : e instanceof MissingServletRequestParameterException missing ? missing.getParameterName()
+                : e instanceof HandlerMethodValidationException invalid
+                        ? invalid.getAllValidationResults().stream().findFirst()
+                                .map(r -> r.getMethodParameter().getParameterName()).orElse(null)
+                : null;
+        Map<String, Object> details = parameter == null ? Map.of() : Map.of("parameter", parameter);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ErrorResponse.of("INVALID_REQUEST", "요청 파라미터가 올바르지 않습니다", details));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
