@@ -1,7 +1,10 @@
 package com.team.aml.shared.ai;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.shared.ai.AiDtos.*;
 import com.team.aml.shared.config.AmlProperties;
 import io.netty.channel.ConnectTimeoutException;
@@ -22,6 +25,7 @@ import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * WebClientAiClient — 규약 §6 공통 동작을 MockWebServer 로 고정 (SCRUM-17).
@@ -154,20 +158,117 @@ class WebClientAiClientTest {
                 });
     }
 
+    // --- 점수 (SCRUM-128, 규약 §3) -------------------------------------------
+
+    /** 규약 §3 모양 응답 — 항목마다 OK, 맨 위 scoring_meta·produced_at. */
+    private String scoreBody(long batchRunId, List<String> ids, String modelVersion, String producedAt) {
+        ObjectNode body = om.createObjectNode().put("batch_run_id", batchRunId);
+        ArrayNode scores = body.putArray("scores");
+        for (String id : ids) {
+            ObjectNode s = scores.addObject().put("alert_id", id).put("prediction_id", "p-" + id)
+                    .put("score", 0.5).put("threshold", 0.7).put("data_quality_status", "OK");
+            s.putNull("failure_code");
+            s.putArray("reasons");
+            s.putArray("evidence_transaction_ids").add(1L);
+            s.putArray("context_transaction_ids");
+        }
+        body.putObject("scoring_meta").put("model_version", modelVersion).put("feature_version", "f-" + modelVersion)
+                .put("server_version", "s1").put("latency_ms", 10);
+        body.put("produced_at", producedAt);
+        return body.toString();
+    }
+
+    private static void assertBadResponse(Throwable e) {
+        assertThat(e).isInstanceOfSatisfying(AiClientException.class, ae -> {
+            assertThat(ae.code()).isEqualTo("AI_BAD_RESPONSE");
+            assertThat(ae.httpStatus()).isEqualTo(502);
+        });
+    }
+
     @Test
-    void 정상_scores_OK항목과_FAILED항목의_failure_code를_파싱한다() {
-        server.enqueue(json(200, "{\"scores\":["
-                + "{\"alert_id\":\"A1\",\"score\":0.91,\"data_quality_status\":\"OK\",\"failure_code\":null},"
-                + "{\"alert_id\":\"A2\",\"score\":null,\"data_quality_status\":\"FAILED\",\"failure_code\":\"TRANSACTION_NOT_FOUND\"}]}"));
+    void 정상_scores_예시_응답을_그대로_주면_새_칸을_읽고_요청은_batch_run_id와_alerts다() throws Exception {
+        server.enqueue(json(200, example("score_response.json")));
 
-        ScoresResponse res = client.scores(7L, List.of(alert("A1"), alert("A2")));
+        ScoresResponse res = client.scores(7L, List.of(alert("ALT-20220903-000142"), alert("ALT-20220903-000143")));
 
-        assertThat(res.scores()).hasSize(2);
-        assertThat(res.scores().get(0).dataQualityStatus()).isEqualTo("OK");
-        assertThat(res.scores().get(0).failureCode()).isNull();
-        assertThat(res.scores().get(1).dataQualityStatus()).isEqualTo("FAILED");
-        assertThat(res.scores().get(1).failureCode()).isEqualTo("TRANSACTION_NOT_FOUND");
-        assertThat(res.scores().get(1).score()).isNull();
+        JsonNode sent = om.readTree(server.takeRequest().getBody().readUtf8());
+        assertThat(sent.path("batch_run_id").asLong()).isEqualTo(7L);
+        assertThat(sent.path("alerts")).hasSize(2);
+        assertThat(sent.at("/alerts/0/created_at").asText()).isEqualTo("2026-11-03T01:00:00Z");
+
+        ScoreResult ok = res.scores().get(0);
+        assertThat(ok.threshold()).isEqualTo(0.7);
+        assertThat(ok.meta().modelVersion()).isEqualTo("xgb-2026-11-05");
+        assertThat(ok.meta().featureVersion()).isEqualTo("f1");
+        assertThat(ok.producedAt()).isEqualTo("2026-11-03T01:05:00Z");
+        assertThat(ok.reasons()).hasSize(1);
+        assertThat(ok.reasons().get(0).path("name").asText()).isEqualTo("account_in_counterparties_24h");
+        assertThat(ok.evidenceTransactionIds()).containsExactly(104221L, 104233L, 104301L);
+        ScoreResult failed = res.scores().get(1);
+        assertThat(failed.dataQualityStatus()).isEqualTo("FAILED");
+        assertThat(failed.failureCode()).isEqualTo("TRANSACTION_NOT_FOUND");
+        assertThat(failed.score()).isNull();
+        assertThat(failed.meta().featureVersion()).isEqualTo("f1");
+    }
+
+    @Test
+    void 경계_501개는_묶음_2개로_가고_항목마다_자기_묶음의_scoring_meta와_produced_at이_붙는다() throws Exception {
+        List<AlertPayload> alerts = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
+        for (int i = 0; i < 501; i++) {
+            ids.add("A" + i);
+            alerts.add(alert("A" + i));
+        }
+        server.enqueue(json(200, scoreBody(7L, ids.subList(0, 500), "M1", "2026-11-06T01:00:00Z")));
+        server.enqueue(json(200, scoreBody(7L, ids.subList(500, 501), "M2", "2026-11-06T01:00:09Z")));
+
+        ScoresResponse res = client.scores(7L, alerts);
+
+        assertThat(res.scores()).hasSize(501);
+        assertThat(om.readTree(server.takeRequest().getBody().readUtf8()).path("alerts")).hasSize(500);
+        assertThat(om.readTree(server.takeRequest().getBody().readUtf8()).path("alerts")).hasSize(1);
+        ScoreResult first = res.scores().get(0);
+        ScoreResult last500 = res.scores().get(499);
+        ScoreResult second = res.scores().get(500);
+        assertThat(first.alertId()).isEqualTo("A0");
+        assertThat(first.meta().modelVersion()).isEqualTo("M1");
+        assertThat(first.meta().featureVersion()).isEqualTo("f-M1");
+        assertThat(first.producedAt()).isEqualTo("2026-11-06T01:00:00Z");
+        assertThat(last500.meta()).isSameAs(first.meta());
+        assertThat(second.alertId()).isEqualTo("A500");
+        assertThat(second.meta().modelVersion()).isEqualTo("M2");
+        assertThat(second.meta().featureVersion()).isEqualTo("f-M2");
+        assertThat(second.producedAt()).isEqualTo("2026-11-06T01:00:09Z");
+    }
+
+    @Test
+    void 실패_응답_batch_run_id가_보낸_값과_다르면_AI_BAD_RESPONSE_502() {
+        server.enqueue(json(200, scoreBody(8L, List.of("A1"), "M1", "2026-11-06T01:00:00Z")));
+
+        assertBadResponse(catchThrowable(() -> client.scores(7L, List.of(alert("A1")))));
+    }
+
+    @Test
+    void 실패_응답에_scoring_meta가_없으면_AI_BAD_RESPONSE_502() throws Exception {
+        ObjectNode body = (ObjectNode) om.readTree(scoreBody(7L, List.of("A1"), "M1", "2026-11-06T01:00:00Z"));
+        body.remove("scoring_meta");
+        server.enqueue(json(200, body.toString()));
+
+        assertBadResponse(catchThrowable(() -> client.scores(7L, List.of(alert("A1")))));
+    }
+
+    @Test
+    void 실패_응답에_보낸_alert_id가_빠지면_AI_BAD_RESPONSE_502() {
+        server.enqueue(json(200, scoreBody(7L, List.of("A1"), "M1", "2026-11-06T01:00:00Z")));
+
+        assertBadResponse(catchThrowable(() -> client.scores(7L, List.of(alert("A1"), alert("A2")))));
+    }
+
+    @Test
+    void 실패_응답에_보내지_않은_alert_id가_있으면_AI_BAD_RESPONSE_502() {
+        server.enqueue(json(200, scoreBody(7L, List.of("A1", "A9"), "M1", "2026-11-06T01:00:00Z")));
+
+        assertBadResponse(catchThrowable(() -> client.scores(7L, List.of(alert("A1"), alert("A2")))));
     }
 
     // --- 경계: 재시도 (코드 기반) -------------------------------------------
@@ -175,7 +276,7 @@ class WebClientAiClientTest {
     @Test
     void 경계_503_DB_UNAVAILABLE는_1회_재시도하고_두번째가_성공하면_돌려준다() {
         server.enqueue(json(503, "{\"code\":\"DB_UNAVAILABLE\",\"message\":\"db down\"}"));
-        server.enqueue(json(200, "{\"scores\":[{\"alert_id\":\"A1\",\"score\":0.5,\"data_quality_status\":\"OK\"}]}"));
+        server.enqueue(json(200, scoreBody(7L, List.of("A1"), "M1", "2026-11-06T01:00:00Z")));
 
         ScoresResponse res = client.scores(7L, List.of(alert("A1")));
 
@@ -374,7 +475,7 @@ class WebClientAiClientTest {
 
     @Test
     void 정상_점수는_배치id와_scoring_meta_모델버전을_기록한다() {
-        server.enqueue(json(200, "{\"scores\":[],\"scoring_meta\":{\"model_version\":\"M1\"}}"));
+        server.enqueue(json(200, scoreBody(7L, List.of("A1"), "M1", "2026-11-06T01:00:00Z")));
         client.scores(7L, List.of(alert("A1")));
         assertThat(writer.rows).hasSize(1);
         AiCallLog row = writer.rows.get(0);

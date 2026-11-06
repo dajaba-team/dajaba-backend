@@ -31,6 +31,9 @@ public class MockAiClient implements AiClient {
             "subject", "period", "subject.account_key", "payment_formats",
             "counterparties.count", "observations", "typology");
 
+    /** 목업 응답의 추천 임계값 — AI 예시(`score_response.json`)와 같은 값. 운영 경계는 CasePolicy. */
+    private static final double MOCK_THRESHOLD = 0.7;
+
     private final ObjectMapper om;
 
     public MockAiClient(ObjectMapper om) {
@@ -39,19 +42,24 @@ public class MockAiClient implements AiClient {
 
     @Override
     public ScoresResponse scores(long batchRunId, List<AlertPayload> alerts) {
+        // SCRUM-128: 규약 §3 모양 — 묶음 하나로 보고 scoring_meta·produced_at 을 항목마다 붙임. 항목은 전부 OK.
+        ScoringMeta meta = new ScoringMeta("mock-0.0.1", "mock-f0", "mock", 0);
+        String producedAt = Instant.now().toString();
         List<ScoreResult> out = new ArrayList<>();
         for (AlertPayload a : alerts) {
             double score = 0.05 + (Math.abs(a.alertId().hashCode()) % 90) / 100.0;   // 0.05 ~ 0.94
-            String band = score >= 0.7 ? "HIGH" : score >= 0.4 ? "MEDIUM" : "LOW";
+            String predictionId = "PRD-mock-" + Math.abs(a.alertId().hashCode());
+            List<Long> evidence = a.transactionIds() == null ? List.of() : List.copyOf(a.transactionIds());
             ObjectNode raw = om.createObjectNode()
-                    .put("alert_id", a.alertId()).put("score", score).put("score_band", band)
-                    .put("data_quality_status", "OK").put("model_version", "mock-0.0.1")
-                    .put("prediction_id", "PRD-mock-" + Math.abs(a.alertId().hashCode()))
-                    .put("produced_at", Instant.now().toString());
-            raw.putArray("evidence_transaction_ids");
+                    .put("alert_id", a.alertId()).put("prediction_id", predictionId)
+                    .put("score", score).put("threshold", MOCK_THRESHOLD)
+                    .put("data_quality_status", "OK");
+            raw.putNull("failure_code");
             raw.putArray("reasons");
-            out.add(new ScoreResult(a.alertId(), score, band, "OK", "mock-0.0.1",
-                    raw.get("prediction_id").asText(), raw.get("produced_at").asText(), null, raw));
+            evidence.forEach(raw.putArray("evidence_transaction_ids")::add);
+            raw.putArray("context_transaction_ids");
+            out.add(new ScoreResult(a.alertId(), predictionId, score, MOCK_THRESHOLD, "OK", null,
+                    raw.get("reasons"), evidence, List.of(), meta, producedAt, raw));
         }
         return new ScoresResponse(out);
     }

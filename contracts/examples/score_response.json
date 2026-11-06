@@ -1,0 +1,61 @@
+{
+  "batch_run_id": 7,
+  "scores": [
+    {
+      "alert_id": "ALT-20220903-000142",
+      "prediction_id": "p-9f3a2c",
+      "score": 0.91,
+      "threshold": 0.7,
+      "data_quality_status": "OK",
+      "failure_code": null,
+      "reasons": [
+        {
+          "name": "account_in_counterparties_24h",
+          "observation": {
+            "value": 3,
+            "unit": "count",
+            "window_start": "2022-09-02T00:00:00",
+            "window_end": "2022-09-03T00:00:00",
+            "basis": "distinct_inbound_counterparties"
+          },
+          "baseline": {
+            "value": null,
+            "definition": null
+          },
+          "contribution": {
+            "method": "SHAP",
+            "value": 0.42,
+            "scale": "raw_margin"
+          }
+        }
+      ],
+      "evidence_transaction_ids": [
+        104221,
+        104233,
+        104301
+      ],
+      "context_transaction_ids": [
+        103998,
+        104002
+      ]
+    },
+    {
+      "alert_id": "ALT-20220903-000143",
+      "prediction_id": null,
+      "score": null,
+      "threshold": 0.7,
+      "data_quality_status": "FAILED",
+      "failure_code": "TRANSACTION_NOT_FOUND",
+      "reasons": [],
+      "evidence_transaction_ids": [],
+      "context_transaction_ids": []
+    }
+  ],
+  "scoring_meta": {
+    "model_version": "xgb-2026-11-05",
+    "feature_version": "f1",
+    "server_version": "a1b2c3d",
+    "latency_ms": 1840
+  },
+  "produced_at": "2026-11-03T01:05:00Z"
+}
