@@ -1,0 +1,31 @@
+{
+  "verification_id": "v-9c1d44",
+  "generation_id": "g-7c1d44e2",
+  "revision_no": 2,
+  "narrative_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "passed": false,
+  "status": "CODE_FAILED",
+  "code_checks": [
+    {
+      "check": "AMOUNT_MATCH",
+      "section": "SUMMARY",
+      "draft_value": "42,750.50 US Dollar",
+      "source_value": "inbound.amount.USD=42750.50",
+      "match": true,
+      "reason": null
+    },
+    {
+      "check": "DATE_MATCH",
+      "section": "WHAT_WHEN_WHERE",
+      "draft_value": "9월 3일",
+      "source_value": "period 2022-09-02..2022-09-02",
+      "match": false,
+      "reason": "MISMATCH"
+    }
+  ],
+  "llm_checks": null,
+  "narrative_refs": null,
+  "judge_meta": null,
+  "verifier_version": "verify-2026.11.1+judge_v2",
+  "produced_at": "2026-11-05T14:02:14Z"
+}

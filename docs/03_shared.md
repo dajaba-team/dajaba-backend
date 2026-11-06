@@ -120,7 +120,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 |---|---|---|
 | `scores(alerts)` | `POST /v1/scores` — 500개씩 나눠 보냄 | detection `RequestScores` |
 | `createDraft(request)` | `POST /v1/str/drafts` | str `RequestStrDraft` |
-| `verify(request)` | `POST /v1/str/verify` | str `VerifyStrDraft` |
+| `verify(draftId, request)` | `POST /v1/str/verify` — `draftId` 는 인자로 따로(요청 본문엔 안 넣음 — AI StrictModel, SCRUM-151) | str `VerifyStrDraft` |
 | `caseSummary(request)` | `POST /v1/cases/summary` | cases `RefreshCaseSummary` |
 | `health()` | `GET /v1/health` — 기동 시 1회, 실패해도 기동은 함 | `AiHealthCheck` |
 
@@ -140,14 +140,14 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   | 엔드포인트 | `target_type` / `target_id` | `ai_version` (응답 필드) |
   |---|---|---|
   | `/v1/scores` | `BATCH_RUN` / `batchRunId` | `scoring_meta.model_version` |
-  | `/v1/str/drafts` | `CASE` / `caseId` | `generation_meta.prompt_version` |
+  | `/v1/str/drafts` | `DRAFT` / `draftId` | `generation_meta.prompt_version` |
   | `/v1/str/verify` | `DRAFT` / `draftId` | `verifier_version` |
   | `/v1/cases/summary` | `CASE` / `caseId` | `generation_meta.prompt_version` |
   | `/v1/health` | null / null | null |
 
   모델 이름·`feature_version` 같은 나머지 버전은 저장하지 않아요. `generation_id`·`request_id`로 AI 쪽 기록에서 찾아요.
 - 기록은 **별도 트랜잭션**(`AiCallLogWriter`, `REQUIRES_NEW`)으로, AI 응답을 받은 **호출 스레드에서** 해요(reactor 연산자 안에서 JPA 금지). 바깥 작업이 롤백돼도 실패 행은 남고, 기록이 실패해도 AI 결과·예외는 그대로예요(`WebClientAiClient`가 삼키고 경고 로그). [SCRUM-18]
-- `AiDtos`는 규약 v0.2 이전 뼈대예요. 실제 연결 전에 `draft_id`·`generation_id`·검증 요청·응답 모양으로 바꿔요(SCRUM-17).
+- `AiDtos`는 규약 v0.4 모양(SCRUM-151) — 초안 요청은 `draftId·caseNo·alert(AlertPayload+createdAt)·evidenceTransactionIds·reasons·priorAlertCount·investigatorNotes·reportingInstitution` record, 검증 요청은 `generationId·revisionNo·narrative` record(`draftId` 는 인자로 따로). 응답은 백엔드가 쓰는 칸만 record 필드로 뽑고 원문은 `raw: JsonNode` 로 둠(원칙 4). `narrative[]` 는 `NarrativeSectionDto(section: String, text, cites, evidenceIds)` — `section` 이 String 인 이유는 enum(`str.domain.StrSection`) 을 shared 에서 참조하면 ArchitectureTest 위반이기 때문. 섹션 이름 검사는 str 도메인 몫.
 
 **트랜잭션 패턴 — "DB → HTTP → DB"** 네 군데 [레퍼런스 §8.4]
 1. 점수 요청: `RequestScores` (500개 묶음마다 커밋)
