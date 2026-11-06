@@ -139,6 +139,22 @@ class StrDraftTest {
         }
     }
 
+    // 4-cites: 문장을 고쳐도 그 단락의 cites(근거 facts 키)는 그대로 — 검증 요청에 그대로 보낸다 (규약 v0.4)
+    @Test
+    void revise해도_고친_단락의_cites는_그대로다() {
+        List<NarrativeSection> withCites = aiNarrative().stream()
+                .map(n -> new NarrativeSection(n.section(), n.text(), List.of("period", "inbound.count"), n.evidenceIds()))
+                .toList();
+        StrDraft draft = draft(CASE_ID, GENERATION_ID, withCites);
+
+        StrRevision rev = draft.revise(Map.of(StrSection.HOW, "고친 HOW"), INVESTIGATOR);
+
+        NarrativeSection afterHow = section(rev.getAfter(), StrSection.HOW);
+        assertThat(afterHow.text()).isEqualTo("고친 HOW");
+        assertThat(afterHow.cites()).containsExactly("period", "inbound.count");
+        assertThat(afterHow.evidenceIds()).isEqualTo(section(withCites, StrSection.HOW).evidenceIds());
+    }
+
     // 4-추가: 여러 단락을 한 번에 고치면 고친 단락 목록은 단락 순서(enum 순서)로 남는다
     @Test
     void 여러_단락을_고치면_고친_단락_목록은_단락_순서로_남는다() {
