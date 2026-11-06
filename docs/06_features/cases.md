@@ -55,7 +55,8 @@
 - `batch_runs`(`OPEN_CASES`): 실패가 한 건이라도 있으면 **FAILED**(건수 메시지 `대상 · 생성 · HIGH 아님 · 이미 있음 · 실패`), 없으면 SUCCEEDED(`rows_in` 대상, `rows_out` 생성). FAILED인 날은 다시 돌리면 남은 대상만 처리.
 - `cases.alert_id` UNIQUE로 중복 방지. 성공한 날짜의 남은 대상 **보충 실행**은 안건 21 결정이지만, 지금은 V004 `batch_runs_succeeded_uq` 때문에 409 `BATCH_ALREADY_DONE` 〔인덱스를 좁히는 마이그레이션 필요〕.
 - 시작 전 거절(행 안 만듦): 정책 비어 있음 `POLICY_NOT_CONFIGURED`, 실행 중 409 `BATCH_RUNNING`, 이미 성공 409 `BATCH_ALREADY_DONE`. 케이스 번호 연도 = 경보 `reference_ts` 연도, 행위자 SYSTEM.
-- 경계값 설정 `aml.case-policy.{version, low-to-medium, medium-to-high}` — 기본값 없음(평가 뒤 확정, 미결 23). 생성 당시 점수·모델·정책 버전 저장 칸은 〔다음 PR — Flyway 번호 예약 후〕. 컨트롤러 `POST /admin/batches/open-cases`(202, `@Async`)도 다음 PR. [SCRUM-105]
+- 경계값 설정 `aml.case-policy.{version, low-to-medium, medium-to-high}` — 기본값 없음(평가 뒤 확정, 미결 23). 생성 당시 점수·모델·정책 버전 저장 칸은 〔다음 PR — Flyway 번호 예약 후〕. [SCRUM-105]
+- **API — 구현됨 (SCRUM-105)** `POST /api/v1/admin/batches/open-cases?date=YYYY-MM-DD` → **202** `{batch_run_id, batch_type, batch_date, status: "RUNNING"}`(계약서 B4). `RequestOpenCases`가 `start()`로 RUNNING을 커밋한 뒤 `run()`을 Boot 기본 실행기(`applicationTaskExecutor`)에 넘겨요 — 적재(#56 `RequestIbmDatasetLoad`)와 같은 모양. 실행기가 거절하면 FAILED로 남기고 500. 결과는 `GET /admin/batches/{batch_run_id}`(#56). 시작 전 거절 409는 그대로 동기 응답. 〔`date` 누락·형식 오류 400은 #56의 `GlobalExceptionHandler` 쿼리 파라미터 처리가 들어와야 해요 — 지금은 500〕
 
 **메모** [안건 16 — 일부 미결]
 - 결정표 권장은 `case_history`의 `NOTE` 행(메모 전체를 매번 저장). 지윤 의견은 `case_note_history` 분리. **이름(A/B)이 엇갈려서 최종 확인 필요** — 지윤·진희.
@@ -81,6 +82,21 @@
 | 14 | `POST /admin/batches/open-cases?date=` | ADMIN |
 | 15 | `GET /cases/{case_no}/note-histories` | 조회 3역할 |
 
+**화면 유스케이스 — 구현됨 (SCRUM-105)** 컨트롤러·응답 마스킹은 SCRUM-106. 유스케이스는 엔티티가 아니라 record를 돌려주고, `account_key`는 내부 키 그대로라 응답에서 가린 값으로 바꿔요.
+
+| 유스케이스 | API | 검사 순서·오류 |
+|---|---|---|
+| `ListCases` (readOnly) | 01 `GET /cases` | `status` 비면 전체, `assignee` = `me`·login_id(없는 login_id면 빈 목록), `from`·`to` = **한국 날짜** 케이스 생성일 양 끝 포함. 정렬 `score`·`created_at`·`status`, 동률 `created_at DESC, id DESC`. 형식 검사(size ≤ 100, 정렬 화이트리스트, from ≤ to)는 컨트롤러 |
+| `GetCaseDetail` (readOnly 아님) | 02 `GET /cases/{case_no}` | 404 `CASE_NOT_FOUND`(기록 안 함) → `accessLog.view(CASE)` → 최근 이력 20건(최신 먼저, 작성자 login_id) · `available_actions` |
+| `AssignCase` | 03 `POST …/assign` | 404 → version 409 `CONCURRENT_UPDATE` → 대상: 조사역이 남 지정 409 `INVALID_ASSIGNEE`(`details.reason = SELF_ONLY`), 없는 login_id 404 `USER_NOT_FOUND`, 비활성·조사역 아님 409 `INVALID_ASSIGNEE` → 상태 409 `INVALID_CASE_TRANSITION`. 조사역은 `assignee` 생략 = 본인, ADMIN은 필수 |
+| `EscalateCase` | 07 `POST …/escalate` | 404 → version 409 → 담당 403 `NOT_ASSIGNEE` → 상태 409 → 사유 |
+| `CloseCase` | 06 `POST …/close` | 404 → version 409 → 담당 403 → 상태 409 → **초안 있으면 409 `CLOSE_REQUIRES_STR`**(`Case.closeWithoutDraft`) → 사유. 초안 있는 종결(str `close-with-draft`)이 부를 공개 기능은 아직 없음 |
+
+- 세 변경 유스케이스는 공통 변경 응답(`CaseChangeResult` — 계약서 5.3 M)을 돌려줘요. `version`·`updated_at`은 flush 뒤 값. 요청 `version` 비교 뒤 커밋 때 `@Version`이 한 번 더 막아서 동시에 맡기면 뒤 요청은 409 `CONCURRENT_UPDATE`.
+- **`available_actions` (`CaseAction`)** — 계약서 §4의 8개. `ASSIGN`(OPEN, 조사역·ADMIN) · `REASSIGN`(ADMIN, 재배정 가능 상태) · 담당만: `UPDATE_NOTES`·`REFRESH_SUMMARY`(REVIEWING·ESCALATED·DRAFTED·보완 반려) · `ESCALATE` · `CLOSE`/`CLOSE_WITH_DRAFT`(닫을 수 있는 상태에서 초안 유무로 하나) · `GENERATE_DRAFT`(초안을 붙일 수 있는 상태). 상태 판단은 `CaseStatus` 전이 표를 그대로 써요.
+- **아직 null인 칸 (후속)** — `score`·`score_band`·`policy_version`·`alert`·`latest_score`는 detection에 경보·점수 공개 조회가 생겨야 채워요(SCRUM-152, 준혁). 그래서 지금 `sort=score`는 "점수 전부 null"과 같은 결과(= 동률 규칙 `created_at DESC, id DESC`). `aggregates`·`latest_summary`·`investigator_notes`는 API-08·12·05, `current_draft`는 str 조합 계층(미결 17).
+- 〔확인 필요〕 명세 API-03은 "조사역이 다른 assignee 지정"을 **400**으로 적었는데, 지금 `shared`에 400 업무 예외가 없어 409 `INVALID_ASSIGNEE`(`SELF_ONLY`)로 뒀어요 — 진희님 확인.
+
 **str에 주는 공개 기능 — 구현됨 (SCRUM-98)** 모두 `Propagation.MANDATORY`라 str 트랜잭션 안에서만 불러요(혼자 부르면 `IllegalTransactionStateException`).
 
 | 유스케이스 | 하는 일 | 검사 순서·오류 |
@@ -98,6 +114,6 @@
 - JPQL에서 `CASE`가 예약어라 엔티티 이름은 `InvestigationCase`예요(`select c from InvestigationCase c`).
 - `case_history.case_version_before`는 **그 변경 직전**의 `cases.version`이에요. `@Version`은 flush 때 올라가서, 한 트랜잭션에서 전이가 두 번 일어나면 두 행에 같은 번호가 남아요.
 
-**아직 남은 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`, `SubmitCaseForApproval`, `ApproveCase`, `RejectCase`, `CloseCase`. Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
+**아직 남은 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`, `SubmitCaseForApproval`, `ApproveCase`, `RejectCase`, 초안 있는 종결(명세 이름 `CloseCase` — 화면용 `CloseCase`가 이미 있어 str 담당과 이름을 맞춰요). Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
 
 **〔확인 필요〕** 상세 화면에 "현재 초안"을 합치는 위치(cases → str 의존 금지라 상위 조합 계층 필요 — 권장은 str 조회 유스케이스가 조합. 같은 시점 보장은 한 SQL·REPEATABLE READ·조합 후 버전 재확인 중 하나로, 기본 READ COMMITTED에선 한 트랜잭션만으로는 부족 — 노션 미결 17번), 메모·요약을 편집할 수 있는 상태 범위, 화면 집계 규칙(유입은 받은 금액, 유출은 보낸 금액, 자기계좌 제외 — STR facts와 같은 규칙인지). AI facts는 **같은 법인의 다른 계좌**와 오간 거래를 `internal`로 따로 빼서 입출금에 넣지 않아요(dajaba-AI `docs/str/04_facts.md`). 그래서 같은 경보라도 화면과 STR 숫자가 다를 수 있어요 — 각 숫자가 무엇을 포함하는지 이름·설명을 정하고, 같은 법인 계좌 간 이체·복수 통화 사례로 같이 확인해요.

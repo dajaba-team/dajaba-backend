@@ -147,6 +147,15 @@ public class Case extends BaseEntity {
         return status == CaseStatus.DRAFTED || isRejectedForRevision();
     }
 
+    /**
+     * 담당 조사역이 메모·요약을 고칠 수 있는 상태인가 — REVIEWING·ESCALATED·DRAFTED·보완 반려 (CASES 명세 §2.3, 계약서 5.3).
+     * 보고 안 함 반려·승인 대기 이후는 내용 편집 금지.
+     */
+    public boolean isEditableByAssignee() {
+        return status == CaseStatus.REVIEWING || status == CaseStatus.ESCALATED
+                || status == CaseStatus.DRAFTED || isRejectedForRevision();
+    }
+
     /** 보완 반려(REJECTED+NEED_REVISION) 상태인가. */
     public boolean isRejectedForRevision() {
         return status == CaseStatus.REJECTED && rejectionReasonCode == RejectionReasonCode.NEED_REVISION;
@@ -188,8 +197,8 @@ public class Case extends BaseEntity {
 
     /**
      * 종결 → CLOSED. REVIEWING·ESCALATED·DRAFTED, REJECTED+NOT_REPORTABLE 에서만. 사유 필수.
-     * 초안이 있는 종결은 str 종결 유스케이스가 초안 SUPERSEDED 와 같은 트랜잭션에서 부른다
-     * (직접 종결 API 의 CLOSE_REQUIRES_STR 검사는 application 몫).
+     * 초안이 있는 종결은 str 종결 유스케이스가 초안 SUPERSEDED 와 같은 트랜잭션에서 부른다.
+     * 직접 종결 API(초안 없음)는 closeWithoutDraft 를 쓴다.
      */
     public void close(Long actorId, CloseReason reason, String comment) {
         Objects.requireNonNull(reason, "closeReason");
@@ -198,6 +207,18 @@ public class Case extends BaseEntity {
         moveTo(CaseStatus.CLOSED, CaseHistoryAction.CLOSE, reason.name(), comment, actorId);
         this.closeReason = reason;
         this.rejectionReasonCode = null;   // 과거 반려 코드는 REJECT 이력에 남아 있다
+    }
+
+    /**
+     * 초안 없는 종결 (POST /cases/{case_no}/close, API-06). 닫을 수 없는 상태면 409 INVALID_CASE_TRANSITION,
+     * 닫을 수는 있지만 초안이 있으면 409 CLOSE_REQUIRES_STR — 화면이 close-with-draft 로 가게 한다.
+     */
+    public void closeWithoutDraft(Long actorId, CloseReason reason, String comment) {
+        status.validateTransition(CaseStatus.CLOSED, rejectionReasonCode);
+        if (currentDraftId != null) {
+            throw new CloseRequiresStrException(caseNo);
+        }
+        close(actorId, reason, comment);
     }
 
     /**

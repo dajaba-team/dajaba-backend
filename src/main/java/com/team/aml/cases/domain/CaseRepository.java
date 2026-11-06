@@ -1,5 +1,10 @@
 package com.team.aml.cases.domain;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+
+import java.time.Instant;
+import java.util.Collection;
 import java.util.Optional;
 
 /**
@@ -32,6 +37,14 @@ public interface CaseRepository {
     void bumpVersion(Case c);
     Optional<Case> findByCaseNo(String caseNo);
     boolean existsByAlertId(Long alertId);
+
+    /**
+     * 목록 (API-01). statuses 는 비우지 않고 넘긴다(전체면 CaseStatus 전부). assigneeId 는 null 이면 조건 없음.
+     * 생성 시각은 createdFrom 이상 createdTo 미만 — 둘 다 null 불가(PostgreSQL 이 null timestamptz 파라미터 타입을 못 정한다).
+     * 정렬은 pageable 의 Sort — 허용 컬럼은 ListCases 가 정한다.
+     */
+    Page<Case> search(Collection<CaseStatus> statuses, Long assigneeId, Instant createdFrom, Instant createdTo,
+                      Pageable pageable);
 
     /**
      * 케이스 번호 일련번호 (ops.case_no_seq, V006). 번호 형식은 DisplayNumber.caseNo 한 곳.
