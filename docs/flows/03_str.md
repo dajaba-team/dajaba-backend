@@ -22,7 +22,7 @@ sequenceDiagram
     REQ->>DB: 케이스·경보·점수 reasons 읽기 + draft_id 시퀀스 선발급 (facts는 계산하지 않음 — 안건 23)
     REQ->>AI: POST /v1/str/drafts {draft_id, case_no, alert, evidence_transaction_ids(= alert.transaction_ids 전체), reasons, prior_alert_count, investigator_notes, reporting_institution} (≤90초)
     note over AI: AI가 ops를 읽어 facts 계산 → 마스킹 → LLM. 같은 draft_id가 생성 중이면 409 GENERATION_IN_PROGRESS(재시도 안 함)
-    AI-->>REQ: {draft_id, generation_id, facts, narrative[6 sections, cites·evidence_ids], generation_meta, verification: null}
+    AI-->>REQ: {draft_id, generation_id, facts, narrative[7항목, cites·evidence_ids — 옛 6섹션 초안도 읽음], generation_meta, verification: null}
     STRC->>SAVE: SaveStrDraft(caseId, 응답)  ⟵ @Transactional
     SAVE->>DB: 이전 ACTIVE 초안 → SUPERSEDED (재생성일 때)
     SAVE->>DB: INSERT str_drafts (같은 draft_id, generation_id, payload jsonb 원문 + 추출 컬럼 3개, ACTIVE) — V008

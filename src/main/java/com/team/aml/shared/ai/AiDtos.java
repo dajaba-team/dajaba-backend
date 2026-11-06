@@ -3,6 +3,8 @@ package com.team.aml.shared.ai;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.List;
 
@@ -25,15 +27,42 @@ public final class AiDtos {
                                String typologyHint, String windowStart, String windowEnd, String referenceTs,
                                List<Long> transactionIds, JsonNode ruleFacts, String createdAt) {}
 
-    /**
-     * POST /v1/scores 응답 항목 (규약 3절). score_band 는 백엔드가 계산할 예정(안건 2) — 그때까지 AI 값 그대로.
-     * 항목 실패는 data_quality_status="FAILED" + score=null + failure_code (4값, 아니면 null). SCORED/FAILED 판단은
-     * data_quality_status 로 — 별도 status 필드를 두지 않는다(AI 가 보내는 건 data_quality_status). [10/29 SCRUM-41]
-     */
-    public record ScoreResult(String alertId, Double score, String scoreBand, String dataQualityStatus,
-                              String modelVersion, String predictionId, String producedAt,
-                              String failureCode, JsonNode raw) {}
+    /** POST /v1/scores 요청 한 묶음 (규약 §2, ≤ max-batch 건). SCRUM-128. */
+    public record ScoresRequest(long batchRunId, List<AlertPayload> alerts) {}
 
+    /** POST /v1/scores 응답 맨 위 `scoring_meta` (규약 §3, AI `ScoringMeta`). 묶음마다 하나. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ScoringMeta(String modelVersion, String featureVersion, String serverVersion, Integer latencyMs) {}
+
+    /**
+     * POST /v1/scores 응답 항목 하나 + 그 항목이 온 묶음의 `scoring_meta`·`produced_at` (규약 §3, SCRUM-128).
+     * `alert_scores` 한 행을 이 record 하나로 채운다. 같은 묶음 항목은 같은 `meta` 객체를 공유한다.
+     *
+     * - `score_band` 는 없다 — AI 가 주지 않고 cases `CasePolicy` 가 계산(안건 2).
+     * - 항목 실패는 `dataQualityStatus="FAILED"` + `score`·`predictionId` null + `failureCode`(4값). SCORED/FAILED
+     *   판단은 `dataQualityStatus` 로 [10/29 SCRUM-41].
+     * - `reasons` 는 JsonNode — 저장·초안 요청에 그대로 넘기기만 함(원칙 4).
+     * - `raw` 는 응답 항목 원문(`scoring_meta`·`produced_at` 없음).
+     */
+    public record ScoreResult(String alertId, String predictionId, Double score, double threshold,
+                              String dataQualityStatus, String failureCode, JsonNode reasons,
+                              List<Long> evidenceTransactionIds, List<Long> contextTransactionIds,
+                              ScoringMeta meta, String producedAt, JsonNode raw) {
+
+        /** `alert_scores.payload` — 항목 원문 + `scoring_meta` + `produced_at` (V005_1). raw 는 바꾸지 않는다. */
+        public ObjectNode payloadForStorage() {
+            ObjectNode out = raw instanceof ObjectNode o ? o.deepCopy() : JsonNodeFactory.instance.objectNode();
+            ObjectNode m = out.putObject("scoring_meta");
+            m.put("model_version", meta.modelVersion());
+            m.put("feature_version", meta.featureVersion());
+            m.put("server_version", meta.serverVersion());
+            m.put("latency_ms", meta.latencyMs());
+            out.put("produced_at", producedAt);
+            return out;
+        }
+    }
+
+    /** 모든 묶음의 항목을 합친 목록 (보낸 순서대로 묶음, 묶음 안은 응답 순서). */
     public record ScoresResponse(List<ScoreResult> scores) {
         public ScoresResponse { if (scores == null) scores = List.of(); }
     }
@@ -87,6 +116,16 @@ public final class AiDtos {
 
     public record CaseSummaryResponse(String summary, String generatorVersion, String producedAt, JsonNode raw) {}
 
-    /** GET /v1/health */
-    public record HealthResponse(String status, String modelVersion, String generatorVersion) {}
+    /**
+     * GET /v1/health (AI `main.py` `health()`, SCRUM-22 — 미결 28). 전부 String, 없으면 null.
+     * `db` = "ok" | "down:<예외>", `llm` = "ok" | "missing_key". `generator_version` 은 AI 가 주지 않는다.
+     */
+    public record HealthResponse(String status, String db, String llm, String serverVersion,
+                                 String modelVersion, String featureVersion, String retrievalVersion) {
+
+        /** `status`·`db`·`llm` 이 모두 "ok" 인가 — null 도 ok 아님(칸이 빠진 옛 AI 서버도 드러나게). */
+        public boolean allOk() {
+            return "ok".equals(status) && "ok".equals(db) && "ok".equals(llm);
+        }
+    }
 }

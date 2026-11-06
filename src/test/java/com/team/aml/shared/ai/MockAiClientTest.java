@@ -71,4 +71,52 @@ class MockAiClientTest {
         assertThat(res.status()).isEqualTo("PASSED");
         assertThat(res.raw()).isNotNull();
     }
+
+    // --- SCRUM-128 점수 — 규약 §3 모양 ---------------------------------------
+
+    @Test
+    void scores_returns_contract_shape_with_threshold_and_meta() {
+        ScoreResult r = client.scores(7L, List.of(alert())).scores().get(0);
+
+        assertThat(r.alertId()).isEqualTo("ALT-X");
+        assertThat(r.dataQualityStatus()).isEqualTo("OK");
+        assertThat(r.failureCode()).isNull();                     // OK 면 failure_code 없음
+        assertThat(r.predictionId()).isNotBlank();                // OK 면 prediction_id·score 있음
+        assertThat(r.score()).isBetween(0.05, 0.94);
+        assertThat(r.threshold()).isBetween(0.0, 1.0);
+        assertThat(r.meta().modelVersion()).isNotBlank();
+        assertThat(r.meta().featureVersion()).isNotBlank();
+        assertThat(r.meta().serverVersion()).isNotBlank();
+        assertThat(r.meta().latencyMs()).isNotNegative();
+        assertThat(r.producedAt()).endsWith("Z");
+        assertThat(r.evidenceTransactionIds()).isSubsetOf(alert().transactionIds());
+        assertThat(r.contextTransactionIds()).isEmpty();
+        assertThat(r.reasons().isArray()).isTrue();
+
+        JsonNode raw = r.raw();   // 항목 원문 — AI 항목에 없는 칸은 넣지 않음
+        assertThat(raw.has("failure_code")).isTrue();
+        assertThat(raw.has("threshold")).isTrue();
+        assertThat(raw.has("score_band")).isFalse();
+        assertThat(raw.has("model_version")).isFalse();
+        assertThat(raw.has("produced_at")).isFalse();
+    }
+
+    @Test
+    void health_returns_ai_shape_with_versions() {   // SCRUM-22 — AI /v1/health 칸
+        HealthResponse h = client.health();
+        assertThat(h.status()).isEqualTo("ok");
+        assertThat(h.db()).isEqualTo("ok");
+        assertThat(h.llm()).isEqualTo("ok");
+        assertThat(h.serverVersion()).isNotBlank();
+        assertThat(h.modelVersion()).isNotBlank();
+        assertThat(h.featureVersion()).isNotBlank();
+        assertThat(h.retrievalVersion()).isNotBlank();
+    }
+
+    @Test
+    void scores_same_alert_same_score_by_hash_rule() {
+        double expected = 0.05 + (Math.abs("ALT-X".hashCode()) % 90) / 100.0;
+        assertThat(client.scores(1L, List.of(alert())).scores().get(0).score()).isEqualTo(expected);
+        assertThat(client.scores(2L, List.of(alert())).scores().get(0).score()).isEqualTo(expected);
+    }
 }

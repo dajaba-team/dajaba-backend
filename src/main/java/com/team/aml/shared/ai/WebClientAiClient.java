@@ -20,6 +20,7 @@ import reactor.core.publisher.Mono;
 import java.net.ConnectException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -74,16 +75,63 @@ public class WebClientAiClient implements AiClient {
         List<ScoreResult> merged = new ArrayList<>();
         for (int i = 0; i < alerts.size(); i += maxBatch) {       // 500건씩 나눠 보내고 합친다 (규약 6.2)
             List<AlertPayload> chunk = alerts.subList(i, Math.min(i + maxBatch, alerts.size()));
-            ObjectNode req = om.createObjectNode();
-            req.put("batch_run_id", batchRunId);
-            req.set("alerts", om.valueToTree(chunk));
-            JsonNode resp = post("/v1/scores", req, "BATCH_RUN", String.valueOf(batchRunId));
-            require(resp, "scores");
-            for (JsonNode s : resp.path("scores")) {
-                merged.add(toScoreResult(s));
-            }
+            JsonNode resp = post("/v1/scores", new ScoresRequest(batchRunId, chunk), "BATCH_RUN", String.valueOf(batchRunId));
+            List<ScoreResult> items = readScoreBatch(om, resp);
+            requireSameBatch(batchRunId, chunk, resp, items);
+            merged.addAll(items);
         }
         return new ScoresResponse(merged);
+    }
+
+    /**
+     * 점수 응답 한 묶음 → 항목 목록 (규약 §3, SCRUM-128). 맨 위 `scoring_meta`·`produced_at` 을 항목마다 붙인다
+     * (같은 묶음은 같은 `ScoringMeta` 객체). `scores`·`scoring_meta`·`produced_at`·항목 `threshold` 가 없거나
+     * 칸 타입이 틀리면 AI_BAD_RESPONSE 502. 계약 예시 테스트가 직접 부른다.
+     */
+    static List<ScoreResult> readScoreBatch(ObjectMapper om, JsonNode body) {
+        require(body, "scores");
+        require(body, "scoring_meta");
+        require(body, "produced_at");
+        try {
+            ScoringMeta meta = om.treeToValue(body.get("scoring_meta"), ScoringMeta.class);
+            String producedAt = body.get("produced_at").asText();
+            List<ScoreResult> out = new ArrayList<>();
+            for (JsonNode s : body.get("scores")) {
+                require(s, "threshold");
+                Double score = s.hasNonNull("score") ? s.get("score").asDouble() : null;
+                out.add(new ScoreResult(text(s, "alert_id"), text(s, "prediction_id"), score,
+                        s.get("threshold").asDouble(), text(s, "data_quality_status"), text(s, "failure_code"),
+                        s.hasNonNull("reasons") ? s.get("reasons") : om.createArrayNode(),
+                        longs(om, s, "evidence_transaction_ids"), longs(om, s, "context_transaction_ids"),
+                        meta, producedAt, s));
+            }
+            return out;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException | IllegalArgumentException e) {
+            throw new AiClientException("AI_BAD_RESPONSE", "AI 점수 응답 파싱 실패", Map.of(), 502);
+        }
+    }
+
+    private static List<Long> longs(ObjectMapper om, JsonNode s, String field) {
+        if (!s.hasNonNull(field)) return List.of();
+        return List.copyOf(om.convertValue(s.get(field), om.getTypeFactory().constructCollectionType(List.class, Long.class)));
+    }
+
+    /**
+     * 묶음 응답이 보낸 묶음과 같은지 — `batch_run_id` 같고, `alert_id` 가 보낸 경보와 빠짐·남음·중복 없이 같다.
+     * 다르면 AI_BAD_RESPONSE 502 (#60 `draft_id` 대조와 같은 원칙, 08_decisions 11/6).
+     */
+    private static void requireSameBatch(long batchRunId, List<AlertPayload> sent, JsonNode resp, List<ScoreResult> items) {
+        JsonNode id = resp.get("batch_run_id");
+        if (id == null || !id.canConvertToLong() || id.asLong() != batchRunId) {
+            throw new AiClientException("AI_BAD_RESPONSE", "AI 점수 응답 batch_run_id 가 요청과 다름", Map.of(), 502);
+        }
+        List<String> want = new ArrayList<>(sent.stream().map(AlertPayload::alertId).toList());
+        List<String> got = new ArrayList<>(items.stream().map(ScoreResult::alertId).toList());
+        want.sort(Comparator.nullsFirst(Comparator.naturalOrder()));
+        got.sort(Comparator.nullsFirst(Comparator.naturalOrder()));
+        if (!want.equals(got)) {
+            throw new AiClientException("AI_BAD_RESPONSE", "AI 점수 응답 alert_id 가 보낸 경보와 다름", Map.of(), 502);
+        }
     }
 
     @Override
@@ -125,7 +173,8 @@ public class WebClientAiClient implements AiClient {
     @Override
     public HealthResponse health() {
         JsonNode r = get("/v1/health");
-        return new HealthResponse(text(r, "status"), text(r, "model_version"), text(r, "generator_version"));
+        return new HealthResponse(text(r, "status"), text(r, "db"), text(r, "llm"), text(r, "server_version"),
+                text(r, "model_version"), text(r, "feature_version"), text(r, "retrieval_version"));
     }
 
     // --- 호출 + 재시도 ------------------------------------------------------
@@ -256,12 +305,6 @@ public class WebClientAiClient implements AiClient {
         Classified c = classify(error);
         Integer aiStatus = error instanceof ReadTimeoutException || error instanceof TimeoutException ? null : status;
         return new ClassifiedResponse(c.ex(), c.retryable(), aiStatus);
-    }
-
-    private ScoreResult toScoreResult(JsonNode s) {
-        Double score = s.hasNonNull("score") ? s.get("score").asDouble() : null;
-        return new ScoreResult(text(s, "alert_id"), score, text(s, "score_band"), text(s, "data_quality_status"),
-                text(s, "model_version"), text(s, "prediction_id"), text(s, "produced_at"), text(s, "failure_code"), s);
     }
 
     private static String text(JsonNode node, String field) {

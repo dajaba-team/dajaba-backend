@@ -70,13 +70,14 @@
 | 400 | `INVALID_REQUEST` | 공통 (반려 코드·사유 누락 포함) | 확정 |
 | 401 | `UNAUTHENTICATED`, `LOGIN_FAILED` | 인증 | 확정 [계정·권한 §3] |
 | 403 | `FORBIDDEN`, `CSRF_INVALID`, `NOT_ASSIGNEE`, `NOT_APPROVER` | 권한 (`NOT_ASSIGNEE`·`NOT_APPROVER`는 `ForbiddenException` 하위) | 확정 [계정·권한 §5, SCRUM-67] |
-| 404 | `CASE_NOT_FOUND`, `DRAFT_NOT_FOUND`, `USER_NOT_FOUND`, `EVIDENCE_NOT_FOUND`, `BATCH_RUN_NOT_FOUND`, `ALERT_NOT_FOUND`, `RULE_NOT_FOUND` | 각 기능 | 〔초안〕 |
+| 404 | `CASE_NOT_FOUND`, `USER_NOT_FOUND`, `ALERT_NOT_FOUND`, `BATCH_RUN_NOT_FOUND` | cases·user·detection·batch (`NotFoundException` 하위) | 확정 [예외 클래스 — `CaseNotFoundException`·`UserNotFoundException`·`AlertNotFoundException`·`BatchRunNotFoundException`] |
+| 404 | `DRAFT_NOT_FOUND`, `EVIDENCE_NOT_FOUND`, `RULE_NOT_FOUND` | 각 기능 | 〔초안〕 |
 | 404 | `REVISION_NOT_FOUND` | str | 확정 [계약서 Q13, 11/4 채영] |
 | 409 | `INVALID_CASE_TRANSITION`, `CONCURRENT_UPDATE`, `SELF_APPROVAL`, `NARRATIVE_UNCHANGED`, `BATCH_ALREADY_DONE`, `BATCH_RUNNING` | 공통·cases·str·batch | 확정 [안건 24, 레퍼런스 §11.1] |
 | 409 | `DRAFT_NOT_VERIFIED`, `DRAFT_LOCKED`, `DRAFT_SUPERSEDED`, `DRAFT_IN_PROGRESS`, `VERIFY_IN_PROGRESS` | str | 〔초안〕 STR 명세 |
 | 409 | `REPORT_PDF_NOT_READY` (`details.pdf_status` `PENDING`·`FAILED`) | str — 확정본 PDF가 아직 없음 | 확정 [계약서 Q7, 11/4 채영] |
 | 409 | `GENERATION_IN_PROGRESS` → 프론트엔 `DRAFT_IN_PROGRESS` | AI가 주는 409. 자동 재시도 안 함, `AiClient`가 409로 그대로 전달 | 확정 [안건 23, 10/29] |
-| 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases | 〔초안〕 CASES 명세 "신규 제안" |
+| 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases — `INVALID_ASSIGNEE`는 `details.reason` = `NOT_ACTIVE_INVESTIGATOR`(비활성·조사역 아님) · `SELF_ONLY`(조사역이 남을 지정). `CLOSE_REQUIRES_STR`은 초안 있는 케이스는 close-with-draft로. `POLICY_NOT_CONFIGURED`는 운영 등급 경계 없음 — LOW로 대신하지 않음 | 확정 [CASES 명세, SCRUM-50 #18 · SCRUM-105 #57] |
 | 400·409 | `DATE_OUT_OF_RANGE`, `INVALID_RULE_PARAMS`, `DATASET_NOT_LOADED`, `NO_ACTIVE_RULES`, `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
 | 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |
 | 409 | `CASE_ALREADY_OPENED` | detection `MarkCaseOpened` — 이미 케이스가 생긴 경보. 케이스 생성 트랜잭션째 롤백 | 확정 [SCRUM-108] |
@@ -118,11 +119,11 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 
 | 메서드 | AI 엔드포인트 | 부르는 쪽 |
 |---|---|---|
-| `scores(alerts)` | `POST /v1/scores` — 500개씩 나눠 보냄 | detection `RequestScores` |
+| `scores(batchRunId, alerts)` | `POST /v1/scores` — 500개씩 나눠 보냄 | detection `RequestScores` |
 | `createDraft(request)` | `POST /v1/str/drafts` | str `RequestStrDraft` |
 | `verify(draftId, request)` | `POST /v1/str/verify` — `draftId` 는 인자로 따로(요청 본문엔 안 넣음 — AI StrictModel, SCRUM-151) | str `VerifyStrDraft` |
 | `caseSummary(request)` | `POST /v1/cases/summary` | cases `RefreshCaseSummary` |
-| `health()` | `GET /v1/health` — 기동 시 1회, 실패해도 기동은 함 | `AiHealthCheck` |
+| `health()` | `GET /v1/health` — 기동 시 1회, 실패해도 기동은 함. 응답 `status·db·llm·server_version·model_version·feature_version·retrieval_version` 을 info 한 줄로 찍고, `status`·`db`·`llm` 중 하나라도 `ok` 가 아니면(null 포함) warn 한 줄 더 (SCRUM-22) | `AiHealthCheck` |
 
 **공통 동작**
 - 헤더 `X-Internal-Key`(32자 이상 난수, 환경변수), `X-Request-Id`(UUID, `ai_call_logs.request_id`와 같은 값).
@@ -148,6 +149,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   모델 이름·`feature_version` 같은 나머지 버전은 저장하지 않아요. `generation_id`·`request_id`로 AI 쪽 기록에서 찾아요.
 - 기록은 **별도 트랜잭션**(`AiCallLogWriter`, `REQUIRES_NEW`)으로, AI 응답을 받은 **호출 스레드에서** 해요(reactor 연산자 안에서 JPA 금지). 바깥 작업이 롤백돼도 실패 행은 남고, 기록이 실패해도 AI 결과·예외는 그대로예요(`WebClientAiClient`가 삼키고 경고 로그). [SCRUM-18]
 - `AiDtos`는 규약 v0.4 모양(SCRUM-151) — 초안 요청은 `draftId·caseNo·alert(AlertPayload+createdAt)·evidenceTransactionIds·reasons·priorAlertCount·investigatorNotes·reportingInstitution` record, 검증 요청은 `generationId·revisionNo·narrative` record(`draftId` 는 인자로 따로). 응답은 백엔드가 쓰는 칸만 record 필드로 뽑고 원문은 `raw: JsonNode` 로 둠(원칙 4). `narrative[]` 는 `NarrativeSectionDto(section: String, text, cites, evidenceIds)` — `section` 이 String 인 이유는 enum(`str.domain.StrSection`) 을 shared 에서 참조하면 ArchitectureTest 위반이기 때문. 섹션 이름 검사는 str 도메인 몫.
+- **점수 응답 매핑** (규약 §3, SCRUM-128) — 요청은 `ScoresRequest(batchRunId, alerts)`. AI 응답은 묶음(500개)마다 `{batch_run_id, scores[], scoring_meta, produced_at}` 이고, `WebClientAiClient` 가 묶음마다 `scoring_meta`·`produced_at` 을 그 묶음 **항목마다** 붙여 `ScoreResult` 하나로 돌려줘요 — `alertId·predictionId·score·threshold·dataQualityStatus·failureCode·reasons(JsonNode)·evidenceTransactionIds·contextTransactionIds·meta(modelVersion·featureVersion·serverVersion·latencyMs)·producedAt·raw`. `alert_scores` 한 행은 항목 하나로 채우고, `payload` 는 `payloadForStorage()`(항목 원문 + `scoring_meta` + `produced_at`). **`score_band` 는 AI가 주지 않아요** — `CasePolicy` 몫. 묶음마다 응답 `batch_run_id` 가 보낸 값과 다르거나, `scoring_meta` 가 없거나, `scores[]` 의 `alert_id` 집합이 보낸 경보와 다르면(빠짐·남음·중복) 502 `AI_BAD_RESPONSE`. `scores()` 는 안에서 500개씩 나눠 보내고 **전부 합쳐** 돌려주므로, 묶음마다 커밋하려면 부르는 쪽이 500개 이하로 나눠 호출해요.
 
 **트랜잭션 패턴 — "DB → HTTP → DB"** 네 군데 [레퍼런스 §8.4]
 1. 점수 요청: `RequestScores` (500개 묶음마다 커밋)
