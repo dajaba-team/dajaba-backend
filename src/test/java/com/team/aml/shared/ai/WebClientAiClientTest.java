@@ -484,6 +484,40 @@ class WebClientAiClientTest {
         assertThat(row.getAiVersion()).isEqualTo("M1");
     }
 
+    // --- health (SCRUM-22, 미결 28) — AI main.py health() 실제 칸 ------------------
+
+    @Test
+    void 정상_health는_AI_실제_칸을_읽는다() {
+        server.enqueue(json(200, """
+                {"status":"ok","db":"ok","llm":"missing_key","server_version":"a1b2c3d",
+                 "model_version":"xgb-2026-11-05","feature_version":"f1","retrieval_version":"r1"}
+                """));
+
+        HealthResponse h = client.health();
+
+        assertThat(h.status()).isEqualTo("ok");
+        assertThat(h.db()).isEqualTo("ok");
+        assertThat(h.llm()).isEqualTo("missing_key");
+        assertThat(h.serverVersion()).isEqualTo("a1b2c3d");
+        assertThat(h.modelVersion()).isEqualTo("xgb-2026-11-05");
+        assertThat(h.featureVersion()).isEqualTo("f1");
+        assertThat(h.retrievalVersion()).isEqualTo("r1");
+    }
+
+    @Test
+    void 경계_health_retrieval_version이_null이면_null_그대로() {
+        server.enqueue(json(200, """
+                {"status":"ok","db":"down:OperationalError","llm":"ok","server_version":"a1b2c3d",
+                 "model_version":"xgb-2026-11-05","feature_version":"f1","retrieval_version":null}
+                """));
+
+        HealthResponse h = client.health();
+
+        assertThat(h.retrievalVersion()).isNull();
+        assertThat(h.db()).isEqualTo("down:OperationalError");
+        assertThat(h.featureVersion()).isEqualTo("f1");
+    }
+
     @Test
     void 정상_요약은_generation_meta의_prompt_version을_기록한다() {   // AI SummaryResponse.generation_meta (11/1 점검)
         server.enqueue(json(200, "{\"summary\":\"S\",\"generation_meta\":{\"prompt_version\":\"p-1\"}}"));
