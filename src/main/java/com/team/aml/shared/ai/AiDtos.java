@@ -116,6 +116,16 @@ public final class AiDtos {
 
     public record CaseSummaryResponse(String summary, String generatorVersion, String producedAt, JsonNode raw) {}
 
-    /** GET /v1/health */
-    public record HealthResponse(String status, String modelVersion, String generatorVersion) {}
+    /**
+     * GET /v1/health (AI `main.py` `health()`, SCRUM-22 — 미결 28). 전부 String, 없으면 null.
+     * `db` = "ok" | "down:<예외>", `llm` = "ok" | "missing_key". `generator_version` 은 AI 가 주지 않는다.
+     */
+    public record HealthResponse(String status, String db, String llm, String serverVersion,
+                                 String modelVersion, String featureVersion, String retrievalVersion) {
+
+        /** `status`·`db`·`llm` 이 모두 "ok" 인가 — null 도 ok 아님(칸이 빠진 옛 AI 서버도 드러나게). */
+        public boolean allOk() {
+            return "ok".equals(status) && "ok".equals(db) && "ok".equals(llm);
+        }
+    }
 }

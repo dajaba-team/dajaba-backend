@@ -131,6 +131,6 @@ public class MockAiClient implements AiClient {
 
     @Override
     public HealthResponse health() {
-        return new HealthResponse("ok", "mock-0.0.1", "mock-0.0.1");
+        return new HealthResponse("ok", "ok", "ok", "mock", "mock-0.0.1", "mock-f0", "mock-r0");
     }
 }

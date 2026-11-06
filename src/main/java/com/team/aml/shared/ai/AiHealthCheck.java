@@ -28,8 +28,12 @@ public class AiHealthCheck implements ApplicationRunner {
         }
         try {
             var h = aiClient.health();
-            log.info("AI server health: status={} model={} generator={} ({})", h.status(), h.modelVersion(),
-                    h.generatorVersion(), aiClient.getClass().getSimpleName());
+            log.info("AI server health: status={} db={} llm={} server={} model={} feature={} retrieval={} ({})",
+                    h.status(), h.db(), h.llm(), h.serverVersion(), h.modelVersion(), h.featureVersion(),
+                    h.retrievalVersion(), aiClient.getClass().getSimpleName());
+            if (!h.allOk()) {   // 기동은 계속 — 경고만 (SCRUM-22)
+                log.warn("AI server health degraded: status={} db={} llm={}", h.status(), h.db(), h.llm());
+            }
         } catch (Exception e) {
             log.warn("AI server health check failed — 기동은 계속합니다: {}", e.getMessage());
         }
