@@ -70,13 +70,14 @@
 | 400 | `INVALID_REQUEST` | 공통 (반려 코드·사유 누락 포함) | 확정 |
 | 401 | `UNAUTHENTICATED`, `LOGIN_FAILED` | 인증 | 확정 [계정·권한 §3] |
 | 403 | `FORBIDDEN`, `CSRF_INVALID`, `NOT_ASSIGNEE`, `NOT_APPROVER` | 권한 (`NOT_ASSIGNEE`·`NOT_APPROVER`는 `ForbiddenException` 하위) | 확정 [계정·권한 §5, SCRUM-67] |
-| 404 | `CASE_NOT_FOUND`, `DRAFT_NOT_FOUND`, `USER_NOT_FOUND`, `EVIDENCE_NOT_FOUND`, `BATCH_RUN_NOT_FOUND`, `ALERT_NOT_FOUND`, `RULE_NOT_FOUND` | 각 기능 | 〔초안〕 |
+| 404 | `CASE_NOT_FOUND`, `USER_NOT_FOUND`, `ALERT_NOT_FOUND`, `BATCH_RUN_NOT_FOUND` | cases·user·detection·batch (`NotFoundException` 하위) | 확정 [예외 클래스 — `CaseNotFoundException`·`UserNotFoundException`·`AlertNotFoundException`·`BatchRunNotFoundException`] |
+| 404 | `DRAFT_NOT_FOUND`, `EVIDENCE_NOT_FOUND`, `RULE_NOT_FOUND` | 각 기능 | 〔초안〕 |
 | 404 | `REVISION_NOT_FOUND` | str | 확정 [계약서 Q13, 11/4 채영] |
 | 409 | `INVALID_CASE_TRANSITION`, `CONCURRENT_UPDATE`, `SELF_APPROVAL`, `NARRATIVE_UNCHANGED`, `BATCH_ALREADY_DONE`, `BATCH_RUNNING` | 공통·cases·str·batch | 확정 [안건 24, 레퍼런스 §11.1] |
 | 409 | `DRAFT_NOT_VERIFIED`, `DRAFT_LOCKED`, `DRAFT_SUPERSEDED`, `DRAFT_IN_PROGRESS`, `VERIFY_IN_PROGRESS` | str | 〔초안〕 STR 명세 |
 | 409 | `REPORT_PDF_NOT_READY` (`details.pdf_status` `PENDING`·`FAILED`) | str — 확정본 PDF가 아직 없음 | 확정 [계약서 Q7, 11/4 채영] |
 | 409 | `GENERATION_IN_PROGRESS` → 프론트엔 `DRAFT_IN_PROGRESS` | AI가 주는 409. 자동 재시도 안 함, `AiClient`가 409로 그대로 전달 | 확정 [안건 23, 10/29] |
-| 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases | 〔초안〕 CASES 명세 "신규 제안" |
+| 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases — `INVALID_ASSIGNEE`는 `details.reason` = `NOT_ACTIVE_INVESTIGATOR`(비활성·조사역 아님) · `SELF_ONLY`(조사역이 남을 지정). `CLOSE_REQUIRES_STR`은 초안 있는 케이스는 close-with-draft로. `POLICY_NOT_CONFIGURED`는 운영 등급 경계 없음 — LOW로 대신하지 않음 | 확정 [CASES 명세, SCRUM-50 #18 · SCRUM-105 #57] |
 | 400·409 | `DATE_OUT_OF_RANGE`, `INVALID_RULE_PARAMS`, `DATASET_NOT_LOADED`, `NO_ACTIVE_RULES`, `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
 | 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |
 | 409 | `CASE_ALREADY_OPENED` | detection `MarkCaseOpened` — 이미 케이스가 생긴 경보. 케이스 생성 트랜잭션째 롤백 | 확정 [SCRUM-108] |

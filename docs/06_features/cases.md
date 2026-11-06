@@ -95,7 +95,7 @@
 - 세 변경 유스케이스는 공통 변경 응답(`CaseChangeResult` — 계약서 5.3 M)을 돌려줘요. `version`·`updated_at`은 flush 뒤 값. 요청 `version` 비교 뒤 커밋 때 `@Version`이 한 번 더 막아서 동시에 맡기면 뒤 요청은 409 `CONCURRENT_UPDATE`.
 - **`available_actions` (`CaseAction`)** — 계약서 §4의 8개. `ASSIGN`(OPEN, 조사역·ADMIN) · `REASSIGN`(ADMIN, 재배정 가능 상태) · 담당만: `UPDATE_NOTES`·`REFRESH_SUMMARY`(REVIEWING·ESCALATED·DRAFTED·보완 반려) · `ESCALATE` · `CLOSE`/`CLOSE_WITH_DRAFT`(닫을 수 있는 상태에서 초안 유무로 하나) · `GENERATE_DRAFT`(초안을 붙일 수 있는 상태). 상태 판단은 `CaseStatus` 전이 표를 그대로 써요.
 - **아직 null인 칸 (후속)** — `score`·`score_band`·`policy_version`·`alert`·`latest_score`는 detection에 경보·점수 공개 조회가 생겨야 채워요(SCRUM-152, 준혁). 그래서 지금 `sort=score`는 "점수 전부 null"과 같은 결과(= 동률 규칙 `created_at DESC, id DESC`). `aggregates`·`latest_summary`·`investigator_notes`는 API-08·12·05, `current_draft`는 str 조합 계층(미결 17).
-- 〔확인 필요〕 명세 API-03은 "조사역이 다른 assignee 지정"을 **400**으로 적었는데, 지금 `shared`에 400 업무 예외가 없어 409 `INVALID_ASSIGNEE`(`SELF_ONLY`)로 뒀어요 — 진희님 확인.
+- 조사역이 다른 assignee를 지정하면 **409 `INVALID_ASSIGNEE`(`details.reason = SELF_ONLY`)** 로 확정(11/6). 명세 API-03은 400이었지만 400 `INVALID_REQUEST`는 형식 오류용이에요. 프론트는 `reason`으로 문구를 나눠요(`08_decisions.md` 11/6, SCRUM-153).
 
 **str에 주는 공개 기능 — 구현됨 (SCRUM-98)** 모두 `Propagation.MANDATORY`라 str 트랜잭션 안에서만 불러요(혼자 부르면 `IllegalTransactionStateException`).
 

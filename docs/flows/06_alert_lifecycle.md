@@ -26,7 +26,7 @@ flowchart TB
     subgraph AI[AI 서버]
         I1["/v1/scores<br/>기준 시점 이전 특징 → 점수 · 설명 · 근거<br/>모델/특징 버전 · 품질 상태"]
         I2["/v1/cases/summary<br/>한 단락 요약"]
-        I3["/v1/str/drafts<br/>facts 계산 + 6개 섹션 문장"]
+        I3["/v1/str/drafts<br/>facts 계산 + 서술부 7항목 문장"]
         I4["/v1/str/verify<br/>코드 5 + 평가자 5"]
     end
 
