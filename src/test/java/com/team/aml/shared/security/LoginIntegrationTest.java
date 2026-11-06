@@ -19,6 +19,7 @@ import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.env.Environment;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.core.context.SecurityContext;
@@ -41,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
@@ -271,6 +273,63 @@ class LoginIntegrationTest {
     void 실패_입력한_login_id는_로그에_남지_않는다(CapturedOutput output) throws Exception {
         login("leaky-login-id-zz9", "wrong-password-zz9");
         assertThat(output.getAll()).doesNotContain("leaky-login-id-zz9").doesNotContain("wrong-password-zz9");
+    }
+
+    // --- 없는 경로·안 되는 메서드·비로그인 세션 (SCRUM-157, develop 에서는 실패) -----
+
+    @Test
+    void 정상_로그인_뒤_없는_경로는_404_NOT_FOUND이고_ERROR_로그가_없다(CapturedOutput output) throws Exception {
+        MvcResult login = login("admin", PASSWORD);
+
+        MvcResult r = mvc.perform(get("/api/v1/nope?secret=query-zz9").session(session(login))).andReturn();
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(404);
+        assertThat(code(r)).isEqualTo("NOT_FOUND");
+        assertThat(json(r).path("error").path("details").isEmpty()).isTrue();          // 경로를 응답에 다시 넣지 않는다
+        assertThat(output.getAll().lines().filter(l -> l.contains("not found method=")).toList())
+                .singleElement().satisfies(l -> assertThat(l).contains("WARN").endsWith("not found method=GET uri=/api/v1/nope"));
+        assertThat(output.getAll()).doesNotContain("unhandled exception").doesNotContain("query-zz9");
+    }
+
+    @Test
+    void 정상_로그인_뒤_안_되는_메서드는_405_METHOD_NOT_ALLOWED와_Allow에_GET(CapturedOutput output) throws Exception {
+        MvcResult login = login("admin", PASSWORD);
+        Cookie xsrf = xsrf(login);
+
+        MvcResult r = mvc.perform(delete("/api/v1/auth/me").session(session(login))
+                .cookie(xsrf).header("X-XSRF-TOKEN", xsrf.getValue())).andReturn();
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(405);
+        assertThat(code(r)).isEqualTo("METHOD_NOT_ALLOWED");
+        assertThat(r.getResponse().getHeader(HttpHeaders.ALLOW)).contains("GET");
+        assertThat(output.getAll()).contains("method not allowed method=DELETE uri=/api/v1/auth/me")
+                .doesNotContain("unhandled exception");
+    }
+
+    @Test
+    void 정상_비로그인_me는_401_그대로이고_세션을_만들지_않는다() throws Exception {
+        MvcResult r = mvc.perform(get("/api/v1/auth/me")).andReturn();
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(401);
+        assertThat(code(r)).isEqualTo("UNAUTHENTICATED");
+        assertThat(r.getRequest().getSession(false)).as("401 응답에 서버 세션이 생김").isNull();
+    }
+
+    @Test
+    void 경계_비로그인_없는_경로는_404보다_401이_먼저이고_세션을_만들지_않는다() throws Exception {
+        MvcResult r = mvc.perform(get("/api/v1/nope")).andReturn();
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(401);
+        assertThat(code(r)).isEqualTo("UNAUTHENTICATED");
+        assertThat(r.getRequest().getSession(false)).as("401 응답에 서버 세션이 생김").isNull();
+    }
+
+    @Test
+    void 회귀_CSRF_없는_DELETE는_405보다_403_CSRF_INVALID가_먼저() throws Exception {
+        MvcResult r = mvc.perform(delete("/api/v1/auth/me").session(session(login("admin", PASSWORD)))).andReturn();
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(403);
+        assertThat(code(r)).isEqualTo("CSRF_INVALID");
     }
 
     // --- 도우미 -------------------------------------------------------------

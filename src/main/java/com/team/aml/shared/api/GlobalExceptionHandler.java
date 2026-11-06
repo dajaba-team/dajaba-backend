@@ -8,21 +8,25 @@ import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 예외 → HTTP 변환은 전부 여기 (레퍼런스 8.2). 컨트롤러에 try-catch 는 없다.
@@ -34,7 +38,9 @@ import java.util.Map;
  *  OptimisticLock                  → 409 CONCURRENT_UPDATE
  *  AiClientException               → e.httpStatus() (기본 502 AI 코드 그대로, 409 GENERATION_IN_PROGRESS→DRAFT_IN_PROGRESS)
  *  AccessDenied (403)              → 403 FORBIDDEN
- *  그 외                            → 500 INTERNAL_ERROR (메시지 고정, 스택은 로그에만)
+ *  NoResourceFoundException        → 404 NOT_FOUND (없는 경로, details {}, 경고 한 줄 — SCRUM-157)
+ *  HttpRequestMethodNotSupported   → 405 METHOD_NOT_ALLOWED (Allow 헤더, 모르면 없음, 경고 한 줄 — SCRUM-157)
+ *  그 외                            → 500 INTERNAL_ERROR (진짜 처리 안 된 것만. 메시지 고정, 스택은 로그에만)
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -114,6 +120,26 @@ public class GlobalExceptionHandler {
         warnDenied(code, req);
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ErrorResponse.of(code, "권한이 없습니다"));
+    }
+
+    /** 없는 경로 — Spring 6.1 은 매핑이 없으면 정적 리소스로 찾다 이 예외를 던진다. 경로는 응답에 다시 넣지 않는다. */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponse> noResource(NoResourceFoundException e, HttpServletRequest req) {
+        log.warn("not found method={} uri={}", req.getMethod(), req.getRequestURI());   // 쿼리스트링은 찍지 않는다
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of("NOT_FOUND", "요청한 주소가 없습니다"));
+    }
+
+    /** 경로는 있는데 메서드가 틀림. 허용 메서드를 Spring 이 알면 Allow 헤더로, 모르면(null) 헤더 없이. */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> methodNotAllowed(HttpRequestMethodNotSupportedException e, HttpServletRequest req) {
+        log.warn("method not allowed method={} uri={}", req.getMethod(), req.getRequestURI());
+        ResponseEntity.BodyBuilder res = ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED);
+        Set<HttpMethod> allowed = e.getSupportedHttpMethods();
+        if (allowed != null) {
+            res.allow(allowed.toArray(HttpMethod[]::new));
+        }
+        return res.body(ErrorResponse.of("METHOD_NOT_ALLOWED", "지원하지 않는 요청 방식입니다"));
     }
 
     @ExceptionHandler(Exception.class)
