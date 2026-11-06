@@ -520,12 +520,51 @@ class WebClientAiClientTest {
 
     @Test
     void 정상_요약은_generation_meta의_prompt_version을_기록한다() {   // AI SummaryResponse.generation_meta (11/1 점검)
-        server.enqueue(json(200, "{\"summary\":\"S\",\"generation_meta\":{\"prompt_version\":\"p-1\"}}"));
-        client.caseSummary(new CaseSummaryRequest("C1", null, null, null, null));
+        server.enqueue(json(200, "{\"case_no\":\"CASE-2022-000001\",\"generation_meta\":{\"prompt_version\":\"p-1\"}}"));
+        client.caseSummary(new CaseSummaryRequest("CASE-2022-000001", null, List.of(), null, 0, null));
         assertThat(writer.rows).hasSize(1);
         AiCallLog row = writer.rows.get(0);
         assertThat(row.getEndpoint()).isEqualTo("/v1/cases/summary");
         assertThat(row.getAiVersion()).isEqualTo("p-1");
+        assertThat(row.getTargetType()).isEqualTo("CASE");
+        assertThat(row.getTargetId()).isEqualTo("CASE-2022-000001");
+    }
+
+    @Test
+    void 정상_요약_요청은_규약_6_1_칸으로_나가고_응답은_쓰는_칸과_원문으로_돌아온다() throws Exception {   // v0.4, 11/6
+        server.enqueue(json(200, """
+                {"produced_at":"2026-11-06T09:00:00Z","case_no":"CASE-2022-000001","generation_id":"GEN-1",
+                 "facts":{"inbound":{"count":2}},"summary_lines":["첫 줄","둘째 줄"],"model_focus":[],
+                 "code_checks":[{"check":"COUNT_MATCH","match":true}],
+                 "generation_meta":{"prompt_version":"summary_v1","llm_model":"m"}}
+                """));
+        AlertPayload alert = new AlertPayload("ALT-20220902-000001", "10_A", null, "R02_FAN_IN_24H", "1", "FAN_IN",
+                "2022-09-01T00:00:00", "2022-09-02T00:00:00", "2022-09-02T00:00:00", List.of(1L, 2L),
+                om.createObjectNode(), "2026-11-01T00:00:00Z");
+
+        CaseSummaryResponse r = client.caseSummary(new CaseSummaryRequest("CASE-2022-000001", alert, List.of(1L, 2L),
+                om.createArrayNode(), 3, null));
+
+        JsonNode sent = om.readTree(server.takeRequest().getBody().readUtf8());
+        assertThat(sent.fieldNames()).toIterable().containsExactlyInAnyOrder("case_no", "alert",
+                "evidence_transaction_ids", "reasons", "prior_alert_count", "reporting_institution");
+        assertThat(sent.get("prior_alert_count").asInt()).isEqualTo(3);
+        assertThat(sent.get("reasons").isArray()).isTrue();
+        assertThat(r.caseNo()).isEqualTo("CASE-2022-000001");
+        assertThat(r.generationId()).isEqualTo("GEN-1");
+        assertThat(r.producedAt()).isEqualTo("2026-11-06T09:00:00Z");
+        assertThat(r.summaryLines()).containsExactly("첫 줄", "둘째 줄");
+        assertThat(r.codeChecks().get(0).get("match").asBoolean()).isTrue();
+        assertThat(r.promptVersion()).isEqualTo("summary_v1");
+        assertThat(r.raw().path("facts").path("inbound").path("count").asInt()).isEqualTo(2);
+    }
+
+    @Test
+    void 실패_요약_응답에_case_no가_없으면_AI_BAD_RESPONSE() {
+        server.enqueue(json(200, "{\"summary_lines\":[]}"));
+        assertThatThrownBy(() -> client.caseSummary(new CaseSummaryRequest("CASE-2022-000001", null, List.of(),
+                om.createArrayNode(), 0, null)))
+                .isInstanceOfSatisfying(AiClientException.class, e -> assertThat(e.code()).isEqualTo("AI_BAD_RESPONSE"));
     }
 
 }

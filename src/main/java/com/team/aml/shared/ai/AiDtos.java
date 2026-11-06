@@ -111,10 +111,28 @@ public final class AiDtos {
                                  String narrativeSha256, boolean passed, String status,
                                  String verifierVersion, String producedAt, JsonNode raw) {}
 
-    /** POST /v1/cases/summary */
-    public record CaseSummaryRequest(String caseId, JsonNode alert, JsonNode score, JsonNode entity, JsonNode customer) {}
+    /**
+     * POST /v1/cases/summary 요청 (규약 v0.4 §6.1, 11/6 — AI SCRUM-129). 요약도 초안과 같은 facts 를 쓰므로
+     * `reasons`·`priorAlertCount` 는 초안 요청(§5.1)과 같은 값이고 필수다. `reportingInstitution` 은 선택(null 이면
+     * AI 가 거래자 계좌 은행명). 메모(`investigator_notes`)는 넣지 않는다 — 요약 입력에 없음(CASES 명세 C6).
+     */
+    public record CaseSummaryRequest(String caseNo, AlertPayload alert, List<Long> evidenceTransactionIds,
+                                     JsonNode reasons, Integer priorAlertCount, String reportingInstitution) {}
 
-    public record CaseSummaryResponse(String summary, String generatorVersion, String producedAt, JsonNode raw) {}
+    /**
+     * POST /v1/cases/summary 응답 (규약 v0.4 §6.1). 백엔드가 쓰는 칸만 record 필드 + 원문 `raw`.
+     * 코드 검사가 실패해도 AI 는 200 을 주고 `code_checks[].match=false` 로 알린다 — 저장 여부는 cases 가 정한다.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record CaseSummaryResponse(String producedAt, String caseNo, String generationId,
+                                      List<String> summaryLines, JsonNode codeChecks,
+                                      @JsonProperty("generation_meta") StrDraftResponse.GenerationMetaView generationMeta,
+                                      JsonNode raw) {
+        /** `generation_meta.prompt_version` — `case_summaries.generator_version`·`ai_call_logs.ai_version`. null safe. */
+        public String promptVersion() {
+            return generationMeta != null ? generationMeta.promptVersion() : null;
+        }
+    }
 
     /**
      * GET /v1/health (AI `main.py` `health()`, SCRUM-22 — 미결 28). 전부 String, 없으면 null.
