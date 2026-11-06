@@ -173,7 +173,8 @@ public class WebClientAiClient implements AiClient {
     @Override
     public HealthResponse health() {
         JsonNode r = get("/v1/health");
-        return new HealthResponse(text(r, "status"), text(r, "model_version"), text(r, "generator_version"));
+        return new HealthResponse(text(r, "status"), text(r, "db"), text(r, "llm"), text(r, "server_version"),
+                text(r, "model_version"), text(r, "feature_version"), text(r, "retrieval_version"));
     }
 
     // --- 호출 + 재시도 ------------------------------------------------------

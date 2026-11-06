@@ -123,7 +123,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | `createDraft(request)` | `POST /v1/str/drafts` | str `RequestStrDraft` |
 | `verify(draftId, request)` | `POST /v1/str/verify` — `draftId` 는 인자로 따로(요청 본문엔 안 넣음 — AI StrictModel, SCRUM-151) | str `VerifyStrDraft` |
 | `caseSummary(request)` | `POST /v1/cases/summary` | cases `RefreshCaseSummary` |
-| `health()` | `GET /v1/health` — 기동 시 1회, 실패해도 기동은 함 | `AiHealthCheck` |
+| `health()` | `GET /v1/health` — 기동 시 1회, 실패해도 기동은 함. 응답 `status·db·llm·server_version·model_version·feature_version·retrieval_version` 을 info 한 줄로 찍고, `status`·`db`·`llm` 중 하나라도 `ok` 가 아니면(null 포함) warn 한 줄 더 (SCRUM-22) | `AiHealthCheck` |
 
 **공통 동작**
 - 헤더 `X-Internal-Key`(32자 이상 난수, 환경변수), `X-Request-Id`(UUID, `ai_call_logs.request_id`와 같은 값).

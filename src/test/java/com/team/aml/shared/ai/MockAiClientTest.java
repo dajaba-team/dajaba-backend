@@ -102,6 +102,18 @@ class MockAiClientTest {
     }
 
     @Test
+    void health_returns_ai_shape_with_versions() {   // SCRUM-22 — AI /v1/health 칸
+        HealthResponse h = client.health();
+        assertThat(h.status()).isEqualTo("ok");
+        assertThat(h.db()).isEqualTo("ok");
+        assertThat(h.llm()).isEqualTo("ok");
+        assertThat(h.serverVersion()).isNotBlank();
+        assertThat(h.modelVersion()).isNotBlank();
+        assertThat(h.featureVersion()).isNotBlank();
+        assertThat(h.retrievalVersion()).isNotBlank();
+    }
+
+    @Test
     void scores_same_alert_same_score_by_hash_rule() {
         double expected = 0.05 + (Math.abs("ALT-X".hashCode()) % 90) / 100.0;
         assertThat(client.scores(1L, List.of(alert())).scores().get(0).score()).isEqualTo(expected);
