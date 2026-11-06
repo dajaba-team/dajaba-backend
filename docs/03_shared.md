@@ -81,7 +81,7 @@
 | 400·409 | `DATE_OUT_OF_RANGE`, `INVALID_RULE_PARAMS`, `DATASET_NOT_LOADED`, `NO_ACTIVE_RULES`, `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
 | 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |
 | 409 | `CASE_ALREADY_OPENED` | detection `MarkCaseOpened` — 이미 케이스가 생긴 경보. 케이스 생성 트랜잭션째 롤백 | 확정 [SCRUM-108] |
-| 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 거부), `AI_TIMEOUT`, `AI_BAD_RESPONSE` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정 |
+| 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 거부), `AI_TIMEOUT`, `AI_BAD_RESPONSE`, `SUMMARY_CODE_CHECK_FAILED` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정. 〔제안〕 `SUMMARY_CODE_CHECK_FAILED` — 요약 응답은 200인데 `code_checks` 중 `match=false`가 있어 저장하지 않음(`details.failed_checks`), 기존 요약 유지 [규약 v0.4 §6.1, RefreshCaseSummary] |
 
 AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지고 `LLM_UNAVAILABLE`로 합쳐졌어요. `VERIFY_UNAVAILABLE`은 에러가 아니라 **검증 결과의 `status` 값**(200 응답)이라 검증 결과 한 줄로 저장해요 [§5.3].
 | 500 | `INTERNAL_ERROR` | 공통 | 확정 |
@@ -143,12 +143,13 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   | `/v1/scores` | `BATCH_RUN` / `batchRunId` | `scoring_meta.model_version` |
   | `/v1/str/drafts` | `DRAFT` / `draftId` | `generation_meta.prompt_version` |
   | `/v1/str/verify` | `DRAFT` / `draftId` | `verifier_version` |
-  | `/v1/cases/summary` | `CASE` / `caseId` | `generation_meta.prompt_version` |
+  | `/v1/cases/summary` | `CASE` / `caseNo` (요청 본문에 내부 id 가 없어 케이스 번호) | `generation_meta.prompt_version` |
   | `/v1/health` | null / null | null |
 
   모델 이름·`feature_version` 같은 나머지 버전은 저장하지 않아요. `generation_id`·`request_id`로 AI 쪽 기록에서 찾아요.
 - 기록은 **별도 트랜잭션**(`AiCallLogWriter`, `REQUIRES_NEW`)으로, AI 응답을 받은 **호출 스레드에서** 해요(reactor 연산자 안에서 JPA 금지). 바깥 작업이 롤백돼도 실패 행은 남고, 기록이 실패해도 AI 결과·예외는 그대로예요(`WebClientAiClient`가 삼키고 경고 로그). [SCRUM-18]
 - `AiDtos`는 규약 v0.4 모양(SCRUM-151) — 초안 요청은 `draftId·caseNo·alert(AlertPayload+createdAt)·evidenceTransactionIds·reasons·priorAlertCount·investigatorNotes·reportingInstitution` record, 검증 요청은 `generationId·revisionNo·narrative` record(`draftId` 는 인자로 따로). 응답은 백엔드가 쓰는 칸만 record 필드로 뽑고 원문은 `raw: JsonNode` 로 둠(원칙 4). `narrative[]` 는 `NarrativeSectionDto(section: String, text, cites, evidenceIds)` — `section` 이 String 인 이유는 enum(`str.domain.StrSection`) 을 shared 에서 참조하면 ArchitectureTest 위반이기 때문. 섹션 이름 검사는 str 도메인 몫.
+- **요약 요청·응답** (규약 v0.4 §6.1, 11/6) — 요청 `CaseSummaryRequest(caseNo, alert(AlertPayload), evidenceTransactionIds, reasons, priorAlertCount, reportingInstitution)` — `reasons`·`priorAlertCount` 는 초안 요청과 같은 값·필수, `reportingInstitution` 은 선택(null). 응답 `CaseSummaryResponse(producedAt, caseNo, generationId, summaryLines, codeChecks(JsonNode), generationMeta, raw)` — `case_no` 가 없으면 502 `AI_BAD_RESPONSE`. 코드 검사가 실패해도 AI 는 200이라 저장 여부는 cases `RefreshCaseSummary` 가 정해요. 〔SCRUM-128 범위 — RefreshCaseSummary 에서 먼저 맞춤, 진희 확인 필요〕
 - **점수 응답 매핑** (규약 §3, SCRUM-128) — 요청은 `ScoresRequest(batchRunId, alerts)`. AI 응답은 묶음(500개)마다 `{batch_run_id, scores[], scoring_meta, produced_at}` 이고, `WebClientAiClient` 가 묶음마다 `scoring_meta`·`produced_at` 을 그 묶음 **항목마다** 붙여 `ScoreResult` 하나로 돌려줘요 — `alertId·predictionId·score·threshold·dataQualityStatus·failureCode·reasons(JsonNode)·evidenceTransactionIds·contextTransactionIds·meta(modelVersion·featureVersion·serverVersion·latencyMs)·producedAt·raw`. `alert_scores` 한 행은 항목 하나로 채우고, `payload` 는 `payloadForStorage()`(항목 원문 + `scoring_meta` + `produced_at`). **`score_band` 는 AI가 주지 않아요** — `CasePolicy` 몫. 묶음마다 응답 `batch_run_id` 가 보낸 값과 다르거나, `scoring_meta` 가 없거나, `scores[]` 의 `alert_id` 집합이 보낸 경보와 다르면(빠짐·남음·중복) 502 `AI_BAD_RESPONSE`. `scores()` 는 안에서 500개씩 나눠 보내고 **전부 합쳐** 돌려주므로, 묶음마다 커밋하려면 부르는 쪽이 500개 이하로 나눠 호출해요.
 
 **트랜잭션 패턴 — "DB → HTTP → DB"** 네 군데 [레퍼런스 §8.4]
