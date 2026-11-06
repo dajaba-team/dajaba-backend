@@ -56,7 +56,11 @@
 | 낙관적 락 충돌 | 409 | `CONCURRENT_UPDATE` |
 | `AiClientException` | 502 | AI가 준 코드 그대로. **예외:** AI 409 `GENERATION_IN_PROGRESS`는 `AiClient`가 409 `DRAFT_IN_PROGRESS`로 바꿔 보내요("생성 중" ≠ AI 장애) [10/29] |
 | 권한 없음 | 403 | `FORBIDDEN` |
-| 그 밖 | 500 | `INTERNAL_ERROR`, 메시지는 "알 수 없는 오류" 고정, 스택은 로그에만 |
+| 없는 경로 (`NoResourceFoundException`, 로그인한 `/api/**` 요청) | 404 | `NOT_FOUND` — "요청한 주소가 없습니다", `details` `{}`(경로를 다시 넣지 않음), 경고 한 줄(`not found method=… uri=…`) [SCRUM-157] |
+| 안 되는 메서드 (`HttpRequestMethodNotSupportedException`) | 405 | `METHOD_NOT_ALLOWED` — "지원하지 않는 요청 방식입니다", `details` `{}`, `Allow` 헤더에 허용 메서드(Spring이 모르면 헤더 없음), 경고 한 줄(`method not allowed method=… uri=…`) [SCRUM-157] |
+| 그 밖 (위 어디에도 안 걸린 진짜 처리 안 된 예외만) | 500 | `INTERNAL_ERROR`, 메시지는 "알 수 없는 오류" 고정, 스택은 로그에만 |
+
+`/api/**` 밖은 `denyAll`이라 없는 경로여도 로그인 403 `FORBIDDEN`·비로그인 401 `UNAUTHENTICATED`예요. `/api/**` 안에서도 비로그인이면 404보다 401이 먼저예요(없는 주소인지 알려 주지 않음). [SCRUM-157]
 
 - **업무 규칙 중 권한 문제(역할·담당자)는 `ForbiddenException`을 상속 → 403**, 코드는 클래스 이름 규칙 그대로(`NotApproverException` → `NOT_APPROVER`). **상태·버전 충돌은 `DomainException` → 409**(`SELF_APPROVAL`도 409 그대로). URL·역할 단위로 Spring Security가 막는 403은 따로(`FORBIDDEN`). [SCRUM-67, 백엔드 #22 리뷰 11/1]
 
@@ -70,11 +74,14 @@
 | 400 | `INVALID_REQUEST` | 공통 (반려 코드·사유 누락 포함) | 확정 |
 | 401 | `UNAUTHENTICATED`, `LOGIN_FAILED` | 인증 | 확정 [계정·권한 §3] |
 | 403 | `FORBIDDEN`, `CSRF_INVALID`, `NOT_ASSIGNEE`, `NOT_APPROVER` | 권한 (`NOT_ASSIGNEE`·`NOT_APPROVER`는 `ForbiddenException` 하위) | 확정 [계정·권한 §5, SCRUM-67] |
+| 404 | `NOT_FOUND` | 공통 — 없는 경로(`NotFoundException` 하위가 아님) | 확정 [SCRUM-157] |
+| 405 | `METHOD_NOT_ALLOWED` | 공통 — 안 되는 메서드, `Allow` 헤더 | 확정 [SCRUM-157] |
 | 404 | `CASE_NOT_FOUND`, `USER_NOT_FOUND`, `ALERT_NOT_FOUND`, `BATCH_RUN_NOT_FOUND` | cases·user·detection·batch (`NotFoundException` 하위) | 확정 [예외 클래스 — `CaseNotFoundException`·`UserNotFoundException`·`AlertNotFoundException`·`BatchRunNotFoundException`] |
 | 404 | `DRAFT_NOT_FOUND`, `EVIDENCE_NOT_FOUND`, `RULE_NOT_FOUND` | 각 기능 | 〔초안〕 |
 | 404 | `REVISION_NOT_FOUND` | str | 확정 [계약서 Q13, 11/4 채영] |
 | 409 | `INVALID_CASE_TRANSITION`, `CONCURRENT_UPDATE`, `SELF_APPROVAL`, `NARRATIVE_UNCHANGED`, `BATCH_ALREADY_DONE`, `BATCH_RUNNING` | 공통·cases·str·batch | 확정 [안건 24, 레퍼런스 §11.1] |
 | 409 | `DRAFT_NOT_VERIFIED`, `DRAFT_LOCKED`, `DRAFT_SUPERSEDED`, `DRAFT_IN_PROGRESS`, `VERIFY_IN_PROGRESS` | str | 〔초안〕 STR 명세 |
+| 409 | `DRAFT_REQUEST_CLOSED` | str `SaveStrDraft` — 끝난(만료·실패·성공) 초안 요청에 AI 응답이 늦게 옴. 저장하지 않음 | 확정 [SCRUM-154, 미결 21 ⑤] |
 | 409 | `REPORT_PDF_NOT_READY` (`details.pdf_status` `PENDING`·`FAILED`) | str — 확정본 PDF가 아직 없음 | 확정 [계약서 Q7, 11/4 채영] |
 | 409 | `GENERATION_IN_PROGRESS` → 프론트엔 `DRAFT_IN_PROGRESS` | AI가 주는 409. 자동 재시도 안 함, `AiClient`가 409로 그대로 전달 | 확정 [안건 23, 10/29] |
 | 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases — `INVALID_ASSIGNEE`는 `details.reason` = `NOT_ACTIVE_INVESTIGATOR`(비활성·조사역 아님) · `SELF_ONLY`(조사역이 남을 지정). `CLOSE_REQUIRES_STR`은 초안 있는 케이스는 close-with-draft로. `POLICY_NOT_CONFIGURED`는 운영 등급 경계 없음 — LOW로 대신하지 않음 | 확정 [CASES 명세, SCRUM-50 #18 · SCRUM-105 #57] |
@@ -82,9 +89,9 @@
 | 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |
 | 409 | `CASE_ALREADY_OPENED` | detection `MarkCaseOpened` — 이미 케이스가 생긴 경보. 케이스 생성 트랜잭션째 롤백 | 확정 [SCRUM-108] |
 | 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 거부), `AI_TIMEOUT`, `AI_BAD_RESPONSE`, `SUMMARY_CODE_CHECK_FAILED` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정. 〔제안〕 `SUMMARY_CODE_CHECK_FAILED` — 요약 응답은 200인데 `code_checks` 중 `match=false`가 있어 저장하지 않음(`details.failed_checks`), 기존 요약 유지 [규약 v0.4 §6.1, RefreshCaseSummary] |
+| 500 | `INTERNAL_ERROR` | 공통 | 확정 |
 
 AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지고 `LLM_UNAVAILABLE`로 합쳐졌어요. `VERIFY_UNAVAILABLE`은 에러가 아니라 **검증 결과의 `status` 값**(200 응답)이라 검증 결과 한 줄로 저장해요 [§5.3].
-| 500 | `INTERNAL_ERROR` | 공통 | 확정 |
 
 "신규 제안" 코드는 진희가 확인한 뒤 `GlobalExceptionHandler`·문서에 넣어요. [SD 명세 §2.3]
 
