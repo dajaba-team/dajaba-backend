@@ -37,7 +37,7 @@ import java.util.Map;
  *       INVALID_CASE_TRANSITION(details.action=REFRESH_SUMMARY). 그다음 요약 요청을 만들고 입력 스냅샷·해시를 계산한다.</li>
  *   <li>트랜잭션 밖: {@code AiClient.caseSummary} (재시도 포함 90초). 실패는 AiClientException 그대로(502 등) — 기존 요약 유지.
  *       응답 확인: case_no 가 보낸 값과 같고 produced_at·prompt_version·summary_lines(≤6)·code_checks 가 있어야 한다
- *       (아니면 502 AI_BAD_RESPONSE). code_checks 중 하나라도 match 가 아니면 저장하지 않고 502 SUMMARY_CODE_CHECK_FAILED.</li>
+ *       (빈 code_checks 포함 — 아니면 502 AI_BAD_RESPONSE). code_checks 중 하나라도 match 가 아니면 저장하지 않고 502 SUMMARY_CODE_CHECK_FAILED.</li>
  *   <li>저장 트랜잭션: 케이스를 잠그고(FOR UPDATE) 1번 검사를 다시 한다 — 그사이 종결·재배정·다른 변경이 있었으면 409.
  *       요약 입력도 다시 만들어 해시가 다르면 409 CONCURRENT_UPDATE. 통과하면 요약 한 행 + cases.version +1(이력 행 없음).</li>
  * </ol>
@@ -158,8 +158,9 @@ public class RefreshCaseSummary {
             throw badResponse("AI 요약 응답 produced_at 이 없거나 UTC 시각이 아님");
         }
         JsonNode checks = r.codeChecks();
-        if (checks == null || !checks.isArray()) {
-            throw badResponse("AI 요약 응답에 code_checks 없음");
+        if (checks == null || !checks.isArray() || checks.isEmpty()) {
+            // AI 요약은 코드 검사를 항상 돌려준다(AMOUNT·DATE·COUNT·ACCOUNT_ID). 비어 있으면 "전부 match" 로 보지 않는다 (#65 리뷰)
+            throw badResponse("AI 요약 응답에 code_checks 가 없거나 비어 있음");
         }
         List<String> failed = new ArrayList<>();
         checks.forEach(ch -> {

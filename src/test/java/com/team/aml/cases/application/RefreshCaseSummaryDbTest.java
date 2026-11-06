@@ -137,6 +137,7 @@ class RefreshCaseSummaryDbTest {
         assertThat(result.caseNo()).isEqualTo(f.c.getCaseNo());
         assertThat(result.caseVersion()).isEqualTo(f.c.getVersion() + 1).isEqualTo(dbVersion(f.c.getId()));
         assertThat(result.summary().summaryLines()).containsExactly("첫 줄", "둘째 줄");
+        assertThat(result.summary().modelFocus()).isEqualTo("모델은 inflow_outflow_ratio_2h 신호를 가장 크게 봄");
         assertThat(result.summary().isCurrent()).isTrue();
         assertThat(result.summary().basedOnCaseVersion()).isEqualTo(f.c.getVersion());
         assertThat(result.summary().generatorVersion()).isEqualTo("summary_v1");
@@ -165,6 +166,18 @@ class RefreshCaseSummaryDbTest {
 
         assertThat(sent.getValue().reasons().isArray()).isTrue();
         assertThat(sent.getValue().reasons()).isEmpty();
+    }
+
+    @Test
+    void 경계_model_focus가_null이면_화면_칸도_null() {
+        Fixture f = caseWithAlert(CaseStatus.REVIEWING, true);
+        when(aiClient.caseSummary(any())).thenAnswer(i -> response(i.getArgument(0), raw -> raw.putNull("model_focus")));
+        loginAs(inv);
+
+        CaseSummaryResult result = refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion());
+
+        assertThat(result.summary().modelFocus()).isNull();
+        assertThat(result.summary().summaryLines()).containsExactly("첫 줄", "둘째 줄");
     }
 
     @Test
@@ -280,6 +293,7 @@ class RefreshCaseSummaryDbTest {
                 raw -> { raw.remove("produced_at"); return raw; },
                 raw -> { raw.putObject("generation_meta"); return raw; },
                 raw -> { raw.remove("code_checks"); return raw; },
+                raw -> { raw.putArray("code_checks"); return raw; },   // 빈 code_checks 는 "전부 match" 가 아니다 (#65 리뷰)
                 raw -> { ArrayNode lines = raw.putArray("summary_lines"); for (int n = 0; n < 7; n++) lines.add("줄"); return raw; });
 
         for (Function<ObjectNode, ObjectNode> edit : broken) {
@@ -415,7 +429,7 @@ class RefreshCaseSummaryDbTest {
                 .put("generation_id", "GEN-1");
         raw.putObject("facts").putObject("inbound").put("count", 2);
         raw.putArray("summary_lines").add("첫 줄").add("둘째 줄");
-        raw.putArray("model_focus");
+        raw.put("model_focus", "모델은 inflow_outflow_ratio_2h 신호를 가장 크게 봄");
         raw.putArray("code_checks").addObject().put("check", "COUNT_MATCH").put("match", true);
         raw.putObject("generation_meta").put("prompt_version", "summary_v1");
         raw = edit.apply(raw);

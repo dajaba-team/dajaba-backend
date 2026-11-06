@@ -534,7 +534,7 @@ class WebClientAiClientTest {
     void 정상_요약_요청은_규약_6_1_칸으로_나가고_응답은_쓰는_칸과_원문으로_돌아온다() throws Exception {   // v0.4, 11/6
         server.enqueue(json(200, """
                 {"produced_at":"2026-11-06T09:00:00Z","case_no":"CASE-2022-000001","generation_id":"GEN-1",
-                 "facts":{"inbound":{"count":2}},"summary_lines":["첫 줄","둘째 줄"],"model_focus":[],
+                 "facts":{"inbound":{"count":2}},"summary_lines":["첫 줄","둘째 줄"],"model_focus":"모델은 inflow_outflow_ratio_2h 신호를 가장 크게 봄",
                  "code_checks":[{"check":"COUNT_MATCH","match":true}],
                  "generation_meta":{"prompt_version":"summary_v1","llm_model":"m"}}
                 """));

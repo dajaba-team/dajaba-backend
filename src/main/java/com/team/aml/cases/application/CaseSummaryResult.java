@@ -19,16 +19,19 @@ public record CaseSummaryResult(String caseNo, Summary summary, long caseVersion
     /**
      * 요약 한 건의 화면 칸. API-13(현재 요약 조회)도 같은 모양을 쓴다.
      *
-     * @param isCurrent 지금 요약 입력이 이 요약을 만든 입력과 같은가. 판정할 수 없으면 null(API-13 — 재생성 안내)
+     * @param modelFocus "모델이 주목한 점" 한 줄(규약 §6.1 `model_focus`). 관측 사실(summary_lines)과 섞지 않으려고 따로 둔다. 없으면 null
+     * @param isCurrent  지금 요약 입력이 이 요약을 만든 입력과 같은가. 판정할 수 없으면 null(API-13 — 재생성 안내)
      */
-    public record Summary(List<String> summaryLines, Instant producedAt, String generatorVersion,
+    public record Summary(List<String> summaryLines, String modelFocus, Instant producedAt, String generatorVersion,
                           long basedOnCaseVersion, Boolean isCurrent, String inputSha256) {
 
         static Summary of(CaseSummary s, Boolean isCurrent) {
             List<String> lines = new ArrayList<>();
             JsonNode node = s.getPayload().path("summary_lines");
             node.forEach(line -> lines.add(line.asText()));
-            return new Summary(List.copyOf(lines), s.getProducedAt().truncatedTo(ChronoUnit.SECONDS),
+            JsonNode focus = s.getPayload().path("model_focus");
+            return new Summary(List.copyOf(lines), focus.isTextual() ? focus.asText() : null,
+                    s.getProducedAt().truncatedTo(ChronoUnit.SECONDS),
                     s.getGeneratorVersion(), s.getBasedOnCaseVersion(), isCurrent, s.getInputSha256());
         }
     }
