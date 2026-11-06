@@ -7,13 +7,19 @@ import com.team.aml.str.domain.GeneratedDraft;
 import com.team.aml.str.domain.NarrativeSection;
 import com.team.aml.str.domain.StrSection;
 import org.junit.jupiter.api.Test;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import com.team.aml.shared.ai.AiClientException;
 
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** AI 초안 응답(규약 5.2, v0.4 7항목) → GeneratedDraft. 스프링 없이 돈다. */
+/**
+ * AI 초안 응답(규약 5.2, v0.4 7항목) → GeneratedDraft. 스프링 없이 돈다.
+ * 규약과 다른 응답은 AiClientException(AI_BAD_RESPONSE, 502) (#60 리뷰 1).
+ */
 class AiDraftResponseReaderTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -80,11 +86,10 @@ class AiDraftResponseReaderTest {
     // 4
     @Test
     void 응답의_draft_id가_보낸_것과_다르면_거부한다() {
-        assertThatThrownBy(() -> AiDraftResponseReader.read(response("DRF-000313"), SENT))
-                .isInstanceOf(IllegalArgumentException.class)
+        assertBadResponse(() -> AiDraftResponseReader.read(response("DRF-000313"), SENT))
                 .hasMessageContaining("draft_id");
-        assertThatThrownBy(() -> AiDraftResponseReader.read(response(SENT), null))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AiDraftResponseReader.read(response(SENT), null))   // 요청 기록 쪽 문제 — 502 아님
+                .isInstanceOf(IllegalStateException.class);
     }
 
     // 5
@@ -93,8 +98,7 @@ class AiDraftResponseReaderTest {
         ObjectNode raw = response(SENT);
         ((ObjectNode) raw.withArray("narrative").get(0)).put("section", "NOT_A_SECTION").put("text", "비밀 문장");
 
-        assertThatThrownBy(() -> AiDraftResponseReader.read(raw, SENT))
-                .isInstanceOf(IllegalArgumentException.class)
+        assertBadResponse(() -> AiDraftResponseReader.read(raw, SENT))
                 .hasMessageContaining("NOT_A_SECTION")
                 .hasMessageNotContaining("비밀 문장");
     }
@@ -106,8 +110,16 @@ class AiDraftResponseReaderTest {
         missing.remove("produced_at");
         ObjectNode local = response(SENT).put("produced_at", "2026-11-03T01:10:00");   // Z 없음
 
-        assertThatThrownBy(() -> AiDraftResponseReader.read(missing, SENT)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AiDraftResponseReader.read(local, SENT)).isInstanceOf(IllegalArgumentException.class);
+        assertBadResponse(() -> AiDraftResponseReader.read(missing, SENT));
+        assertBadResponse(() -> AiDraftResponseReader.read(local, SENT));
+    }
+
+    // 6-2: Instant.parse 는 +09:00 도 받아 UTC 로 바꾼다 — 규약은 Z 지만 거부하지는 않는다 (#60 리뷰 3)
+    @Test
+    void produced_at이_오프셋_시각이면_UTC로_바꿔_읽는다() {
+        ObjectNode kst = response(SENT).put("produced_at", "2026-11-03T10:10:00+09:00");
+
+        assertThat(AiDraftResponseReader.read(kst, SENT).producedAt()).isEqualTo(Instant.parse("2026-11-03T01:10:00Z"));
     }
 
     // 7
@@ -118,7 +130,35 @@ class AiDraftResponseReaderTest {
         ObjectNode badEvidence = response(SENT);
         ((ObjectNode) badEvidence.withArray("narrative").get(0)).putArray("evidence_ids").add("104221");
 
-        assertThatThrownBy(() -> AiDraftResponseReader.read(noNarrative, SENT)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> AiDraftResponseReader.read(badEvidence, SENT)).isInstanceOf(IllegalArgumentException.class);
+        assertBadResponse(() -> AiDraftResponseReader.read(noNarrative, SENT));
+        assertBadResponse(() -> AiDraftResponseReader.read(badEvidence, SENT));
+    }
+
+    // 8: AI 리포와 같은 예시 파일(contracts/examples/draft_response.json, 옛 6섹션 narrative_v1)도 읽힌다 (#60 리뷰 2)
+    @Test
+    void 계약_예시_draft_response를_읽으면_옛_6섹션과_cites가_나온다() throws Exception {
+        JsonNode example = JSON.readTree(Files.readString(Path.of("contracts/examples/draft_response.json")));
+
+        GeneratedDraft g = AiDraftResponseReader.read(example, "DRF-000312");
+
+        assertThat(g.generationId()).isEqualTo("g-7c1d44e2");
+        assertThat(g.generatorVersion()).isEqualTo("narrative_v1");
+        assertThat(g.producedAt()).isEqualTo(Instant.parse("2026-11-03T01:10:00Z"));
+        assertThat(g.narrative()).extracting(NarrativeSection::section).containsExactlyElementsOf(StrSection.V1);
+        assertThat(g.narrative().get(0).cites())
+                .containsExactly("period", "inbound.count", "inbound.amount.USD", "counterparties.count");
+        assertThat(g.narrative().get(0).evidenceIds()).containsExactly(104221L, 104233L, 104301L);
+        assertThat(g.narrative().get(5).cites()).isEmpty();          // CONCLUSION 은 cites 가 빈 배열
+        assertThat(g.payload()).isEqualTo(example);
+    }
+
+    private static org.assertj.core.api.AbstractThrowableAssert<?, ? extends Throwable> assertBadResponse(
+            org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
+        return assertThatThrownBy(call)
+                .isInstanceOfSatisfying(AiClientException.class, e -> {
+                    assertThat(e.code()).isEqualTo("AI_BAD_RESPONSE");
+                    assertThat(e.httpStatus()).isEqualTo(502);
+                });
     }
 }
+
