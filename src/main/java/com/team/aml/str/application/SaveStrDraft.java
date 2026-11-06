@@ -2,11 +2,16 @@ package com.team.aml.str.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.team.aml.cases.application.AttachDraftToCase;
+import com.team.aml.shared.ai.AiClientException;
+import com.team.aml.str.domain.DraftRequestClosedException;
 import com.team.aml.str.domain.GeneratedDraft;
+import com.team.aml.str.domain.InvalidSectionTextException;
 import com.team.aml.str.domain.StrDraft;
 import com.team.aml.str.domain.StrDraftRepository;
 import com.team.aml.str.domain.StrDraftRequest;
 import com.team.aml.str.domain.StrDraftRequestRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,6 +33,8 @@ import java.time.Instant;
  */
 @Service
 public class SaveStrDraft {
+
+    private static final Logger log = LoggerFactory.getLogger(SaveStrDraft.class);
 
     private final AttachDraftToCase attachDraft;
     private final StrDraftRepository drafts;
@@ -51,9 +58,10 @@ public class SaveStrDraft {
 
         StrDraftRequest request = requests.findById(draftId)                            // ②
                 .filter(r -> r.getCaseId() == caseId)
+                // draftId 는 부른 쪽(RequestStrDraft)이 이 케이스로 만든 번호 — 여기 걸리면 백엔드 버그라 500 이 맞다
                 .orElseThrow(() -> new IllegalStateException("이 케이스의 초안 요청 기록이 없다: draft_id " + draftId));
-        if (!request.isRequested()) {
-            throw new IllegalStateException("이미 끝난 초안 요청이다: draft_id " + draftId + ", " + request.getStatus());
+        if (!request.isRequested()) {                                                    // 만료·실패 뒤 늦게 온 응답 — 409
+            throw new DraftRequestClosedException(request.getStatus());
         }
 
         GeneratedDraft generated = AiDraftResponseReader.read(aiResponse,              // ③
@@ -61,9 +69,7 @@ public class SaveStrDraft {
 
         drafts.findActiveByCaseId(caseId).ifPresent(StrDraft::supersede);             // ④
 
-        StrDraft draft = drafts.save(StrDraft.create(draftId, caseId,                    // ⑤
-                generated.generationId(), generated.generatorVersion(), generated.producedAt(),
-                generated.payload(), generated.narrative()));
+        StrDraft draft = drafts.save(newDraft(draftId, caseId, generated));              // ⑤
 
         long caseVersion = attachDraft.execute(caseId, draft.getId(), expectedCaseVersion);   // ⑥
 
@@ -71,6 +77,24 @@ public class SaveStrDraft {
         requests.save(request);
 
         return new Saved(draft.getId(), caseVersion);
+    }
+
+    /**
+     * 응답 읽기를 통과했어도 초안 규칙(generation_id·prompt_version·facts·단락 한 세트·문장 길이)에 안 맞으면 AI 응답 문제다
+     * — 500(IllegalArgumentException)·409(InvalidSectionTextException)가 아니라 AI_BAD_RESPONSE 502 (#60 리뷰 1).
+     * 응답에 실리는 메시지는 고정 문구, 무엇이 틀렸는지는 로그로만 (도메인 메시지는 단락 이름·개수뿐, 본문 글자 없음).
+     */
+    private static StrDraft newDraft(long draftId, long caseId, GeneratedDraft generated) {
+        try {
+            return StrDraft.create(draftId, caseId,
+                    generated.generationId(), generated.generatorVersion(), generated.producedAt(),
+                    generated.payload(), generated.narrative());
+        } catch (IllegalArgumentException | InvalidSectionTextException e) {
+            log.warn("AI 초안 응답이 초안 규칙에 맞지 않음 draft_id={}: {}", draftId, e.getMessage());
+            AiClientException badResponse = new AiClientException("AI_BAD_RESPONSE", "AI 초안 응답이 초안 규칙에 맞지 않는다");
+            badResponse.initCause(e);
+            throw badResponse;
+        }
     }
 
     /**

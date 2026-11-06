@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.cases.domain.NotAssigneeException;
 import com.team.aml.shared.ai.AiClientException;
 import com.team.aml.shared.security.AppUserDetails;
+import com.team.aml.str.domain.DraftRequestClosedException;
 import com.team.aml.str.domain.NarrativeSection;
 import com.team.aml.str.domain.StrDraft;
 import com.team.aml.str.domain.StrDraftRepository;
@@ -181,10 +182,7 @@ class SaveStrDraftDbTest {
         long draftId = requested(caseId);
 
         assertThatThrownBy(() -> saveDraft.execute(caseId, draftId, version, response(draftId + 1, "g-" + draftId)))
-                .isInstanceOfSatisfying(AiClientException.class, e -> {   // AI 응답 문제 → 502 (AiDraftResponseReader)
-                    assertThat(e.code()).isEqualTo("AI_BAD_RESPONSE");
-                    assertThat(e.httpStatus()).isEqualTo(502);
-                });
+                .isInstanceOfSatisfying(AiClientException.class, SaveStrDraftDbTest::isAiBadResponse);   // AiDraftResponseReader
 
         assertNothingSaved(caseId, draftId, version);
     }
@@ -202,7 +200,8 @@ class SaveStrDraftDbTest {
         });
 
         assertThatThrownBy(() -> saveDraft.execute(caseId, draftId, version, response(draftId, "g-" + draftId)))
-                .isInstanceOf(IllegalStateException.class);
+                .isInstanceOfSatisfying(DraftRequestClosedException.class,      // 500 이 아니라 409
+                        e -> assertThat(e.code()).isEqualTo("DRAFT_REQUEST_CLOSED"));
 
         assertThat(requestStatus(draftId)).isEqualTo("EXPIRED");
         assertThat(jdbc.queryForObject("select count(*) from ops.str_drafts where id = ?", Long.class, draftId)).isZero();
@@ -226,7 +225,7 @@ class SaveStrDraftDbTest {
 
     // 8
     @Test
-    void 단락이_7항목_한_세트가_아니면_거부하고_롤백한다() {
+    void 단락이_7항목_한_세트가_아니면_AI_BAD_RESPONSE이고_롤백한다() {
         long caseId = escalatedCase();
         long version = caseVersion(caseId);
         long draftId = requested(caseId);
@@ -234,12 +233,35 @@ class SaveStrDraftDbTest {
         ((ObjectNode) bad.withArray("narrative").get(0)).put("section", "SUMMARY");   // SUBJECT 대신 6섹션 이름
 
         assertThatThrownBy(() -> saveDraft.execute(caseId, draftId, version, bad))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOfSatisfying(AiClientException.class, SaveStrDraftDbTest::isAiBadResponse);   // 500 아님
+
+        assertNothingSaved(caseId, draftId, version);
+    }
+
+    // 9: 응답 읽기는 통과하지만 초안 문장 규칙(InvalidSectionTextException)에 걸리는 응답도 AI 문제 — 409 가 아니라 502
+    @Test
+    void 단락_문장이_비어_있으면_AI_BAD_RESPONSE이고_롤백한다() {
+        long caseId = escalatedCase();
+        long version = caseVersion(caseId);
+        long draftId = requested(caseId);
+        ObjectNode bad = response(draftId, "g-" + draftId);
+        ((ObjectNode) bad.withArray("narrative").get(0)).put("text", " ");
+
+        assertThatThrownBy(() -> saveDraft.execute(caseId, draftId, version, bad))
+                .isInstanceOfSatisfying(AiClientException.class, e -> {
+                    isAiBadResponse(e);
+                    assertThat(e.getMessage()).doesNotContain("SUBJECT");   // 무엇이 틀렸는지는 로그로만
+                });
 
         assertNothingSaved(caseId, draftId, version);
     }
 
     // ---- 도우미 ----
+
+    private static void isAiBadResponse(AiClientException e) {
+        assertThat(e.code()).isEqualTo("AI_BAD_RESPONSE");
+        assertThat(e.httpStatus()).isEqualTo(502);
+    }
 
     private void assertNothingSaved(long caseId, long draftId, long version) {
         assertThat(jdbc.queryForObject("select count(*) from ops.str_drafts where case_id = ?", Long.class, caseId)).isZero();
