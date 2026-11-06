@@ -70,6 +70,20 @@ public class NarrativeHashTest {
         assertThat(NarrativeHash.of(refsChanged)).isEqualTo(NarrativeHash.of(original));  // 해시는 같다
     }
 
+    // 2-2: cites(근거 facts 키)도 해시에 안 들어간다 — 규약 v0.4, cites 칸 추가 뒤에도 예전 검증 해시가 그대로
+    @Test
+    void cites만_다르면_같은_해시다() {
+        List<NarrativeSection> original = body();
+        List<NarrativeSection> citesChanged = original.stream()
+                .map(n -> n.section() == StrSection.HOW
+                        ? new NarrativeSection(n.section(), n.text(), List.of("period", "inbound.count"), n.evidenceIds())
+                        : n)
+                .toList();
+
+        assertThat(citesChanged).isNotEqualTo(original);
+        assertThat(NarrativeHash.of(citesChanged)).isEqualTo(NarrativeHash.of(original));
+    }
+
     // 3
     @Test
     void 단락_순서가_섞여_와도_정해진_순서로_계산해서_같은_해시다() {

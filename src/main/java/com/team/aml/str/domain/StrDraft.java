@@ -240,12 +240,12 @@ public class StrDraft extends AssignedIdEntity {
     /** AI 응답 전체. 복사본. */
     public JsonNode getPayload() { return payload.deepCopy(); }
 
-    /** before를 복사하되, 고친 단락은 문장(text)만 새 것으로 바꾼다. 근거 번호는 그대로. */
+    /** before를 복사하되, 고친 단락은 문장(text)만 새 것으로 바꾼다. 근거(cites·evidence_ids)는 그대로. */
     private static List<NarrativeSection> applyEdits(List<NarrativeSection> before,
                                                      Map<StrSection, String> editedTexts) {
         return before.stream()
                 .map(s -> editedTexts.containsKey(s.section())
-                        ? new NarrativeSection(s.section(), editedTexts.get(s.section()), s.evidenceIds())
+                        ? s.withText(editedTexts.get(s.section()))
                         : s)
                 .toList();
     }

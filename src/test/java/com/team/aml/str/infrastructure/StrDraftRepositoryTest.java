@@ -114,7 +114,7 @@ class StrDraftRepositoryTest {
             assertThat(loaded.getProducedAt()).isEqualTo(PRODUCED_AT);
             assertThat(loaded.getFacts()).isEqualTo(facts());              // DB generated column = payload -> 'facts'
             assertThat(loaded.getPayload().path("generation_id").asText()).isEqualTo("g-" + draftId);
-            assertThat(loaded.currentBody()).isEqualTo(aiNarrative());     // jsonb 왕복 — 순서·근거 번호까지
+            assertThat(loaded.currentBody()).isEqualTo(aiNarrative());     // jsonb 왕복 — 순서·cites·근거 번호까지
             assertThat(loaded.getVersion()).isZero();
 
             StrRevision first = loaded.getCurrentRevision();
@@ -133,6 +133,8 @@ class StrDraftRepositoryTest {
                 String.class, draftId)).isEqualTo("SUMMARY");
         assertThat(jdbc.queryForObject("select jsonb_array_length(narrative_after -> 0 -> 'evidence_ids') "
                 + "from ops.str_revisions where draft_id=?", Integer.class, draftId)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("select narrative_after -> 0 -> 'cites' ->> 1 from ops.str_revisions where draft_id=?",
+                String.class, draftId)).isEqualTo("inbound.count");          // cites 도 jsonb 왕복
     }
 
     // 2
@@ -271,7 +273,8 @@ class StrDraftRepositoryTest {
 
     private static List<NarrativeSection> aiNarrative() {
         return StrSection.V1.stream()
-                .map(s -> new NarrativeSection(s, "AI " + s + " 문장", List.of(5_120_000L + s.ordinal(), 5_121_000L)))
+                .map(s -> new NarrativeSection(s, "AI " + s + " 문장", List.of("period", "inbound.count"),
+                        List.of(5_120_000L + s.ordinal(), 5_121_000L)))
                 .toList();
     }
 
