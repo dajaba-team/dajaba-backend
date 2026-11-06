@@ -2,7 +2,12 @@ package com.team.aml.source.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.team.aml.shared.batch.BatchRunQuery;
 import com.team.aml.shared.security.AppUserDetails;
+import com.team.aml.shared.security.CurrentUser;
+import com.team.aml.source.application.DatasetLoadRecorder;
+import com.team.aml.source.application.LoadIbmDataset;
+import com.team.aml.source.application.RequestIbmDatasetLoad;
 import com.team.aml.source.domain.DatasetExpectation;
 import com.team.aml.source.domain.DatasetFiles;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,7 +19,11 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.task.TaskExecutor;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -31,8 +40,10 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -82,6 +93,18 @@ class DatasetLoadApiTest {
 
     @Autowired
     JdbcTemplate jdbc;
+
+    @Autowired
+    LoadIbmDataset loadIbmDataset;
+
+    @Autowired
+    DatasetLoadRecorder recorder;
+
+    @Autowired
+    BatchRunQuery batchRuns;
+
+    @Autowired
+    CurrentUser currentUser;
 
     private final ObjectMapper json = new ObjectMapper();
 
@@ -151,6 +174,29 @@ class DatasetLoadApiTest {
     }
 
     @Test
+    void 실행기가_거절하면_FAILED로_남기고_예외를_다시_던진다_HTTP로는_500() throws Exception {   // #56 리뷰
+        TaskExecutor rejecting = task -> { throw new TaskRejectedException("full"); };
+        var sut = new RequestIbmDatasetLoad(loadIbmDataset, recorder, batchRuns, currentUser, rejecting);
+        AppUserDetails admin = new AppUserDetails(1L, "system", "SYSTEM", "ADMIN");
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(admin, null, admin.getAuthorities()));
+        try {
+            assertThatThrownBy(sut::execute).isInstanceOf(TaskRejectedException.class);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+
+        Map<String, Object> run = jdbc.queryForMap("select status, error_message from ops.batch_runs");
+        assertThat(run.get("status")).isEqualTo("FAILED");
+        assertThat(run.get("error_message")).isEqualTo("적재 작업을 시작하지 못함 (TaskRejectedException)");
+
+        // RUNNING 이 남지 않아 다음 적재는 BATCH_RUNNING 에 막히지 않는다
+        long next = body(mvc.perform(post("/api/v1/admin/batches/load").with(admin()).with(csrf())).andReturn(), 202)
+                .get("batch_run_id").asLong();
+        assertThat(waitUntilFinished(next).get("status").asText()).isEqualTo("SUCCEEDED");
+    }
+
+    @Test
     void 없는_배치는_404_BATCH_RUN_NOT_FOUND() throws Exception {
         JsonNode error = body(mvc.perform(get("/api/v1/admin/batches/999999").with(admin())).andReturn(), 404);
         assertThat(error.get("error").get("code").asText()).isEqualTo("BATCH_RUN_NOT_FOUND");
@@ -192,6 +238,9 @@ class DatasetLoadApiTest {
             assertThat(error.get("error").get("code").asText()).as(param[0] + "=" + param[1])
                     .isEqualTo("INVALID_REQUEST");
         }
+        JsonNode typeError = body(mvc.perform(get("/api/v1/admin/batches").param("type", "WRONG").with(admin()))
+                .andReturn(), 400);
+        assertThat(typeError.get("error").get("details").get("parameter").asText()).isEqualTo("type");
     }
 
     private JsonNode waitUntilFinished(long id) throws Exception {

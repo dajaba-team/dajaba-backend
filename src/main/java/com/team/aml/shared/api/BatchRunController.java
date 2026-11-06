@@ -1,6 +1,9 @@
-package com.team.aml.shared.batch;
+package com.team.aml.shared.api;
 
-import com.team.aml.shared.api.PageResponse;
+import com.team.aml.shared.batch.BatchRunQuery;
+import com.team.aml.shared.batch.BatchRunView;
+import com.team.aml.shared.batch.BatchStatus;
+import com.team.aml.shared.batch.BatchType;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.constraints.Max;

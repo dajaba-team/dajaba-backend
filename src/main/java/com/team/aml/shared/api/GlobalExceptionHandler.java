@@ -17,9 +17,9 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
-import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -51,12 +51,19 @@ public class GlobalExceptionHandler {
                 .body(ErrorResponse.of("INVALID_REQUEST", "요청 값이 올바르지 않습니다", fields));
     }
 
-    /** 쿼리·경로 파라미터 오류 — 없는 enum 값, 날짜 형식, @Min·@Max·@Pattern 위반. 처리가 없으면 500 이 된다. */
+    /**
+     * 쿼리·경로 파라미터 오류 — 없는 enum 값, 날짜 형식, @Min·@Max·@Pattern 위반. 처리가 없으면 500 이 된다.
+     * 이름을 알 수 있으면 details.parameter 에 넣는다(형 변환·누락). @Min 등 검증 위반은 비운다.
+     */
     @ExceptionHandler({MethodArgumentTypeMismatchException.class, MissingServletRequestParameterException.class,
             HandlerMethodValidationException.class})
     public ResponseEntity<ErrorResponse> invalidParameter(Exception e) {
+        String parameter = e instanceof MethodArgumentTypeMismatchException mismatch ? mismatch.getName()
+                : e instanceof MissingServletRequestParameterException missing ? missing.getParameterName()
+                : null;
+        Map<String, Object> details = parameter == null ? Map.of() : Map.of("parameter", parameter);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of("INVALID_REQUEST", "요청 파라미터가 올바르지 않습니다"));
+                .body(ErrorResponse.of("INVALID_REQUEST", "요청 파라미터가 올바르지 않습니다", details));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
