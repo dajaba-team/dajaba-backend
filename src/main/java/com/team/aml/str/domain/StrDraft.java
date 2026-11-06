@@ -5,10 +5,12 @@ import com.team.aml.shared.domain.AssignedIdEntity;
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
-
 import java.text.Normalizer;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 /**
  * STR 초안. 상태는 메서드로만 바뀐다(setter 없음).
@@ -109,38 +111,12 @@ public class StrDraft extends AssignedIdEntity {
         if (payload == null || !payload.path("facts").isObject()) {
             throw new IllegalArgumentException("payload에 facts 객체가 없다");
         }
-        requireEachSectionOnce(aiNarrative);          // ← 만들기 전에 먼저 검사
+        NarrativeSections.requireOneSet(aiNarrative, "AI 원문 단락");   // ← 만들기 전에 먼저 검사 (V1 6섹션 또는 V2 7항목 한 세트)
         aiNarrative.forEach(n -> validateText(n.section(), n.text()));   // 고친 문장과 같은 규칙
         return new StrDraft(draftId, caseId, generationId, generatorVersion, producedAt, payload,
-                inSectionOrder(aiNarrative));
+                NarrativeSections.inSectionOrder(aiNarrative));
     }
 
-    /** 단락 순서(enum 선언 순서) 그대로 줄 세운 새 목록. AI가 보낸 순서는 믿지 않는다. */
-    private static List<NarrativeSection> inSectionOrder(List<NarrativeSection> narrative) {
-        return narrative.stream()
-                .sorted(Comparator.comparing(NarrativeSection::section))
-                .toList();
-    }
-
-    /** 섹션마다 정확히 한 번. 오류 메시지에는 개수와 섹션 이름만 넣고 본문 글자는 넣지 않는다. */
-    private static void requireEachSectionOnce(List<NarrativeSection> narrative) {
-        Map<StrSection, Integer> counts = new EnumMap<>(StrSection.class);
-        for (NarrativeSection n : narrative) {
-            counts.merge(n.section(), 1, Integer::sum);   // 섹션별로 몇 번 나왔나 센다
-        }
-        List<StrSection> missing = Arrays.stream(StrSection.values())
-                .filter(s -> !counts.containsKey(s))       // 한 번도 안 나온 섹션
-                .toList();
-        List<StrSection> duplicated = counts.entrySet().stream()
-                .filter(e -> e.getValue() > 1)              // 두 번 이상 나온 섹션
-                .map(Map.Entry::getKey)
-                .toList();
-        if (!missing.isEmpty() || !duplicated.isEmpty()) {
-            throw new IllegalArgumentException("AI 원문 단락은 " + StrSection.values().length
-                    + "개가 각각 한 번씩이어야 한다 (받은 개수 " + narrative.size()
-                    + ", 빠짐 " + missing + ", 중복 " + duplicated + ")");
-        }
-    }
     /**
      * 본문 수정. 고친 단락(단락 이름 → 새 문장)과 수정자를 받아 새 수정본을 만든다.
      * facts는 인자에 없다 — 숫자는 못 고친다.
@@ -149,6 +125,7 @@ public class StrDraft extends AssignedIdEntity {
         requireActive();
         Objects.requireNonNull(revisedBy, "revisedBy");   // 세션에서 오는 값이라 null이면 호출 쪽 버그
         validateTexts(editedTexts);
+        requireSectionsOfThisDraft(editedTexts);
 
         StrRevision current = getCurrentRevision();     // 처음 고치면 2번
         List<NarrativeSection> before = current.getAfter();
@@ -161,6 +138,17 @@ public class StrDraft extends AssignedIdEntity {
 
         revisions.add(revision);
         return revision;
+    }
+
+    /** 이 초안 본문에 있는 단락만 고칠 수 있다 — 6섹션 초안에 7항목 이름(또는 그 반대)으로 고치면 거부. 조용히 버리지 않는다. */
+    private void requireSectionsOfThisDraft(Map<StrSection, String> editedTexts) {
+        List<StrSection> own = currentBody().stream().map(NarrativeSection::section).toList();
+        editedTexts.keySet().stream()
+                .filter(section -> !own.contains(section))
+                .findFirst()
+                .ifPresent(section -> {
+                    throw new InvalidSectionTextException(section, "이 초안에 없는 단락입니다");
+                });
     }
 
     /** 고친 문장마다: 비었거나(공백만 포함) 5,000자를 넘으면 거부. */

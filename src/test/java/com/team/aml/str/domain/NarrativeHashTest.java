@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class NarrativeHashTest {
 
     private static List<NarrativeSection> body() {
-        return Arrays.stream(StrSection.values())
+        return StrSection.V1.stream()
                 .map(s -> new NarrativeSection(
                         s,
                         "본문 " + s,
@@ -150,5 +150,39 @@ public class NarrativeHashTest {
         assertThatThrownBy(() -> NarrativeHash.of(sixButWrong))
                 .hasMessageContaining("WHO")                                    // 무엇이 빠졌는지는 알려 준다
                 .hasMessageContaining("SUMMARY");                               // 무엇이 겹쳤는지도
+    }
+
+    /** 테스트 벡터 파일을 본문으로 읽는다. */
+    private static List<NarrativeSection> readVector(JsonNode vector) {
+        List<NarrativeSection> narrative = new ArrayList<>();
+        for (JsonNode s : vector.get("narrative")) {
+            List<Long> evidenceIds = new ArrayList<>();
+            s.get("evidence_ids").forEach(id -> evidenceIds.add(id.asLong()));
+            narrative.add(new NarrativeSection(
+                    StrSection.valueOf(s.get("section").asText()), s.get("text").asText(), evidenceIds));
+        }
+        return narrative;
+    }
+
+    // 7: 서술 7항목(V2)도 Java와 Python이 같은 값 — 정답 파일 contracts/examples/narrative_hash_v2.json
+    //    (AI 리포와 같은 파일, SCRUM-47). 파일 안 단락 순서는 섞여 있고, 앞뒤 공백·줄바꿈이 든 문장도 있다
+    @Test
+    void 서술_7항목_테스트_벡터도_AI가_계산한_해시와_같다() throws Exception {
+        JsonNode vector = new ObjectMapper().readTree(
+                Files.readString(Path.of("contracts/examples/narrative_hash_v2.json")));
+
+        assertThat(NarrativeHash.of(readVector(vector))).isEqualTo(vector.get("sha256").asText());
+    }
+
+    // 8: 6섹션 세트와 7항목 세트가 섞이면 해시하지 않는다
+    @Test
+    void 섹션_세트가_섞이면_해시하지_않고_거부한다() {
+        List<NarrativeSection> mixed = new ArrayList<>(body());
+        mixed.set(0, new NarrativeSection(StrSection.SUBJECT, "본문 SUBJECT", List.of()));   // SUMMARY 대신 SUBJECT
+
+        assertThatThrownBy(() -> NarrativeHash.of(mixed))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("SUBJECT")
+                .hasMessageContaining("SUMMARY");
     }
 }

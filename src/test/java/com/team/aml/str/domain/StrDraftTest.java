@@ -36,7 +36,7 @@ class StrDraftTest {
      * 근거 번호는 transaction_id(bigint, 10/27 회의 1번)라 Long이다.
      */
     private static List<NarrativeSection> aiNarrative() {
-        return Arrays.stream(StrSection.values())
+        return StrSection.V1.stream()
                 .map(s -> new NarrativeSection(
                         s,
                         "AI " + s + " 문장",
@@ -133,7 +133,7 @@ class StrDraftTest {
         assertThat(afterHow.text()).isEqualTo("고친 HOW");
         assertThat(afterHow.evidenceIds()).isEqualTo(beforeHow.evidenceIds());
 
-        for (StrSection s : StrSection.values()) {
+        for (StrSection s : StrSection.V1) {
             if (s == StrSection.HOW) continue;
             assertThat(section(rev.getAfter(), s)).isEqualTo(section(rev.getBefore(), s));
         }
@@ -247,7 +247,7 @@ class StrDraftTest {
     // 11: AI 원문 단락이 섹션마다 한 번씩이 아니면 초안을 만들지 않는다
     @Test
     void 단락이_섹션마다_한_번씩이_아니면_초안을_만들지_않는다() {
-        List<NarrativeSection> missing = aiNarrative().subList(1, StrSection.values().length); // SUMMARY 빠짐
+        List<NarrativeSection> missing = aiNarrative().subList(1, StrSection.V1.size());
 
         List<NarrativeSection> duplicated = new ArrayList<>(aiNarrative());
         duplicated.add(new NarrativeSection(StrSection.WHO, "비밀 문장", List.of(1L)));       // WHO 두 번
@@ -279,7 +279,7 @@ class StrDraftTest {
         StrRevision rev = draft.revise(Map.of(StrSection.HOW, "고친 HOW"), INVESTIGATOR);
         assertThat(rev.getAfter())
                 .extracting(NarrativeSection::section)
-                .containsExactly(StrSection.values());                         // 고친 뒤에도 그대로
+                .containsExactlyElementsOf(StrSection.V1);                         // 고친 뒤에도 그대로
     }
 
     // 14: 단락 이름이 null이면 거부, 수정자가 null이면 거부. 거부된 시도는 수정본 번호를 쓰지 않는다
@@ -358,7 +358,6 @@ class StrDraftTest {
         assertThatThrownBy(draft::supersede).isInstanceOf(DraftLockedException.class);
         assertThat(draft.getStatus()).isEqualTo(StrDraftStatus.SUPERSEDED);
     }
-
     // 19: 저장에 필요한 AI 응답 값이 없으면 초안을 만들지 않는다 (str_drafts not null 칸, facts 는 payload 안)
     @Test
     void payload에_facts가_없거나_생성_버전이_비면_초안을_만들지_않는다() {
@@ -390,6 +389,63 @@ class StrDraftTest {
         assertThat(draft.getRevisions()).hasSize(1);
         assertThat(draft.getCurrentRevisionId()).isNull();           // 수정본 id 는 저장 뒤에 생긴다
         assertThat(draft.getSuspicionTypes()).isEmpty();
+    }
+
+    // ---- 서술부 7항목(V2) 전환 — 11/6, 서식 안건 3·6. 옛 6섹션(V1) 초안도 그대로 산다 ----
+
+    /** 7항목 본문. 일부러 순서를 섞어 둔다(AI가 보낸 순서는 믿지 않는다). */
+    private static List<NarrativeSection> v2Narrative() {
+        List<NarrativeSection> body = new ArrayList<>(StrSection.V2.stream()
+                .map(s -> new NarrativeSection(s, "AI " + s + " 문장", List.of(5_130_000L + s.ordinal())))
+                .toList());
+        Collections.reverse(body);                                                   // OPINION, …, SUBJECT
+        return body;
+    }
+
+    // V2-1
+    @Test
+    void 서술_7항목_초안도_만들고_본문은_7항목_순서로_저장한다() {
+        StrDraft draft = draft(CASE_ID, GENERATION_ID, v2Narrative());
+
+        assertThat(draft.currentBody())
+                .extracting(NarrativeSection::section)
+                .containsExactlyElementsOf(StrSection.V2);                           // SUBJECT·DATE·PLACE·INSTRUMENT·METHOD·GROUNDS·OPINION
+        StrRevision rev = draft.revise(Map.of(StrSection.GROUNDS, "고친 GROUNDS"), INVESTIGATOR);
+        assertThat(rev.getRevisionNo()).isEqualTo(2);
+        assertThat(section(rev.getAfter(), StrSection.GROUNDS).text()).isEqualTo("고친 GROUNDS");
+    }
+
+    // V2-2
+    @Test
+    void 섹션_6개_세트와_7개_세트가_섞이면_초안을_만들지_않는다() {
+        List<NarrativeSection> mixed = new ArrayList<>(aiNarrative());               // V1 6개 …
+        mixed.set(5, new NarrativeSection(StrSection.OPINION, "비밀 문장", List.of())); // … CONCLUSION 대신 OPINION
+        List<NarrativeSection> both = new ArrayList<>(aiNarrative());
+        both.addAll(v2Narrative());                                                  // 13개 전부
+
+        for (List<NarrativeSection> bad : List.of(mixed, both)) {
+            assertThatThrownBy(() -> draft(CASE_ID, GENERATION_ID, bad))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .message()
+                    .doesNotContain("문장");                                         // 본문 글자는 메시지에 없다
+        }
+        assertThatThrownBy(() -> draft(CASE_ID, GENERATION_ID, mixed))
+                .hasMessageContaining("OPINION")                                     // 다른 세트에서 온 것
+                .hasMessageContaining("CONCLUSION");                                 // 빠진 것
+    }
+
+    // V2-3
+    @Test
+    void 초안에_없는_세트의_단락으로_고치면_거부하고_수정본_번호를_쓰지_않는다() {
+        StrDraft v1 = newDraft();
+        StrDraft v2 = draft(CASE_ID, GENERATION_ID, v2Narrative());
+
+        assertThatThrownBy(() -> v1.revise(Map.of(StrSection.SUBJECT, "고친 SUBJECT"), INVESTIGATOR))
+                .isInstanceOf(InvalidSectionTextException.class);                    // 조용히 버리지 않는다
+        assertThatThrownBy(() -> v2.revise(Map.of(StrSection.HOW, "고친 HOW"), INVESTIGATOR))
+                .isInstanceOf(InvalidSectionTextException.class);
+        assertThat(v1.getCurrentRevision().getRevisionNo()).isEqualTo(1);
+        assertThat(v2.getCurrentRevision().getRevisionNo()).isEqualTo(1);
     }
 
 }
