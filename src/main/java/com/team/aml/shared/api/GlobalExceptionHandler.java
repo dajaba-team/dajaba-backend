@@ -53,13 +53,16 @@ public class GlobalExceptionHandler {
 
     /**
      * 쿼리·경로 파라미터 오류 — 없는 enum 값, 날짜 형식, @Min·@Max·@Pattern 위반. 처리가 없으면 500 이 된다.
-     * 이름을 알 수 있으면 details.parameter 에 넣는다(형 변환·누락). @Min 등 검증 위반은 비운다.
+     * 틀린 파라미터 이름을 details.parameter 에 넣는다. 검증 위반이 여러 개면 첫 번째만.
      */
     @ExceptionHandler({MethodArgumentTypeMismatchException.class, MissingServletRequestParameterException.class,
             HandlerMethodValidationException.class})
     public ResponseEntity<ErrorResponse> invalidParameter(Exception e) {
         String parameter = e instanceof MethodArgumentTypeMismatchException mismatch ? mismatch.getName()
                 : e instanceof MissingServletRequestParameterException missing ? missing.getParameterName()
+                : e instanceof HandlerMethodValidationException invalid
+                        ? invalid.getAllValidationResults().stream().findFirst()
+                                .map(r -> r.getMethodParameter().getParameterName()).orElse(null)
                 : null;
         Map<String, Object> details = parameter == null ? Map.of() : Map.of("parameter", parameter);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)

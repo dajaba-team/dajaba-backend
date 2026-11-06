@@ -238,9 +238,12 @@ class DatasetLoadApiTest {
             assertThat(error.get("error").get("code").asText()).as(param[0] + "=" + param[1])
                     .isEqualTo("INVALID_REQUEST");
         }
-        JsonNode typeError = body(mvc.perform(get("/api/v1/admin/batches").param("type", "WRONG").with(admin()))
-                .andReturn(), 400);
-        assertThat(typeError.get("error").get("details").get("parameter").asText()).isEqualTo("type");
+        for (String[] param : new String[][]{{"type", "WRONG"}, {"size", "101"}, {"sort", "id,desc"}}) {
+            JsonNode error = body(mvc.perform(get("/api/v1/admin/batches").param(param[0], param[1]).with(admin()))
+                    .andReturn(), 400);
+            assertThat(error.get("error").get("details").get("parameter").asText()).as(param[0] + "=" + param[1])
+                    .isEqualTo(param[0]);
+        }
     }
 
     private JsonNode waitUntilFinished(long id) throws Exception {
