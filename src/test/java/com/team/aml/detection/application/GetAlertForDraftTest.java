@@ -1,5 +1,6 @@
 package com.team.aml.detection.application;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.team.aml.detection.domain.AlertForDraft;
 import com.team.aml.detection.domain.AlertNotFoundException;
 import com.team.aml.shared.ai.AiDtos.AlertPayload;
@@ -92,10 +93,12 @@ class GetAlertForDraftTest {
     }
 
     @Test
-    void 점수가_아직_없으면_reasons는_null() {
+    void 점수가_아직_없으면_reasons는_빈_배열() {   // AI 는 null 이면 422 (#64 리뷰)
         long alertId = alert(rule(1, null), newEntity(), REF, "{}");
 
-        assertThat(getAlertForDraft.execute(alertId).reasons()).isNull();
+        JsonNode reasons = getAlertForDraft.execute(alertId).reasons();
+        assertThat(reasons.isArray()).isTrue();
+        assertThat(reasons).isEmpty();
     }
 
     @Test
