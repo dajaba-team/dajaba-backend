@@ -109,7 +109,7 @@
 | `GetAlertSummary(alertId)` | cases 상세 | 경보 + 최신 점수 + 근거 수 | 읽기 |
 | `ListAlertTransactions(alertId, pageable)` | cases 거래 목록 | 근거 거래 페이지. 마스킹은 부르는 쪽 응답에서 | 읽기 |
 | `FindAlertsByEntity(entityId, before)` | cases·str (`prior_alerts`) | 같은 법인의 과거 경보(`reference_ts` 이전만) | 읽기 |
-| `GetAlertPayload(alertId)` | str 초안 요청 | 규약 2절 경보 JSON + 최신 점수 | 읽기 |
+| `GetAlertForDraft(alertId)` (명세 이름 GetAlertPayload) | str 초안 요청 (`RequestStrDraft`) | `AlertPayload`(규약 §2, `created_at` 포함) + `reasons`(점수 payload 그대로, 없으면 `[]`) + `prior_alert_count`(같은 법인·앞선 경보 수) [SCRUM-155] | 읽기 |
 | `RecordScoreBand(scoreId, band, policySnapshot)` | cases | detection이 자기 점수 행에 등급·정책 결과 저장 — **CASES 명세 추가 제안** | — |
 
 **관리자 API** 〔초안 — SD 명세〕 룰 스캔 `POST /admin/batches/rule-scan?date=`, 점수 `POST /admin/batches/score?date=`, 경보 점검 `GET /admin/alerts`(+`/{alert_no}`, `/{alert_no}/transactions` — 열람 기록), 룰 `GET /admin/rules`·`PUT /admin/rules/{rule_id}/params`(새 버전 행 추가 + 이전 행 비활성을 한 트랜잭션, `(rule_id, version)` unique로 409).
