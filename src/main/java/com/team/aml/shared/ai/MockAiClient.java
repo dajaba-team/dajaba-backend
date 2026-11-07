@@ -124,9 +124,27 @@ public class MockAiClient implements AiClient {
 
     @Override
     public CaseSummaryResponse caseSummary(CaseSummaryRequest request) {
-        ObjectNode raw = om.createObjectNode().put("summary", "(목업) 이 경보는 단기간 다수 계좌에서 입금이 집중된 유형입니다.")
-                .put("generator_version", "mock-0.0.1").put("produced_at", Instant.now().toString());
-        return new CaseSummaryResponse(raw.get("summary").asText(), "mock-0.0.1", raw.get("produced_at").asText(), raw);
+        // 규약 v0.4 §6.1 응답 모양. model_focus 는 문자열 한 줄(또는 null), 코드 검사는 4종 전부 통과로 둔다(목업).
+        String producedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+        String generationId = "GEN-mock-" + UUID.randomUUID().toString().substring(0, 6);
+        List<String> lines = List.of("(목업) 이 경보는 단기간 다수 계좌에서 입금이 집중된 유형입니다.",
+                "(목업) 근거 거래 " + (request.evidenceTransactionIds() == null ? 0 : request.evidenceTransactionIds().size())
+                        + "건을 확인해 주세요.");
+        ObjectNode raw = om.createObjectNode()
+                .put("produced_at", producedAt)
+                .put("case_no", request.caseNo())
+                .put("generation_id", generationId);
+        raw.putObject("facts");
+        lines.forEach(raw.putArray("summary_lines")::add);
+        raw.put("model_focus", "(목업) 모델은 account_in_counterparties_24h 신호를 가장 크게 봄");
+        com.fasterxml.jackson.databind.node.ArrayNode checks = raw.putArray("code_checks");
+        for (String check : List.of("AMOUNT_MATCH", "DATE_MATCH", "COUNT_MATCH", "ACCOUNT_ID_MATCH")) {
+            checks.addObject().put("check", check).putNull("section")
+                    .put("draft_value", "(목업)").put("source_value", "(목업)").put("match", true);
+        }
+        raw.putObject("generation_meta").put("prompt_version", "mock-0.0.1");
+        return new CaseSummaryResponse(producedAt, request.caseNo(), generationId, lines,
+                raw.get("code_checks"), new StrDraftResponse.GenerationMetaView("mock-0.0.1"), raw);
     }
 
     @Override

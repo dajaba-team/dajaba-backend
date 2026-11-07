@@ -47,12 +47,15 @@ sequenceDiagram
     CAS-->>FE: Page<TransactionRow>
 
     opt 요약이 없을 때 (또는 새로고침 버튼)
-        FE->>CAS: POST /cases/{id}/summary:refresh
-        CAS->>AI: POST /v1/cases/summary {경보·근거 거래 ID} (AiClient, 트랜잭션 밖, ≤90초)
+        FE->>CAS: POST /cases/{case_no}/refresh-summary {version}
+        CAS->>DB: 짧은 읽기 트랜잭션 — version·담당·편집 가능 상태 확인, 요청 구성 + input_sha256
+        CAS->>AI: POST /v1/cases/summary {case_no, alert, evidence_transaction_ids, reasons, prior_alert_count} (AiClient, 트랜잭션 밖, ≤90초 — 규약 v0.4 §6.1)
         note over AI: facts는 AI가 원천을 읽어 계산 — 초안과 같은 규칙(안건 23)
-        AI-->>CAS: {summary_text, model, tokens}
-        CAS->>DB: INSERT case_summaries, ai_call_logs
-        CAS-->>FE: 201 {summary}
+        AI-->>CAS: {produced_at, case_no, generation_id, facts, summary_lines[≤6], model_focus, code_checks, generation_meta}
+        note over CAS: code_checks 하나라도 match=false 면 저장 안 함 (502 SUMMARY_CODE_CHECK_FAILED)
+        CAS->>DB: 새 트랜잭션 FOR UPDATE — 같은 검사 + 입력 해시 재확인(다르면 409)
+        CAS->>DB: INSERT case_summaries, cases.version +1 (ai_call_logs 는 AiClient 가 따로)
+        CAS-->>FE: 201 {case_no, summary{summary_lines, is_current, …}, case_version}
         note right of AI: 실패해도 조사는 계속 — 요약 칸만 "생성 실패, 다시 시도"
     end
 

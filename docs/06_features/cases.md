@@ -64,6 +64,12 @@
 
 **AI 조사 요약** 〔초안 — CASES 명세 API-12·13·§7.2〕 "DB → AI → DB" 패턴. 입력 스냅샷과 `input_sha256`을 저장해 `is_current`를 계산(케이스 version 차이로 계산하지 않음). 실패해도 조사는 계속(요약은 보조). AI 실패를 빈 요약·LOW로 바꾸지 않아요.
 
+**`RefreshCaseSummary` — 구현됨 (API-12, 컨트롤러는 SCRUM-106)** `execute(caseNo, version)` → `CaseSummaryResult{case_no, summary{summary_lines, model_focus, produced_at, generator_version, based_on_case_version, is_current, input_sha256}, case_version}`. 클래스에 트랜잭션이 없어요(AI 대기 중 DB 트랜잭션·락 없음).
+- **요청 모양 — 규약 v0.4 §6.1 (11/6)** `{case_no, alert, evidence_transaction_ids, reasons, prior_alert_count, reporting_institution}`. `alert`·`reasons`·`prior_alert_count`는 STR 초안 요청과 같은 값이라 detection `GetAlertForDraft`(#64, SCRUM-155)로 만들어요. `evidence_transaction_ids`는 경보 거래 전체(중복 제거·오름차순), 점수가 아직 없으면 `reasons`는 `[]`(AI는 null을 422로 거절), `reporting_institution`은 null(AI가 거래자 계좌 은행명). **메모는 넣지 않아요**(C6) — 메모만 바뀌면 `is_current`는 그대로.
+- 순서: ① 읽기 트랜잭션 — 404 `CASE_NOT_FOUND` → 409 `CONCURRENT_UPDATE`(version) → 403 `NOT_ASSIGNEE` → 409 `INVALID_CASE_TRANSITION`(`isEditableByAssignee` 아님, `details.action = REFRESH_SUMMARY`) → 요청 구성·입력 해시. ② 트랜잭션 밖 `AiClient.caseSummary`. 실패는 AI 코드 그대로 502. 응답 `case_no`가 다르거나 `produced_at`·`generation_meta.prompt_version`·`code_checks`가 없거나 비었거나(AI 요약은 4종을 항상 줌) `summary_lines`가 없거나 6개를 넘으면 502 `AI_BAD_RESPONSE`. **`code_checks` 중 하나라도 `match=false`면 저장하지 않고 502 `SUMMARY_CODE_CHECK_FAILED`**(`details.failed_checks`, 〔제안 코드〕). ③ 저장 트랜잭션 — `findForUpdate` 뒤 ①의 검사를 다시 하고(그사이 종결·재배정이면 409) 요약 입력을 다시 만들어 해시가 다르면 409 `CONCURRENT_UPDATE`. 통과하면 `case_summaries` 한 행(응답 원문·입력 스냅샷·해시·`based_on_case_version` = 호출 전 version) + `cases.version` +1(`bumpVersion`, 이력 행 없음). `model_focus`("모델이 주목한 점" 한 줄, null 가능)는 `summary_lines`와 섞지 않고 따로 내보내요.
+- 입력 해시(`CaseSummaryInput`): 요청 본문 JSON의 객체 키를 재귀 정렬, 공백 없이 UTF-8 SHA-256. 배열 순서는 그대로. 백엔드 안에서만 비교해요(AI와 맞출 벡터 없음).
+- 남은 것: API-13 `GET …/summary`(같은 `Summary` 모양 + 지금 입력으로 다시 만든 해시로 `is_current`), 상세의 `latest_summary`, 컨트롤러(SCRUM-106).
+
 **API** 〔초안 — CASES 명세 v0.5〕
 | ID | API | 권한 |
 |---|---|---|

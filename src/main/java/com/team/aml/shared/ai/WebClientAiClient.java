@@ -166,8 +166,13 @@ public class WebClientAiClient implements AiClient {
 
     @Override
     public CaseSummaryResponse caseSummary(CaseSummaryRequest request) {
-        JsonNode r = post("/v1/cases/summary", request, "CASE", request.caseId());
-        return new CaseSummaryResponse(text(r, "summary"), text(r, "generator_version"), text(r, "produced_at"), r);
+        JsonNode r = post("/v1/cases/summary", request, "CASE", request.caseNo());
+        require(r, "case_no");
+        try {
+            return om.treeToValue(injectRaw(r), CaseSummaryResponse.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new AiClientException("AI_BAD_RESPONSE", "AI 요약 응답 파싱 실패", Map.of(), 502);
+        }
     }
 
     @Override

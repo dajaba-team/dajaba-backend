@@ -51,6 +51,20 @@ public class InvalidCaseTransitionException extends DomainException {
         return new InvalidCaseTransitionException(reason, Map.copyOf(details));
     }
 
+    /**
+     * 메모·요약을 고칠 수 없는 상태(Case.isEditableByAssignee 가 false)에서 내용 편집을 했을 때.
+     * details: from_status, action(REFRESH_SUMMARY 등 — 이력이 남지 않는 동작이라 CaseHistoryAction 이 아님), 반려 코드(있으면).
+     */
+    public static InvalidCaseTransitionException notEditable(CaseStatus status, RejectionReasonCode rejectionCode,
+                                                             String action) {
+        Map<String, Object> details = new HashMap<>(details(status, null, rejectionCode, null));
+        details.put("action", action);
+        return new InvalidCaseTransitionException(
+                "지금 상태(" + status + (rejectionCode != null ? "+" + rejectionCode : "")
+                        + ")에서는 할 수 없는 작업입니다: " + action,
+                Map.copyOf(details));
+    }
+
     // Map.copyOf 는 null 값을 못 넣는다. 값이 있는 것만 담는다(반려 코드는 REJECTED 일 때만 있음).
     private static Map<String, Object> details(CaseStatus from, CaseStatus to, RejectionReasonCode rejectionCode,
                                                CaseHistoryAction action) {
