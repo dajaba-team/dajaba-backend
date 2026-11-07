@@ -1,8 +1,12 @@
 # docker compose up  → db(PostgreSQL 16) + app(Spring Boot, local 프로파일)
 # 환경변수는 같은 폴더의 .env 에서 읽는다. 변수 이름은 README 참조, 값은 노션.
+# 프로젝트 이름 고정 — 폴더 이름과 상관없이 네트워크가 dajaba_default (AI compose 가 external 로 붙는다), 볼륨은 dajaba_aml-db-data
+name: dajaba
+
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:0.8.2-pg16-trixie   # PostgreSQL 16 + pgvector 0.8.2 (ai 스키마 RAG). 확장은 db/init/00_extensions.sql
+                                                 # trixie 고정 — 기존 postgres:16(trixie, glibc 2.41) 볼륨과 collation 버전을 맞춤. bookworm 태그(pg16)는 2.36이라 경고
     container_name: aml-db
     environment:
       POSTGRES_DB: aml
@@ -41,6 +45,9 @@ services:
       AI_BASE_URL: ${AI_BASE_URL:-http://ai:8000}
       AI_INTERNAL_KEY: ${AI_INTERNAL_KEY}
       AML_DATASET_DIR: /data
+      AML_CASE_POLICY_VERSION: ${AML_CASE_POLICY_VERSION:-}            # 비어 있으면 케이스 생성 배치가 POLICY_NOT_CONFIGURED
+      AML_CASE_POLICY_LOW_TO_MEDIUM: ${AML_CASE_POLICY_LOW_TO_MEDIUM:-}
+      AML_CASE_POLICY_MEDIUM_TO_HIGH: ${AML_CASE_POLICY_MEDIUM_TO_HIGH:-}
     ports:
       - "8080:8080"
     volumes:

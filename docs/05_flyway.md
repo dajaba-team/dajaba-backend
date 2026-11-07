@@ -20,7 +20,7 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 | 파일 하나 = 테이블 한 묶음 | 테이블 + 인덱스 + CHECK + 초기 데이터(예: `rules` 8개)를 한 파일에 |
 | 롤백 없음 | 무료판엔 undo가 없어요. 잘못 들어가면 다음 번호로 되돌리는 SQL |
 | `ddl-auto` | `validate` 고정. `update`·`create`는 어떤 프로파일에도 없어요. 엔티티와 테이블이 안 맞아 기동이 실패하면 **답은 항상 "마이그레이션 파일을 쓴다"** |
-| 실행 계정 | Flyway는 `app_migrate`(DDL), 앱은 `app_backend`(DDL 권한 없음) [코드 `application.yml`] |
+| 실행 계정 | Flyway는 `app_migrate`(DDL), 앱은 `app_backend`(DDL 권한 없음) [코드 `application.yml`]. Flyway는 `ops`만 — **`ai` 스키마는 Alembic(AI 리포, `app_ai`)이 관리해서 여기서 안 만져요**. 확장(pgvector)은 superuser만 돼서 `db/init/00_extensions.sql` [`03_shared` §11] |
 
 **쓸 때 지키는 것** [레퍼런스 §3·§7]
 - 상태·유형 값은 DB enum 대신 `varchar(32)` + `CHECK`(값 추가가 쉬움).
@@ -31,14 +31,27 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 - 로컬 DB 초기화는 `docker compose down -v`. `flyway:clean`은 쓰지 않아요.
 - 원천 508만 행 적재는 마이그레이션이 아니라 `LoadIbmDataset`(COPY)로.
 
-## 2. 이미 들어간 파일 [코드 develop `7477916`]
+## 2. 이미 들어간 파일 [코드 develop `a079dd7`]
+
+적용 순서대로예요. §3 표의 "머지됨"과 같은 목록이에요.
 
 | 번호 | 파일 | 내용 |
 |---|---|---|
-| V001 | `create_schemas_and_roles` | `ops`·`ai` 스키마, 계정 3개 권한, `app_ai`에 원천 4개 SELECT |
-| V002 | `create_source_tables` | 원천 4개 + `transactions_staging`(unlogged). 금액 `numeric(18,2)` |
+| V001 | `create_schemas_and_roles` | `ops` USAGE·기본 권한(`app_backend` 읽기·쓰기). 계정·스키마 자체는 `db/init/01_roles.sh` |
+| V002 | `create_source_tables` | 원천 4개 + `transactions_staging`(unlogged). `app_ai`에 원천 4개 SELECT |
 | V003 | `create_users` | `users` + `SYSTEM`(id=1) |
 | V004 | `create_batch_runs` | `batch_runs` + partial unique `(batch_type, batch_date) where status='SUCCEEDED'` |
+| V004_1 | `alter_source_for_file_tracking` | `source_files`, `transaction_id` 자동 발급, `accounts.bank_country`, 원천 UPDATE·DELETE 회수 |
+| V004_2 | `create_ai_call_logs` | `ai_call_logs` (추가만) |
+| V004_3 | `create_access_logs` | `access_logs` (추가만) |
+| V005 | `create_detection_tables` | `rules`, `alerts`, `alert_transactions`, `alert_no_seq` |
+| V005_1 | `create_alert_scores` | `alert_scores` (추가만) |
+| V005_2 | `widen_transaction_amounts` | 금액 `numeric(18,2)` → `numeric(20,6)` |
+| V006 | `create_case_tables` | `cases`, `case_history`, `case_summaries`, `case_no_seq` |
+| V008 | `create_str_tables` | `str_draft_requests`, `str_drafts`, `str_revisions`, `verification_results`, `str_draft_id_seq` |
+| V009 | `create_approvals` | `approvals` |
+
+- 테스트 전용: `src/test/resources/db/test-migration/V9000__test_audited_tables.sql` — test 프로파일에서만 붙는 위치(`classpath:db/test-migration`)라 local·prod DB에는 안 들어가요 (SCRUM-68)
 
 ## 3. 번호 표 — 배정과 예약
 
@@ -46,8 +59,8 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 
 | 번호 | 지금 배정 | 담당 | 언제 | 상태 | 처음 계획 (레퍼런스 §7.3) |
 |---|---|---|---|---|---|
-| V004_1 | source — `source_files` + `transaction_id` 자동 발급(`generated always as identity`) + `accounts.bank_country` (안건 1, 10/30 #개발 합의) | 준혁 | 적재 전 | PR #21 | — |
-| V004_2 | `ai_call_logs` (`generation_id` 포함) | 진희 (SCRUM-18) | W2 | PR #9 | V010 (`create_log_tables`) |
+| V004_1 | source — `source_files` + `transaction_id` 자동 발급(`generated always as identity`) + `accounts.bank_country` (안건 1, 10/30 #개발 합의) | 준혁 | 적재 전 | 머지됨 #21 | — |
+| V004_2 | `ai_call_logs` (`generation_id` 포함) | 진희 (SCRUM-18) | W2 | 머지됨 #9 | V010 (`create_log_tables`) |
 | V004_3 | `access_logs` (진짜 로그인과 함께) | 진희 (SCRUM-19 B) | W2 | 머지됨 #27 | V010 (`create_log_tables`) |
 | V005 | detection — `rules`, `alerts`, `alert_transactions`, `alert_no_seq`. 룰 행은 룰 명세(SCRUM-73) 확정 후 별도 파일 | 준혁 (SCRUM-72) | W3 | 머지됨 #31 | 같음 |
 | V005_1 | `alert_scores` (경보당 1행, `score_band` 없음) | 준혁 (SCRUM-96) | W3 (11/3) | 머지됨 #36 | V007 |

@@ -9,7 +9,7 @@
 ## 처음 받았을 때 (5분)
 
 ```bash
-git clone <repo> && cd dajaba
+git clone <repo> && cd <받은 폴더>   # 폴더 이름은 무엇이든 됨 — compose.yaml 의 name: dajaba 로 프로젝트 이름 고정
 # 1. 환경변수 — 노션 「다자바 환경변수」 페이지의 내용을 .env 로 저장 (아래 변수 이름 참조). .env 는 커밋되지 않는다.
 # 2. 기동
 docker compose up --build
@@ -22,24 +22,47 @@ swagger에서 **`POST /api/v1/auth/login`** 본문 `{"login_id": "inv01", "passw
 
 ### .env 변수 이름 (값은 노션)
 
-| 변수 | 쓰는 곳 |
-|---|---|
-| `POSTGRES_PASSWORD` | db 컨테이너 postgres 슈퍼유저 |
-| `APP_MIGRATE_PASSWORD` | Flyway 계정 `app_migrate` (DDL) |
-| `APP_BACKEND_PASSWORD` | 앱 계정 `app_backend` (읽기·쓰기) |
-| `APP_AI_PASSWORD` | AI 서버 계정 `app_ai` (원천 4개 SELECT + ai 스키마) |
-| `DEV_USER_PASSWORD` | local 시연 계정 4명(admin·inv01·apr01·inv02)의 비밀번호 |
-| `AI_BASE_URL` | AI 서버 주소. 비우면 `http://ai:8000`. local은 어차피 목업 |
-| `AI_INTERNAL_KEY` | AI 서버와 맞추는 내부 키(32자 이상 난수) |
+`application.yml`·`compose.yaml`이 읽는 변수 전부예요. 기본값이 있는 건 `.env`에 없어도 돼요. 계정·권한은 [`docs/03_shared.md` §11](docs/03_shared.md).
 
-DB를 완전히 초기화하려면 `docker compose down -v` (볼륨 삭제 → 다음 기동 때 `db/init/01_roles.sh` 와 Flyway가 다시 돈다).
+| 변수 | 무엇 | 계정 | AI `.env`와 같은 값 | 기본값 (없으면) |
+|---|---|---|---|---|
+| `POSTGRES_PASSWORD` | db 컨테이너 슈퍼유저 비밀번호 (볼륨이 빌 때만 씀) | `postgres` | — | 없음 (필수) |
+| `APP_MIGRATE_PASSWORD` | Flyway DDL 계정. db 계정 만들기(`01_roles.sh`)와 앱 Flyway가 같이 씀 | `app_migrate` | — | 없음 (필수) |
+| `APP_BACKEND_PASSWORD` | 앱 DB 계정 (`ops` 읽기·쓰기) | `app_backend` | — | 없음 (필수) |
+| `APP_AI_PASSWORD` | AI 서버 DB 계정. 앱은 안 씀(db 계정 만들기용) | `app_ai` | **같음** | 없음 (필수) |
+| `AI_INTERNAL_KEY` | AI 서버와 맞추는 내부 키(32자 이상 난수, `X-Internal-Key`) | — | **같음** | 비어 있음 (local은 목업이라 무관) |
+| `AI_BASE_URL` | AI 서버 주소 | — | — | compose 앱 `http://ai:8000` · IDE `http://localhost:8000` |
+| `DEV_USER_PASSWORD` | local 시연 계정 4명(admin·inv01·apr01·inv02)의 비밀번호 | — | — | 비어 있음 → 개발 계정을 안 만들고 경고 한 줄 |
+| `DB_HOST` | DB 호스트 | — | — | compose 앱 `db`(고정) · IDE `localhost` |
+| `DB_PORT` | DB 포트 | — | — | `5432` |
+| `DB_NAME` | DB 이름 | — | — | `aml` |
+| `AML_DATASET_DIR` | 적재할 IBM 파일 폴더 | — | — | compose 앱 `/data`(고정, `./data` 를 붙임) · IDE `./data` |
+| `AML_CASE_POLICY_VERSION` | 케이스 등급 경계값 버전 | — | — | 기본값 없음, 미결 23에서 확정 — 비면 케이스 생성 배치 `POLICY_NOT_CONFIGURED` |
+| `AML_CASE_POLICY_LOW_TO_MEDIUM` | 점수 경계 LOW → MEDIUM | — | — | 위와 같음 |
+| `AML_CASE_POLICY_MEDIUM_TO_HIGH` | 점수 경계 MEDIUM → HIGH | — | — | 위와 같음 |
+| 참고: `SPRING_PROFILES_ACTIVE` | 프로파일 | — | — | compose 앱은 `local` 고정 · IDE는 실행 설정에 `local` |
+
+IDE에서 띄우면 앱이 리포 루트의 `.env`를 직접 읽어요(`application.yml`의 `spring.config.import`). compose로 띄운 앱은 위 표의 변수를 `compose.yaml`이 넘겨 줘요.
+
+DB를 완전히 초기화하려면 `docker compose down -v` (볼륨 삭제 → 다음 기동 때 `db/init/00_extensions.sql`·`01_roles.sh` 와 Flyway가 다시 돈다).
+
+### 프로젝트 이름 `dajaba` · pgvector (11/8, SCRUM-124)
+
+- `compose.yaml` 맨 위 `name: dajaba` — 폴더 이름과 상관없이 네트워크 `dajaba_default`(AI compose가 붙는 곳), 볼륨 `dajaba_aml-db-data`.
+- **다른 폴더 이름으로 띄워 둔 적이 있으면** 한 번만: `docker rm -f aml-db aml-app` 뒤 `docker compose up`. 새 빈 볼륨이라 **적재를 다시** 해요(옛 볼륨은 지워지지 않고 남아요).
+- db 이미지는 `pgvector/pgvector:0.8.2-pg16-trixie`(PostgreSQL 16 그대로 + pgvector 0.8.2, 원래 `postgres:16`과 같은 trixie — collation 버전이 같아요). 새 볼륨은 `db/init/00_extensions.sql`이 확장을 만들어요. **이미 있는 볼륨**은 손으로 1회:
+
+```bash
+docker exec aml-db psql -U postgres -d aml -c "CREATE EXTENSION IF NOT EXISTS vector;"
+docker exec aml-db psql -U postgres -d aml -c "\dx"     # vector 가 보이면 끝
+```
 
 ## 지금 들어 있는 것 (W1 뼈대, 10/26)
 
 | 묶음 | 파일 | 상태 |
 |---|---|---|
 | 폴더 구조 | `com.team.aml.{source,detection,cases,str,user,shared}` × `domain/application/infrastructure/api` | 각 폴더 `package-info.java`에 담당·들어갈 클래스 적어 둠 |
-| DB | `db/init/01_roles.sh`(역할 3개·스키마 2개), Flyway `V001`~`V004` (권한, 원천 4개+스테이징, users+SYSTEM, batch_runs), `V004_1`(source_files), `V004_2`(ai_call_logs), `V004_3`(access_logs) | 레퍼런스 3절 그대로. `ddl-auto=validate` |
+| DB | `db/init/00_extensions.sql`(pgvector), `db/init/01_roles.sh`(역할 3개·스키마 2개), Flyway `V001`~`V004` (권한, 원천 4개+스테이징, users+SYSTEM, batch_runs), `V004_1`(source_files), `V004_2`(ai_call_logs), `V004_3`(access_logs) | 레퍼런스 3절 그대로. `ddl-auto=validate` |
 | shared/domain | `AuditedEntity`(감사 4, SCRUM-68), `BaseEntity`(+ 자동 id), `AssignedIdEntity`(+ 미리 받은 id, SCRUM-68), `CreatedOnlyEntity`, `DomainException`, `NotFoundException`, `ForbiddenException`(403 부모, SCRUM-67), `DisplayNumber` | |
 | shared/api | `GlobalExceptionHandler`(8.2 에러 JSON), `ErrorResponse`, `PageResponse` | |
 | shared/security | `SecurityConfig`(세션·CSRF·URL 역할), `CurrentUser`, `SessionAuditorAware`, 401/403 JSON, `request_id` MDC | 진짜 |
