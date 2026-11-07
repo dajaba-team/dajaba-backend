@@ -92,7 +92,8 @@ public class AlertJdbcRepository implements AlertRepository {
                             .truncatedTo(ChronoUnit.SECONDS).toString());
             int prior = entityId == null ? 0
                     : jdbc.queryForObject(PRIOR_ALERT_COUNT, Integer.class, entityId, referenceTs);
-            return new AlertForDraft(alert, json(rs.getString("reasons")), prior);
+            JsonNode reasons = json(rs.getString("reasons"));   // 점수가 없으면 [] — AI DraftRequest.reasons 는 목록(null 이면 422)
+            return new AlertForDraft(alert, reasons == null ? om.createArrayNode() : reasons, prior);
         }, alertId).stream().findFirst();
     }
 

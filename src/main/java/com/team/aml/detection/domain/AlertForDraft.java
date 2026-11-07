@@ -8,7 +8,7 @@ import com.team.aml.shared.ai.AiDtos.AlertPayload;
  * evidence_transaction_ids 는 alert.transactionIds 전체다 (안건 23).
  *
  * @param alert           규약 §2 경보 JSON (created_at 포함)
- * @param reasons         점수 응답의 reasons 그대로. 점수가 아직 없으면 null
+ * @param reasons         점수 응답의 reasons 그대로. 점수가 아직 없으면 빈 배열 [] (null 아님)
  * @param priorAlertCount 같은 법인에서 이 경보 reference_ts 보다 앞선 경보 수. 법인이 없으면 0
  */
 public record AlertForDraft(AlertPayload alert, JsonNode reasons, int priorAlertCount) {}
