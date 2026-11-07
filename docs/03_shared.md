@@ -236,3 +236,33 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 
 - API 응답의 계좌번호는 **뒤 4자리만** (`****9D80`). 응답 record에서 처리. 전체 번호는 ADMIN 내보내기에만.
 - 〔확인 필요〕 `account_key`(`{bank_id}_{account_no}`)를 그대로 보내면 `account_no`를 마스킹해도 전체 번호가 보여요. 프론트 응답에서 빼거나 마스킹할지, 화면에서 계좌를 무엇으로 가리킬지 정해야 해요(프론트 API 계약서 SCRUM-21). 지금은 합성 데이터라 당장 위험은 없지만, 실데이터 기준으로 정해 둬요. → [노션 미결](https://app.notion.com/p/4077fbce53048094a838f49ca1bde5d4) 1번
+
+## 11. DB 계정·스키마·마이그레이션 [레퍼런스 원칙 5, 코드 `db/init`·`V001`·`V002`·`application.yml`, SCRUM-124]
+
+백엔드와 AI 서버는 **같은 PostgreSQL(`aml` DB)**을 쓰고, 스키마로 나눠요. `ops` = 백엔드, `ai` = AI 서버. DB는 백엔드 `compose.yaml`이 띄우고(프로젝트 이름 `dajaba` 고정 → 네트워크 `dajaba_default`), AI compose가 그 네트워크에 붙어요.
+
+| 계정 | 무엇에 쓰나 | `ops` 권한 | `ai` 권한 | 누가 만드나 | `.env` 변수 |
+|---|---|---|---|---|---|
+| `postgres` | 슈퍼유저 — 컨테이너 첫 기동(`db/init`), 확장 만들기, `ai` 들여다보기 | 전부 | 전부 | postgres 이미지 | `POSTGRES_PASSWORD` |
+| `app_migrate` | Flyway DDL만 (앱 기동 때 Flyway가 이 계정으로) | **주인** — 테이블 만들기·바꾸기 | 없음 | `01_roles.sh`(계정·`ops` 주인) | `APP_MIGRATE_PASSWORD` |
+| `app_backend` | 앱(Spring) — 평소 읽기·쓰기 | USAGE + 테이블 SELECT·INSERT·UPDATE·DELETE, 시퀀스 USAGE·SELECT (기본 권한으로 자동 — `01_roles.sh`·V001). 이력 테이블은 파일마다 UPDATE·DELETE 회수(원칙 3) | **없음** (USAGE도 없음) | `01_roles.sh` | `APP_BACKEND_PASSWORD` |
+| `app_ai` | AI 서버 — 실행·Alembic 둘 다 | USAGE + 원천 4개(`transactions`·`accounts`·`entities`·`customer_attributes`) SELECT만 (V002) | **주인** — 테이블 만들기·읽기·쓰기 | `01_roles.sh`(계정·`ai` 주인) | `APP_AI_PASSWORD` (AI `.env`와 같은 값) |
+
+**마이그레이션 담당 — 서로 상대 스키마를 바꾸지 않아요**
+- `ops` = **Flyway**(이 리포 `db/migration`, `app_migrate`)만. 규칙은 `05_flyway.md`.
+- `ai` = **Alembic**(AI 리포 `migrations/`, `app_ai`)만. AI 서버 기동 때 `alembic upgrade head`.
+- 스키마 사이 **FK 없음** — `prediction_id`·`draft_id`·`generation_id`·`request_id` 같은 값으로만 이어요. `ops` 테이블에서 `ai`를 가리키는 FK는 만들지 않아요(`05_flyway` §1).
+- 계정·스키마 자체(만들기)는 `db/init/01_roles.sh`가 **볼륨이 빌 때 한 번만** 해요. 권한을 바꿀 일이 생기면 `01_roles.sh`가 아니라 다음 Flyway 번호로(이미 있는 볼륨에는 `db/init`이 다시 안 돌아서).
+
+**pgvector — 확장 생성은 superuser만**
+- db 이미지 `pgvector/pgvector:0.8.2-pg16-trixie`(버전 고정, 원래 `postgres:16`과 같은 trixie·glibc라 기존 볼륨의 collation이 그대로), 확장은 `db/init/00_extensions.sql`(`create extension if not exists vector;`)이 새 볼륨에서 `postgres`로 만들어요. `app_migrate`·`app_ai`로는 못 만들어요.
+- 이미 있는 볼륨은 손으로 1회: `docker exec aml-db psql -U postgres -d aml -c "CREATE EXTENSION IF NOT EXISTS vector;"` (README "pgvector").
+- AI Alembic은 확장을 만들지 않고 있는지만 확인해요(AI `shared/03`).
+
+**DB 들여다보기 (읽기 전용)** — 컨테이너 안 접속은 비밀번호 없이 돼요
+```bash
+# ops — 앱과 같은 계정, 읽기 전용 세션
+docker exec -it -e PGOPTIONS='-c default_transaction_read_only=on' aml-db psql -U app_backend -d aml
+# ai — app_backend 로는 못 봐서 슈퍼유저, 읽기 전용 세션
+docker exec -it -e PGOPTIONS='-c default_transaction_read_only=on' aml-db psql -U postgres -d aml
+```
