@@ -41,7 +41,7 @@ class CaseActionTest {
     private static Case rejected(RejectionReasonCode code) {
         Case c = drafted();
         c.submitForApproval(INV);
-        c.reject(APR, code, "사유");
+        c.reject(APR, false, code, "사유");
         return c;
     }
 

@@ -56,10 +56,11 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 | V007 | **비움 — 쓰지 않아요** | — | — | 비움 | `create_alert_scores` |
 | V008 | str — `str_draft_requests`, `str_drafts`, `str_revisions`, `verification_results`, `ops.str_draft_id_seq` + `cases.current_draft_id` FK | 채영 (SCRUM-31) | W2 | 머지됨 #28 | 같음 (W3) |
 | V009 | `approvals` (`reason_code`, `narrative_sha256`, 그 초안의 수정본·검증 복합 FK, 초안당 승인 한 번) | 채영 (SCRUM-32) | W2 | 머지됨 #33 | 같음 (W4) |
+| V010 | `case_history.from_assignee_id`·`to_assignee_id` + CHECK 두 개(배정·재배정 아닌 행은 빈칸 / 배정·재배정은 값 필수 — 예전 이력 때문에 `NOT VALID`). 예전 담당 자기 승인 막기 (미결 32) | 지윤 (W4) | W4 (11/10) | PR | — |
 | 미배정 | `batch_runs` 재실행 인덱스 좁히기 (안건 14·21, 미결 4) | 진희·준혁 | 점수 배치 PR 직전 | 그때 다음 빈 번호 | — |
 | 미배정 | `str_reports` (확정 보고서 번호·마감·PDF) | 채영 | 서식 회의 뒤 | 그때 다음 빈 번호 | — |
 
-**머지 순서**: V004_1 → V004_2 → V004_3 → V005 → V005_1 → V005_2 → V006 → V008 → V009
+**머지 순서**: V004_1 → V004_2 → V004_3 → V005 → V005_1 → V005_2 → V006 → V008 → V009 → V010
 
 - **왜 이 순서** — `ai_call_logs`·`access_logs`는 탐지·케이스 테이블을 참조하지 않아서 V005 앞으로 당겼어요. 진희 PR이 준혁님 V005·지윤님 V006을 기다리지 않아도 돼요. 거의 다 된 `ai_call_logs`를 앞(4_2), 아직 안 만든 `access_logs`를 뒤(4_3)로 둬서 준비된 것부터 들어가요. 진희 파일이 늦어 V005를 막으면 §1 양보 규칙대로 진희가 옮겨요.
 - **`alert_scores`가 V005_1인 이유** — V005 바로 뒤라 채영님 V008·V009를 기다리지 않아요.

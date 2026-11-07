@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * V006 계약 검증 (SCRUM-48). db/migration 의 실제 마이그레이션 전체(V008 의 cases.current_draft_id FK 포함)를
+ * V006 계약 검증 (SCRUM-48) + V010 case_history 담당자 칸. db/migration 의 실제 마이그레이션 전체(V008 의 cases.current_draft_id FK 포함)를
  * app_migrate 로 적용하고,
  * 앱 계정(app_backend)으로 넣고 바꿔 보며 CHECK·UNIQUE·FK·권한을 SQLSTATE 로 확인한다.
  */
@@ -77,7 +77,7 @@ class CaseMigrationDbTest {
             long caseId = newCase(c, newAlert(c));
             exec(c, history(caseId, "'OPEN'", "null", "'OPEN'", "null", "null", 0));
             exec(c, "update ops.cases set status='REVIEWING', assignee_id=" + investigator + ", version=1 where id=" + caseId);
-            exec(c, history(caseId, "'ASSIGN'", "'OPEN'", "'REVIEWING'", "null", "null", 0));
+            exec(c, assigneeHistory(caseId, "'ASSIGN'", "'OPEN'", "'REVIEWING'", "null", String.valueOf(investigator), 0));
             exec(c, history(caseId, "'NOTE'", "'REVIEWING'", "'REVIEWING'", "null", "''", 1));        // 빈 메모 = 비움 기록
             exec(c, "update ops.cases set status='CLOSED', close_reason='NO_ACTION', version=2 where id=" + caseId);
             exec(c, history(caseId, "'CLOSE'", "'REVIEWING'", "'CLOSED'", "'NO_ACTION'", "'확인 결과 조치 불필요'", 2));
@@ -142,6 +142,39 @@ class CaseMigrationDbTest {
             exec(c, history(caseId, "'NOTE'", "'REVIEWING'", "'REVIEWING'", "null", "repeat('가', 10000)", 3));
             rejected(c, "23505", history(caseId, "'NOTE'", "'REVIEWING'", "'REVIEWING'", "null", "'두 번째'", 3));          // 같은 version 메모 두 번
             exec(c, history(caseId, "'REJECT'", "'PENDING_APPROVAL'", "'REJECTED'", "'NEED_REVISION'", "'보완'", 3));       // 같은 version 다른 행동은 된다
+        }
+    }
+
+    // 5-1 경계 — 넘긴·받은 담당자 칸 (V010, 미결 32)
+    @Test
+    void 배정은_받은_사람만_재배정은_넘긴_사람과_받은_사람을_남긴다() throws Exception {
+        long inv2;
+        try (var m = DriverManager.getConnection(db.getJdbcUrl(), "app_migrate", "migrate")) {
+            inv2 = number(m, "insert into ops.users(login_id, display_name, role, created_by, updated_by) "
+                    + "values ('inv-v010-" + SEQ.incrementAndGet() + "','조사역2','INVESTIGATOR',1,1) returning id");
+        }
+        String a = String.valueOf(investigator), b = String.valueOf(inv2);
+        try (var c = backend()) {
+            long caseId = newCase(c, newAlert(c));
+            exec(c, assigneeHistory(caseId, "'ASSIGN'", "'OPEN'", "'REVIEWING'", "null", a, 0));
+            exec(c, assigneeHistory(caseId, "'REASSIGN'", "'REVIEWING'", "'REVIEWING'", a, b, 1));
+
+            rejected(c, "23514", assigneeHistory(caseId, "'ASSIGN'", "'OPEN'", "'REVIEWING'", "null", "null", 0));   // 받은 사람 없음
+            rejected(c, "23514", assigneeHistory(caseId, "'ASSIGN'", "'OPEN'", "'REVIEWING'", b, a, 0));        // 배정에 넘긴 사람
+            rejected(c, "23514", assigneeHistory(caseId, "'REASSIGN'", "'REVIEWING'", "'REVIEWING'", "null", b, 1)); // 넘긴 사람 없음
+            rejected(c, "23514", assigneeHistory(caseId, "'REASSIGN'", "'REVIEWING'", "'REVIEWING'", a, a, 1));     // 같은 사람
+            rejected(c, "23514", assigneeHistory(caseId, "'ESCALATE'", "'REVIEWING'", "'ESCALATED'", "null", a, 2)); // 배정 아닌데 담당자 칸
+            rejected(c, "23503", assigneeHistory(caseId, "'ASSIGN'", "'OPEN'", "'REVIEWING'", "null", "-1", 0));    // 없는 사용자
+
+            assertThat(number(c, "select count(*) from ops.case_history where case_id=" + caseId
+                    + " and to_assignee_id=" + investigator)).isEqualTo(1);
+        }
+        try (var m = DriverManager.getConnection(db.getJdbcUrl(), "app_migrate", "migrate")) {
+            // 예전 이력(받은 사람 칸 빈 ASSIGN) 때문에 필수 CHECK 는 NOT VALID, 빈칸 CHECK 는 검사 완료
+            assertThat(number(m, "select count(*) from pg_constraint where conname='case_history_assignee_required_ck' "
+                    + "and not convalidated")).isEqualTo(1);
+            assertThat(number(m, "select count(*) from pg_constraint where conname='case_history_assignee_only_ck' "
+                    + "and convalidated")).isEqualTo(1);
         }
     }
 
@@ -222,6 +255,13 @@ class CaseMigrationDbTest {
         return "insert into ops.case_history(case_id, action, from_status, to_status, reason_code, comment, "
                 + "case_version_before, created_by) values (" + caseId + "," + action + "," + from + "," + to + ","
                 + reasonCode + "," + comment + "," + versionBefore + ",1)";
+    }
+
+    private static String assigneeHistory(long caseId, String action, String from, String to,
+                                          String fromAssignee, String toAssignee, long versionBefore) {
+        return "insert into ops.case_history(case_id, action, from_status, to_status, case_version_before, created_by, "
+                + "from_assignee_id, to_assignee_id) values (" + caseId + "," + action + "," + from + "," + to + ","
+                + versionBefore + ",1," + fromAssignee + "," + toAssignee + ")";
     }
 
     private static String summary(long caseId, String payload, String snapshot, String hash) {
