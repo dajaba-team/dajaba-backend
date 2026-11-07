@@ -82,7 +82,7 @@
 | 14 | `POST /admin/batches/open-cases?date=` | ADMIN |
 | 15 | `GET /cases/{case_no}/note-histories` | 조회 3역할 |
 
-**화면 유스케이스 — 구현됨 (SCRUM-105)** 컨트롤러·응답 마스킹은 SCRUM-106. 유스케이스는 엔티티가 아니라 record를 돌려주고, `account_key`는 내부 키 그대로라 응답에서 가린 값으로 바꿔요.
+**화면 유스케이스 — 구현됨 (SCRUM-105)** 컨트롤러·응답 마스킹은 아래 SCRUM-106. 유스케이스는 엔티티가 아니라 record를 돌려주고, `account_key`는 내부 키 그대로라 응답에서 가린 값으로 바꿔요.
 
 | 유스케이스 | API | 검사 순서·오류 |
 |---|---|---|
@@ -96,6 +96,13 @@
 - **`available_actions` (`CaseAction`)** — 계약서 §4의 8개. `ASSIGN`(OPEN, 조사역·ADMIN) · `REASSIGN`(ADMIN, 재배정 가능 상태) · 담당만: `UPDATE_NOTES`·`REFRESH_SUMMARY`(REVIEWING·ESCALATED·DRAFTED·보완 반려) · `ESCALATE` · `CLOSE`/`CLOSE_WITH_DRAFT`(닫을 수 있는 상태에서 초안 유무로 하나) · `GENERATE_DRAFT`(초안을 붙일 수 있는 상태). 상태 판단은 `CaseStatus` 전이 표를 그대로 써요.
 - **아직 null인 칸 (후속)** — `score`·`score_band`·`policy_version`·`alert`·`latest_score`는 detection에 경보·점수 공개 조회가 생겨야 채워요(SCRUM-152, 준혁). 그래서 지금 `sort=score`는 "점수 전부 null"과 같은 결과(= 동률 규칙 `created_at DESC, id DESC`). `aggregates`·`latest_summary`·`investigator_notes`는 API-08·12·05, `current_draft`는 str 조합 계층(미결 17).
 - 조사역이 다른 assignee를 지정하면 **409 `INVALID_ASSIGNEE`(`details.reason = SELF_ONLY`)** 로 확정(11/6). 명세 API-03은 400이었지만 400 `INVALID_REQUEST`는 형식 오류용이에요. 프론트는 `reason`으로 문구를 나눠요(`08_decisions.md` 11/6, SCRUM-153).
+
+**컨트롤러 — 구현됨 (SCRUM-106)** `CaseController` `/api/v1/cases` — 01 목록 · 02 상세 · 03 배정 · 07 에스컬레이션 · 06 종료(초안 없음). 응답은 계약서 v0.2 C1·C2·5.3 모양이에요.
+- **요청 검사(400 `INVALID_REQUEST`)** — 목록 `CaseListQuery`: `status` 쉼표 여럿(없는 값 400), `sort` = `score|created_at|status,asc|desc`, `page ≥ 0`, `1 ≤ size ≤ 100`(기본 20), `from ≤ to`. 변경 요청: `version` 필수, `comment` 공백 아님·2,000자 이하, `close_reason`은 세 값 중 하나. 상태·담당자 검사는 지금처럼 유스케이스·엔티티가 해요.
+- **계좌(미결 19)** — 원본 `account_key`는 응답에 없어요. `account_no` = 은행ID + `****` + 끝 4자리(`010_****BD30`, 번호가 4자리 이하면 끝자리도 가림), `account_ref` = `ACR-` + `account_key` SHA-256 앞 12자리(같은 계좌는 어느 응답에서나 같은 값). 〔확인 필요〕 키 없는 해시라 계좌 목록이 있으면 대조할 수 있어요 — 발급 규칙은 SOURCE·공통 담당이 정하기로 했으니(CASES 명세 §5) 실데이터 전에 서버 비밀값 HMAC 같은 규칙으로 바꿔요. 형식은 그대로. `AccountDisplay` 한 곳만 고치면 돼요.
+- **초안 번호** — `current_draft_id`(내부 id)는 `current_draft_no`(`DRF-000123`, `DisplayNumber.draftNo`)로 바꿔 보내요(계약서 Q14).
+- **아직 null·[]인 칸**은 위 "아직 null인 칸"과 같아요. 키는 빼지 않아요(계약서 2.3). `customer`·`prior_alerts`도 후속.
+- 남은 API: 04 재배정, 05 메모, 08~11·15 거래·근거·그래프·이력·메모 이력, 12·13 요약 — 각각 유스케이스가 생기면 이 컨트롤러에 붙여요.
 
 **str에 주는 공개 기능 — 구현됨 (SCRUM-98)** 모두 `Propagation.MANDATORY`라 str 트랜잭션 안에서만 불러요(혼자 부르면 `IllegalTransactionStateException`).
 

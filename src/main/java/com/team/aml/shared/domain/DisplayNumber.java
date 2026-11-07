@@ -22,4 +22,9 @@ public final class DisplayNumber {
     public static String caseNo(int referenceYear, long seq) {
         return "CASE-" + referenceYear + "-" + String.format("%06d", seq);
     }
+
+    /** DRF-000123 — str_drafts.id(ops.str_draft_id_seq) 그대로 (계약서 v0.2 2.2). */
+    public static String draftNo(long draftId) {
+        return "DRF-" + String.format("%06d", draftId);
+    }
 }
