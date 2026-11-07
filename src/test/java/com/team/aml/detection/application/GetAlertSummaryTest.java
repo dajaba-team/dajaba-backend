@@ -64,7 +64,7 @@ class GetAlertSummaryTest {
     }
 
     @Test
-    void 점수가_있으면_점수_칸과_reasons() {
+    void 점수가_있으면_점수_칸과_reasons_그대로() {
         long alertId = alert(rule(), "SCORED", null);
         score(alertId, """
                 {"data_quality_status": "OK", "reasons": [{"name": "account_in_counterparties_24h"}]}""");
@@ -78,11 +78,10 @@ class GetAlertSummaryTest {
         assertThat(s.featureVersion()).isEqualTo("f1");
         assertThat(s.dataQualityStatus()).isEqualTo("OK");
         assertThat(s.reasons().get(0).get("name").asText()).isEqualTo("account_in_counterparties_24h");
-        assertThat(s.reasonsStatus()).isEqualTo("PROVIDED");
     }
 
     @Test
-    void 점수는_있는데_설명이_비면_NOT_PROVIDED() {   // 설명 실패 — 점수는 두고 reasons [] (계약서 C2, 준영 11/3)
+    void 점수는_있는데_설명이_비면_점수는_두고_reasons는_빈_배열() {   // 설명 실패 (계약서 C2, 준영 11/3)
         long alertId = alert(rule(), "SCORED", null);
         score(alertId, """
                 {"data_quality_status": "OK", "reasons": []}""");
@@ -91,7 +90,6 @@ class GetAlertSummaryTest {
 
         assertThat(s.score()).isNotNull();
         assertThat(s.reasons()).isEmpty();
-        assertThat(s.reasonsStatus()).isEqualTo("NOT_PROVIDED");
     }
 
     @Test
@@ -104,7 +102,6 @@ class GetAlertSummaryTest {
         assertThat(s.dataQualityStatus()).isNull();
         assertThat(s.reasons().isArray()).isTrue();
         assertThat(s.reasons()).isEmpty();
-        assertThat(s.reasonsStatus()).isEqualTo("NOT_PROVIDED");
     }
 
     @Test

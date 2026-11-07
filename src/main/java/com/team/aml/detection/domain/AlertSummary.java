@@ -20,14 +20,10 @@ public record AlertSummary(String alertNo, String ruleId, LocalDate batchDate, L
      *
      * @param status      PENDING · SCORED · FAILED
      * @param failureCode FAILED 일 때 AI 실패 코드. 묶음 실패면 FAILED 여도 null (미결 16)
-     * @param reasons     점수 응답의 reasons 그대로. 없으면 [] (null 아님, 계약서 2.3)
+     * @param reasons     점수 응답의 reasons 그대로. 없으면 [] (null 아님, 계약서 2.3).
+     *                    reasons_status 는 값 목록·reasons 형식이 미결(3·5번)이라 주지 않는다 (지윤 요청)
      */
     public record Score(String status, BigDecimal score, String failureCode, String modelVersion,
                         String featureVersion, String dataQualityStatus, JsonNode reasons) {
-
-        /** reasons 가 1개 이상이면 PROVIDED, 아니면 NOT_PROVIDED. 〔제안 — 지윤 확인 전〕 */
-        public String reasonsStatus() {
-            return reasons.isEmpty() ? "NOT_PROVIDED" : "PROVIDED";
-        }
     }
 }
