@@ -16,7 +16,8 @@ public record AlertSummary(String alertNo, String ruleId, LocalDate batchDate, L
                            LocalDateTime windowEnd, LocalDateTime referenceTs, int transactionCount, Score score) {
 
     /**
-     * 경보의 점수 (alerts.score_status + alert_scores). 점수가 없으면(PENDING·FAILED) score·버전·data_quality_status 는 null.
+     * 경보의 점수 (alerts.score_status + alert_scores). Score 객체는 늘 있다 — 점수가 없으면(PENDING·FAILED)
+     * status 는 그대로 있고 score·modelVersion·featureVersion·dataQualityStatus 만 null, reasons 는 [].
      *
      * @param status      PENDING · SCORED · FAILED
      * @param failureCode FAILED 일 때 AI 실패 코드. 묶음 실패면 FAILED 여도 null (미결 16)

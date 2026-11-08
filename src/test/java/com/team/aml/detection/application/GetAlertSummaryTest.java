@@ -115,6 +115,16 @@ class GetAlertSummaryTest {
     }
 
     @Test
+    void 묶음_실패면_FAILED인데_실패_코드는_null() {   // 응답 누락·묶음 호출 실패 (미결 16) — 재처리 대상
+        AlertSummary.Score s = getAlertSummary.execute(alert(rule(), "FAILED", null)).score();
+
+        assertThat(s.status()).isEqualTo("FAILED");
+        assertThat(s.failureCode()).isNull();
+        assertThat(s.score()).isNull();
+        assertThat(s.reasons()).isEmpty();
+    }
+
+    @Test
     void 없는_경보는_404() {
         assertThatThrownBy(() -> getAlertSummary.execute(Long.MAX_VALUE))
                 .isInstanceOf(AlertNotFoundException.class);
