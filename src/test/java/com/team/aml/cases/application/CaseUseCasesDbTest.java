@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 /** 화면에서 부르는 cases 유스케이스 — 배정·에스컬레이션·종료·목록·상세 (SCRUM-105). 실제 PostgreSQL. */
 @Testcontainers
@@ -76,6 +77,7 @@ class CaseUseCasesDbTest {
     @Autowired CloseCase close;
     @Autowired ListCases list;
     @Autowired GetCaseDetail detail;
+    @Autowired WasCaseAssignee wasAssignee;
     @Autowired CaseRepository cases;
     @Autowired CaseHistoryRepository histories;
     @Autowired JdbcTemplate jdbc;
@@ -303,6 +305,43 @@ class CaseUseCasesDbTest {
         assertThatThrownBy(() -> detail.execute("CASE-2099-999998")).isInstanceOf(CaseNotFoundException.class);
         assertThat(jdbc.queryForObject("select count(*) from ops.access_logs where user_id = ?", Long.class, inv.userId()))
                 .isEqualTo(before);
+    }
+
+    // ── 예전 담당 (V010, 미결 32) ─────────────────────────────────
+
+    @Test
+    void 정상_재배정하면_넘긴_사람과_받은_사람이_이력에_남고_둘_다_담당했던_사람이다() {
+        Case c = reviewing();
+        tx().executeWithoutResult(s -> {
+            Case found = cases.findById(c.getId()).orElseThrow();
+            found.reassign(inv2.userId(), admin.userId(), "업무 분담");
+            histories.saveAll(cases.saveAndFlush(found).takePendingHistories());
+        });
+
+        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId()))
+                .extracting(h -> h.getAction(), h -> h.getFromAssigneeId(), h -> h.getToAssigneeId())
+                .containsExactly(
+                        tuple(CaseHistoryAction.OPEN, null, null),
+                        tuple(CaseHistoryAction.ASSIGN, null, inv.userId()),
+                        tuple(CaseHistoryAction.REASSIGN, inv.userId(), inv2.userId()));
+        assertThat(wasAssignee.execute(c.getId(), inv.userId())).isTrue();    // 예전 담당 — 이력으로
+        assertThat(wasAssignee.execute(c.getId(), inv2.userId())).isTrue();   // 지금 담당
+        assertThat(wasAssignee.execute(c.getId(), apr.userId())).isFalse();
+    }
+
+    @Test
+    void 경계_V010_전_이력이라_받은_사람_칸이_비어도_지금_담당은_담당자로_본다() {
+        Case c = newCase();
+        // V010 전에 배정된 케이스처럼: 케이스에는 담당자가 있는데 ASSIGN 이력(받은 사람)이 없다
+        jdbc.update("update ops.cases set status = 'REVIEWING', assignee_id = ? where id = ?", inv.userId(), c.getId());
+
+        assertThat(wasAssignee.execute(c.getId(), inv.userId())).isTrue();
+        assertThat(wasAssignee.execute(c.getId(), inv2.userId())).isFalse();
+    }
+
+    @Test
+    void 실패_없는_케이스면_예전_담당_조회도_404() {
+        assertThatThrownBy(() -> wasAssignee.execute(-1L, inv.userId())).isInstanceOf(CaseNotFoundException.class);
     }
 
     // ── 준비 ──────────────────────────────────────────────────

@@ -10,7 +10,7 @@
 
 **상태 9개 + 반려 코드** [가이드 §4, 안건 11·24]
 
-`OPEN · REVIEWING · ESCALATED · DRAFTED · PENDING_APPROVAL · APPROVED · REPORTED · REJECTED · CLOSED` (`REPORTED`·`CLOSED`는 끝). `APPROVED`는 내부 승인 완료이고, 모의 제출(API 12-2)을 거쳐 `REPORTED`가 돼요. 반려 이유는 상태를 늘리지 않고 **별도 값** `rejection_reason_code`(`NEED_REVISION`·`NOT_REPORTABLE`)로 둬요. 〔초안: REJECTED일 때 필수, 다른 상태에선 null — CASES 명세 §2.1, 지우는 시점은 STR과 공유 필요〕
+`OPEN · REVIEWING · ESCALATED · DRAFTED · PENDING_APPROVAL · APPROVED · REPORTED · REJECTED · CLOSED` (`REPORTED`·`CLOSED`는 끝). `APPROVED`는 내부 승인 완료이고, 모의 제출(API 12-2)을 거쳐 `REPORTED`가 돼요 — 엔티티는 `Case.report()`, 이력 action은 `REPORT`(V010, SCRUM-174). 모의 제출 API·권한(APPROVER)은 str 몫이에요. 반려 이유는 상태를 늘리지 않고 **별도 값** `rejection_reason_code`(`NEED_REVISION`·`NOT_REPORTABLE`)로 둬요. 〔초안: REJECTED일 때 필수, 다른 상태에선 null — CASES 명세 §2.1, 지우는 시점은 STR과 공유 필요〕
 
 **전이 표** (확정) [가이드 §4, 레퍼런스 §5.1, 안건 11·24]
 | 현재 → 결과 | 메서드 | 누가 | 조건 |
@@ -23,9 +23,9 @@
 | ESCALATED → DRAFTED | `attachDraft` | str → cases | 초안 저장과 같은 트랜잭션 |
 | DRAFTED → DRAFTED | `attachDraft` | str → cases | 재생성, 이전 초안 SUPERSEDED |
 | DRAFTED → PENDING_APPROVAL | `submitForApproval` | 담당 조사역 (str 진행) | **현재 본문**의 검증 통과 |
-| PENDING_APPROVAL → APPROVED | `approve` | APPROVER | 담당 ≠ 승인자, 초안 LOCKED 같은 트랜잭션 |
+| PENDING_APPROVAL → APPROVED | `approve(approverId, approverWasAssignee)` | APPROVER | **지금·예전 담당 ≠ 승인자**(409 `SELF_APPROVAL`, 미결 32 · V010), 초안 LOCKED 같은 트랜잭션 |
 | APPROVED → REPORTED | `report` 〔메서드는 API 12-2 구현 때 추가〕 | APPROVER | 승인 완료 건만. 제출 기록·Case REPORTED·이력 같은 트랜잭션(str 진행) |
-| PENDING_APPROVAL → REJECTED | `reject(code, comment)` | APPROVER | 코드·사유 필수 |
+| PENDING_APPROVAL → REJECTED | `reject(approverId, approverWasAssignee, code, comment)` | APPROVER | 코드·사유 필수. 승인과 같이 지금·예전 담당이면 409 `SELF_APPROVAL` |
 | REJECTED → DRAFTED | `reopenDraft` | 담당 조사역 (str 진행) | `NEED_REVISION`만. 수정본 저장(`TouchCaseForRevision`)·새 초안 저장(`AttachDraftToCase`)과 같은 트랜잭션 |
 | ESCALATED·DRAFTED → CLOSED | `close` | 담당 조사역 | 사유 필수. 초안 있으면 str 유스케이스가 SUPERSEDED와 같은 트랜잭션 |
 | REJECTED → CLOSED | `close` | 담당 조사역 (str 진행) | `NOT_REPORTABLE`만. 종결 사유는 아래 세 값 중 조사역이 고름, 반려 코드는 REJECT 이력에 이미 있음 |
@@ -117,6 +117,15 @@
 | `AttachDraftToCase.lock(caseId, expectedVersion)` | 초안 insert **전에** 케이스를 잠그고 붙일 수 있는지만 확인 (아무것도 안 바꿈) | 케이스 잠금 조회 404 `CASE_NOT_FOUND` → version 409 `CONCURRENT_UPDATE` → 담당자 403 `NOT_ASSIGNEE` → 상태 409 `INVALID_CASE_TRANSITION`. 허용: ESCALATED, DRAFTED(재생성), REJECTED+NEED_REVISION |
 | `AttachDraftToCase.execute(caseId, draftId, expectedVersion)` → 새 `cases.version` | 초안 insert **뒤에** 연결 → DRAFTED, 반려 코드 지움, `ATTACH_DRAFT` 이력. 돌려준 값을 str이 생성 응답 `case_version`에 실어요 [SCRUM-141] | `lock`과 같은 검사를 한 번 더 |
 | `TouchCaseForRevision.execute(caseId, draftId, expectedVersion)` → 새 `cases.version` | 수정본 저장 전에 잠그고 확인한 뒤 케이스 version +1. **DRAFTED**면 version만 +1(상태·이력 그대로), **보완 반려(REJECTED+NEED_REVISION)**면 DRAFTED로 되돌리고 반려 코드 지움 + `REOPEN_DRAFT` 이력 (version은 상태 변경으로 +1, 두 번 안 올림). 돌려준 값을 str이 수정 응답 `case_version`에 실어요 [SCRUM-141] | 404 → version 409 → 담당자 403 → DRAFTED 또는 REJECTED+NEED_REVISION이고 `current_draft_id == draftId`(아니면 409 `INVALID_CASE_TRANSITION`, `details.action = REVISE_DRAFT`). 동시 승인 요청과 version으로 부딪히게 해요(NFR-APR-02, 미결 20). str은 상태를 볼 수 없어서 수정본 저장 때는 상태와 상관없이 이것 하나만 불러요 [#43 리뷰 2번, 11/5 채영 확인 A안] |
+
+**str에 주는 공개 조회 — 예전 담당 (V010, 미결 32)** 트랜잭션 전파는 기본(`REQUIRED`, 읽기 전용) — 승인 트랜잭션 안에서도, 초안 조회에서도 불러요.
+
+| 유스케이스 | 하는 일 | 오류 |
+|---|---|---|
+| `WasCaseAssignee.execute(caseId, userId)` → `boolean` | 이 사람이 이 케이스를 **지금 맡고 있거나 예전에 맡은 적이 있나**. 지금 담당(`cases.assignee_id`) 또는 받은 사람(`case_history.to_assignee_id`) 이력. true면 승인·반려 버튼을 주지 않고(S2·승인함 `available_actions`), 승인·반려 유스케이스는 그 값을 `Case.approve`·`reject`에 넘겨요 → 409 `SELF_APPROVAL` | 없는 케이스 404 `CASE_NOT_FOUND` |
+
+- **이력 칸 (V010)**: `ASSIGN`은 받은 사람(`to_assignee_id`)만, `REASSIGN`은 넘긴 사람(`from_assignee_id`)·받은 사람 둘 다. 그 밖의 행동은 둘 다 빈칸(CHECK). 필수 CHECK는 V010 전 이력 때문에 `NOT VALID` — 그래서 지금 담당은 `cases.assignee_id`로 따로 봐요.
+- 승인함처럼 여러 건을 한 번에 볼 일이 많아지면 묶음 조회를 추가해요(지금은 건마다 한 번).
 
 - **str 호출 순서: `lock` → 초안 insert → `execute`** (수정본은 `TouchCaseForRevision`을 트랜잭션 맨 앞에서). `str_drafts` insert는 FK 때문에 `cases` 행에 KEY SHARE를 잡고, `findForUpdate`의 `FOR UPDATE`는 그것과 충돌해요. 초안을 먼저 넣고 잠그면 같은 케이스에 동시에 온 두 저장이 서로를 기다리다 교착(40P01)이 돼요. 맨 앞에서 잠그면 뒤 요청은 `lock`에서 기다렸다가 version 검사에서 409가 돼요. [#43 리뷰 1번]
 - `draftId`는 같은 케이스의 초안이어야 해요(V008 `cases_current_draft_fk`). 이전 초안 SUPERSEDED는 str 몫이에요(`str_drafts_one_active_uq`).
