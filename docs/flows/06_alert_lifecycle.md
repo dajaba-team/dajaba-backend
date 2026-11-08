@@ -49,6 +49,7 @@ flowchart TB
         P2 -- 보완 요청 + 사유 --> P3[REJECTED<br/>NEED_REVISION]
         P2 -- 보고 안 함 + 사유 --> P5[REJECTED<br/>NOT_REPORTABLE]
         P2 -- 승인 --> P4[APPROVED · LOCKED]
+        P4 -- 모의 제출 --> P6[REPORTED<br/>끝 상태]
     end
 
     A1 --> S1
@@ -98,6 +99,7 @@ flowchart TB
 | 케이스 상세 | REJECTED(보고 안 함) | 종료(사유) (담당 조사역) |
 | STR 편집 (읽기 전용) | PENDING_APPROVAL | 없음 — 승인자 결정 대기 |
 | 승인 | PENDING_APPROVAL | 승인 · 보완 요청 · 보고 안 함(반려 둘 다 사유 필수) (승인자, 담당 조사역 본인 제외) |
-| 케이스 상세 (읽기 전용) | APPROVED · CLOSED | 없음. 이력만 |
+| 승인 | APPROVED | 모의 제출 `POST /approvals/{draft_no}/report` → REPORTED (승인자, 실제 기관 전송 없음) |
+| 케이스 상세 (읽기 전용) | APPROVED · REPORTED · CLOSED | 없음. 이력만 (조사역·관리자) |
 
-케이스 상태 8개의 전이 규칙은 백엔드 설계 가이드 4절. 10/27 안건 11·15·24로 확정: ESCALATED·DRAFTED → CLOSED(사유 필수), REJECTED는 반려 코드에 따라 DRAFTED(보완 요청) 또는 CLOSED(보고 안 함). PENDING_APPROVAL → CLOSED는 없다.
+케이스 상태 9개의 전이 규칙은 백엔드 설계 가이드 4절·`cases.md` 전이 표(코드 `CaseStatus`). 10/27 안건 11·15·24로 확정: ESCALATED·DRAFTED → CLOSED(사유 필수), REJECTED는 반려 코드에 따라 DRAFTED(보완 요청) 또는 CLOSED(보고 안 함). PENDING_APPROVAL → CLOSED는 없다. 모의 제출이 MVP에 들어가 `APPROVED → REPORTED`가 있고(CASES 명세 v0.7, SCRUM-49·V006 CHECK), 끝 상태는 **REPORTED·CLOSED** 둘이다(APPROVED는 끝이 아님).
