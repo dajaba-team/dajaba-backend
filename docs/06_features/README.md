@@ -7,6 +7,7 @@
 | 파일 | 기능 | 담당 |
 |---|---|---|
 | [`source_detection.md`](source_detection.md) | source(적재) · detection(룰 · 경보 · 점수) | 준혁 |
+| [`rules.md`](rules.md) | 탐지 룰 8개 명세(조건 · 창 · 기준값 · `rule_facts`) | 준혁 |
 | [`cases.md`](cases.md) | cases(조사 · 상태 전이 · CasePolicy · 메모 · 요약) | 지윤 |
 | [`str.md`](str.md) | str(초안 · 수정 · 검증 · 승인 · 반려) | 채영 |
 
