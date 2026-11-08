@@ -32,14 +32,29 @@ public enum CaseStatus {
 
     // 상태가 그대로인 동작이 허용되는 상태. 전이 표(NEXT)와 같은 곳에 둔다 (3주차 리뷰 질문 2).
     private static final Set<CaseStatus> REASSIGNABLE = Set.of(REVIEWING, ESCALATED, DRAFTED, REJECTED);
+    // 메모·요약 편집 — 여기에 REJECTED+NEED_REVISION 이 더해진다 (CASES 명세 §2.3)
+    private static final Set<CaseStatus> EDITABLE = Set.of(REVIEWING, ESCALATED, DRAFTED);
 
     public boolean isTerminal() {
         return NEXT.get(this).isEmpty();
     }
 
-    /** ADMIN 재배정이 가능한 상태 (API-04). 상태는 바뀌지 않는다. */
-    public boolean isReassignable() {
-        return REASSIGNABLE.contains(this);
+    /**
+     * 이 상태(와 반려 코드)에서 그 동작을 할 수 있는가. 상태별 허용 동작은 이 한 곳에서만 판단한다(SCRUM-171).
+     * 상태를 바꾸는 동작은 전이 표(NEXT)를 그대로 쓰고, 상태가 그대로인 동작(재배정·메모·요약)은 위 집합을 쓴다.
+     * 누가(역할·담당자)·초안이 있는지는 여기서 보지 않는다 — CaseAction.availableFor 와 application 몫.
+     * rejectionCode 는 지금 cases.rejection_reason_code 값 — REJECTED 에서만 본다.
+     */
+    public boolean allows(CaseAction action, RejectionReasonCode rejectionCode) {
+        return switch (action) {
+            case ASSIGN -> canTransitionTo(REVIEWING, rejectionCode);
+            case REASSIGN -> REASSIGNABLE.contains(this);
+            case UPDATE_NOTES, REFRESH_SUMMARY -> EDITABLE.contains(this)
+                    || (this == REJECTED && rejectionCode == RejectionReasonCode.NEED_REVISION);
+            case ESCALATE -> canTransitionTo(ESCALATED, rejectionCode);
+            case CLOSE, CLOSE_WITH_DRAFT -> canTransitionTo(CLOSED, rejectionCode);
+            case GENERATE_DRAFT -> canTransitionTo(DRAFTED, rejectionCode);
+        };
     }
 
     /**

@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import java.util.List;
 import java.util.Set;
 
 import static com.team.aml.cases.domain.CaseStatus.*;
@@ -191,8 +192,54 @@ class CaseStatusTest {
 
     @Test
     void 재배정은_REVIEWING_ESCALATED_DRAFTED_REJECTED에서만() {   // API-04
-        assertThat(Set.of(values()).stream().filter(CaseStatus::isReassignable))
+        assertThat(Set.of(values()).stream().filter(s -> s.allows(CaseAction.REASSIGN, null)))
                 .containsExactlyInAnyOrder(REVIEWING, ESCALATED, DRAFTED, REJECTED);
+    }
+
+    // ── 상태별 허용 동작 (allows, SCRUM-171) ─────────────────
+
+    /**
+     * 상태(+반려 코드) × 동작 전부. 표에 없는 칸은 모두 거부.
+     * 상태를 바꾸는 동작은 전이 표와 같아야 하고, 그대로인 동작(재배정·메모·요약)은 CASES 명세 §2.3·API-04.
+     */
+    @Test
+    void 상태별_허용_동작_표() {
+        Set<String> allowed = Set.of(
+                "OPEN:ASSIGN",
+                "REVIEWING:REASSIGN", "REVIEWING:UPDATE_NOTES", "REVIEWING:REFRESH_SUMMARY",
+                "REVIEWING:ESCALATE", "REVIEWING:CLOSE", "REVIEWING:CLOSE_WITH_DRAFT",
+                "ESCALATED:REASSIGN", "ESCALATED:UPDATE_NOTES", "ESCALATED:REFRESH_SUMMARY",
+                "ESCALATED:CLOSE", "ESCALATED:CLOSE_WITH_DRAFT", "ESCALATED:GENERATE_DRAFT",
+                "DRAFTED:REASSIGN", "DRAFTED:UPDATE_NOTES", "DRAFTED:REFRESH_SUMMARY",
+                "DRAFTED:CLOSE", "DRAFTED:CLOSE_WITH_DRAFT", "DRAFTED:GENERATE_DRAFT",
+                "REJECTED+NEED_REVISION:REASSIGN", "REJECTED+NEED_REVISION:UPDATE_NOTES",
+                "REJECTED+NEED_REVISION:REFRESH_SUMMARY", "REJECTED+NEED_REVISION:GENERATE_DRAFT",
+                "REJECTED+NOT_REPORTABLE:REASSIGN",
+                "REJECTED+NOT_REPORTABLE:CLOSE", "REJECTED+NOT_REPORTABLE:CLOSE_WITH_DRAFT");
+        for (CaseStatus status : values()) {
+            List<RejectionReasonCode> codes = status == REJECTED
+                    ? List.of(RejectionReasonCode.values())
+                    : java.util.Collections.singletonList(null);
+            for (RejectionReasonCode code : codes) {
+                String key = status + (code == null ? "" : "+" + code);
+                for (CaseAction action : CaseAction.values()) {
+                    assertThat(status.allows(action, code))
+                            .as(key + ":" + action)
+                            .isEqualTo(allowed.contains(key + ":" + action));
+                }
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(CaseStatus.class)
+    void 상태를_바꾸는_동작은_전이_표와_같다(CaseStatus status) {
+        for (RejectionReasonCode code : RejectionReasonCode.values()) {
+            assertThat(status.allows(CaseAction.ESCALATE, code)).isEqualTo(status.canTransitionTo(ESCALATED, code));
+            assertThat(status.allows(CaseAction.CLOSE, code)).isEqualTo(status.canTransitionTo(CLOSED, code));
+            assertThat(status.allows(CaseAction.GENERATE_DRAFT, code)).isEqualTo(status.canTransitionTo(DRAFTED, code));
+            assertThat(status.allows(CaseAction.ASSIGN, code)).isEqualTo(status.canTransitionTo(REVIEWING, code));
+        }
     }
 
     // ── 전체 표 ──────────────────────────────────────────────
