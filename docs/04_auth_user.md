@@ -123,7 +123,7 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 
 에러 응답은 전부 `{"error": {"code": "NOT_ASSIGNEE", "message": "…", "details": {}}}` 한 모양이에요(details가 없으면 `{}`). 프론트는 `error.message`를 보여 주고 `error.code`로 분기해요. [레퍼런스 §8.2, `03_shared` §2]
 
-①~③은 `SecurityConfig` 한 파일, ④는 각 유스케이스(객체 단위 — `case.assertAssignedTo(currentUser.id())`). 다른 사람은 `SecurityConfig`를 고칠 일이 거의 없어요.
+①~③은 `SecurityConfig` 한 파일, ④는 각 유스케이스(객체 단위 — cases는 `CaseChanges.requireAssignee(case, currentUser.id())`. 404 → version 409 → 담당 403 → 상태 409 순서를 유스케이스가 정해서 엔티티에 두지 않아요, SCRUM-171). 다른 사람은 `SecurityConfig`를 고칠 일이 거의 없어요.
 
 ## 6. 개발·시연 계정 [레퍼런스 §9.5, 계정·권한 §7, 코드 `DevUserSeeder`]
 

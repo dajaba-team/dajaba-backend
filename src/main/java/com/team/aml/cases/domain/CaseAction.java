@@ -9,7 +9,8 @@ import java.util.Objects;
 /**
  * 상세 응답 available_actions — 지금 이 사용자가 누를 수 있는 버튼 (계약서 v0.2 §4, 지윤 11/4 8개 확정).
  * 화면은 이 목록만 보고 버튼을 켜고, 변경 API 는 눌렀을 때 다시 검사한다(편의 값).
- * 상태 판단은 CaseStatus 전이 표를 그대로 쓴다 — 버튼과 실제 전이가 따로 놀지 않게.
+ * 상태 판단은 CaseStatus.allows 한 곳을 쓴다 — 버튼과 실제 전이·업무 메서드가 따로 놀지 않게(SCRUM-171).
+ * 여기서는 누가(역할·담당자)와 초안 유무만 더 본다.
  */
 public enum CaseAction {
     ASSIGN,            // OPEN — 조사역은 본인, ADMIN 은 지정
@@ -27,26 +28,25 @@ public enum CaseAction {
         CaseStatus status = c.getStatus();
         RejectionReasonCode code = c.getRejectionReasonCode();
 
-        if (status == CaseStatus.OPEN && (viewerRole == Role.INVESTIGATOR || viewerRole == Role.ADMIN)) {
+        if (status.allows(ASSIGN, code) && (viewerRole == Role.INVESTIGATOR || viewerRole == Role.ADMIN)) {
             actions.add(ASSIGN);
         }
-        if (viewerRole == Role.ADMIN && status.isReassignable()) {
+        if (viewerRole == Role.ADMIN && status.allows(REASSIGN, code)) {
             actions.add(REASSIGN);
         }
         if (!Objects.equals(c.getAssigneeId(), viewerId)) {
             return actions;   // 아래는 담당 조사역만
         }
-        if (c.isEditableByAssignee()) {
-            actions.add(UPDATE_NOTES);
-            actions.add(REFRESH_SUMMARY);
+        for (CaseAction action : List.of(UPDATE_NOTES, REFRESH_SUMMARY, ESCALATE)) {
+            if (status.allows(action, code)) {
+                actions.add(action);
+            }
         }
-        if (status.canTransitionTo(CaseStatus.ESCALATED, code)) {
-            actions.add(ESCALATE);
+        CaseAction close = c.getCurrentDraftId() == null ? CLOSE : CLOSE_WITH_DRAFT;
+        if (status.allows(close, code)) {
+            actions.add(close);
         }
-        if (status.canTransitionTo(CaseStatus.CLOSED, code)) {
-            actions.add(c.getCurrentDraftId() == null ? CLOSE : CLOSE_WITH_DRAFT);
-        }
-        if (status.canTransitionTo(CaseStatus.DRAFTED, code)) {
+        if (status.allows(GENERATE_DRAFT, code)) {
             actions.add(GENERATE_DRAFT);
         }
         return actions;
