@@ -225,8 +225,7 @@ public class Case extends BaseEntity {
      * 직접 종결 API(초안 없음)는 closeWithoutDraft 를 쓴다.
      */
     public void close(Long actorId, CloseReason reason, String comment) {
-        Objects.requireNonNull(reason, "closeReason");
-        status.validateTransition(CaseStatus.CLOSED, rejectionReasonCode);
+        status.validateTransition(CaseStatus.CLOSED, rejectionReasonCode);   // 상태 409 → 사유 (closeChecked) 순서, closeWithoutDraft 와 같음
         closeChecked(actorId, reason, comment);
     }
 

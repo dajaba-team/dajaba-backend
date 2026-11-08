@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.team.aml.detection.domain.AlertForCaseOpening;
 import com.team.aml.detection.domain.AlertForDraft;
 import com.team.aml.detection.domain.AlertRepository;
+import com.team.aml.detection.domain.AlertSummary;
 import com.team.aml.shared.ai.AiDtos.AlertPayload;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -31,7 +32,7 @@ public class AlertJdbcRepository implements AlertRepository {
             where a.batch_date = ? and a.score_status = 'SCORED' and not a.case_opened
             order by a.id""";
 
-    // 규약 §2 경보 JSON. alert_id 는 alert_no, rule_version 은 문자열. 점수가 아직 없으면 reasons 는 null.
+    // 규약 §2 경보 JSON. alert_id 는 alert_no, rule_version 은 문자열. 점수가 아직 없으면 reasons 는 [] 로 바꿔 돌려준다.
     private static final String FIND_FOR_DRAFT = """
             select a.alert_no, a.account_key, a.entity_id, r.rule_id, r.version, r.typology_hint,
                    a.window_start, a.window_end, a.reference_ts, a.rule_facts::text as rule_facts, a.created_at,
@@ -45,6 +46,17 @@ public class AlertJdbcRepository implements AlertRepository {
     // 같은 법인의 이 경보보다 앞선 경보. 같은 시각·자기 자신은 세지 않는다 (alerts_entity_reference_idx).
     private static final String PRIOR_ALERT_COUNT =
             "select count(*) from ops.alerts where entity_id = ? and reference_ts < ?";
+    // 케이스 상세용 (SCRUM-152). 점수가 없으면 s.* 는 null, reasons 는 [] 로 바꿔 돌려준다.
+    private static final String FIND_SUMMARY = """
+            select a.alert_no, r.rule_id, a.batch_date, a.window_start, a.window_end, a.reference_ts,
+                   a.score_status, a.score_failure_code, s.score, s.model_version, s.feature_version,
+                   s.payload ->> 'data_quality_status' as data_quality_status,
+                   (s.payload -> 'reasons')::text as reasons,
+                   (select count(*) from ops.alert_transactions t where t.alert_id = a.id) as transaction_count
+            from ops.alerts a
+            join ops.rules r on r.id = a.rule_ref_id
+            left join ops.alert_scores s on s.alert_id = a.id
+            where a.id = ?""";
     /** 데이터 시각은 규약 예시처럼 초까지. LocalDateTime.toString 은 초가 0이면 잘라서 쓰지 않는다. */
     private static final DateTimeFormatter DATA_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
@@ -92,9 +104,26 @@ public class AlertJdbcRepository implements AlertRepository {
                             .truncatedTo(ChronoUnit.SECONDS).toString());
             int prior = entityId == null ? 0
                     : jdbc.queryForObject(PRIOR_ALERT_COUNT, Integer.class, entityId, referenceTs);
-            JsonNode reasons = json(rs.getString("reasons"));   // 점수가 없으면 [] — AI DraftRequest.reasons 는 목록(null 이면 422)
-            return new AlertForDraft(alert, reasons == null ? om.createArrayNode() : reasons, prior);
+            return new AlertForDraft(alert, reasonsOrEmpty(rs.getString("reasons")), prior);
         }, alertId).stream().findFirst();
+    }
+
+    @Override
+    public Optional<AlertSummary> findSummary(long alertId) {
+        return jdbc.query(FIND_SUMMARY, (rs, rowNum) -> new AlertSummary(
+                rs.getString("alert_no"), rs.getString("rule_id"), rs.getObject("batch_date", LocalDate.class),
+                rs.getObject("window_start", LocalDateTime.class), rs.getObject("window_end", LocalDateTime.class),
+                rs.getObject("reference_ts", LocalDateTime.class), rs.getInt("transaction_count"),
+                new AlertSummary.Score(rs.getString("score_status"), rs.getBigDecimal("score"),
+                        rs.getString("score_failure_code"), rs.getString("model_version"),
+                        rs.getString("feature_version"), rs.getString("data_quality_status"),
+                        reasonsOrEmpty(rs.getString("reasons")))), alertId).stream().findFirst();
+    }
+
+    /** 점수가 없으면 [] — AI 요청(null 이면 422)도 화면(계약서 2.3)도 목록을 받는다. */
+    private JsonNode reasonsOrEmpty(String text) {
+        JsonNode reasons = json(text);
+        return reasons == null ? om.createArrayNode() : reasons;
     }
 
     /** null·JSON null 은 null 로. */
