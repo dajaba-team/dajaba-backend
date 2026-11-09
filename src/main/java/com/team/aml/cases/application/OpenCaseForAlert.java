@@ -40,7 +40,7 @@ class OpenCaseForAlert {
         Case saved = cases.save(c);
         histories.saveAll(saved.takePendingHistories());
         markCaseOpened.execute(alert.alertId());
-        // TODO(미결 23): 생성 당시 점수·모델 버전·적용 경계값·정책 버전 저장 칸은 V010(번호 예약 후)에서 추가
+        // TODO(미결 23): 생성 당시 점수·모델 버전·적용 경계값·정책 버전 저장 칸은 다음 빈 번호(예약 후)에서 추가 — V010 은 case_history 담당자 칸
         return caseNo;
     }
 }

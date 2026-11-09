@@ -50,11 +50,24 @@ public class CaseHistory {
     @Column(name = "created_by", nullable = false, updatable = false)
     private Long createdBy;
 
+    @Column(name = "from_assignee_id", updatable = false)
+    private Long fromAssigneeId;               // REASSIGN 에서 넘긴 사람 (V010). 그 밖엔 null
+
+    @Column(name = "to_assignee_id", updatable = false)
+    private Long toAssigneeId;                 // ASSIGN·REASSIGN 에서 받은 사람 (V010). 자기 승인 판정에 쓴다
+
     /** JPA 용. */
     protected CaseHistory() {}
 
     CaseHistory(CaseHistoryAction action, CaseStatus fromStatus, CaseStatus toStatus,
                 String reasonCode, String comment, long caseVersionBefore, Long createdBy) {
+        this(action, fromStatus, toStatus, reasonCode, comment, caseVersionBefore, createdBy, null, null);
+    }
+
+    /** 배정(ASSIGN: to 만)·재배정(REASSIGN: from·to) 이력. 다른 행동은 둘 다 null — V010 CHECK 와 같은 규칙. */
+    CaseHistory(CaseHistoryAction action, CaseStatus fromStatus, CaseStatus toStatus,
+                String reasonCode, String comment, long caseVersionBefore, Long createdBy,
+                Long fromAssigneeId, Long toAssigneeId) {
         this.action = action;
         this.fromStatus = fromStatus;
         this.toStatus = toStatus;
@@ -62,6 +75,8 @@ public class CaseHistory {
         this.comment = comment;
         this.caseVersionBefore = caseVersionBefore;
         this.createdBy = createdBy;
+        this.fromAssigneeId = fromAssigneeId;
+        this.toAssigneeId = toAssigneeId;
         this.createdAt = Instant.now();
     }
 
@@ -83,4 +98,6 @@ public class CaseHistory {
     public long getCaseVersionBefore() { return caseVersionBefore; }
     public Instant getCreatedAt() { return createdAt; }
     public Long getCreatedBy() { return createdBy; }
+    public Long getFromAssigneeId() { return fromAssigneeId; }
+    public Long getToAssigneeId() { return toAssigneeId; }
 }

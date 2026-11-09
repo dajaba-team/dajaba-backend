@@ -1,6 +1,6 @@
 package com.team.aml.cases.domain;
 
-/** case_history.action. V006 CHECK 와 같은 목록. */
+/** case_history.action. V006 CHECK(+ V010 의 REPORT)와 같은 목록. */
 public enum CaseHistoryAction {
     OPEN,                 // 케이스 생성 (배치, SYSTEM)
     ASSIGN,               // 최초 배정 OPEN → REVIEWING
@@ -12,5 +12,6 @@ public enum CaseHistoryAction {
     REOPEN_DRAFT,         // 보완 반려 뒤 같은 초안 수정 → DRAFTED
     SUBMIT_FOR_APPROVAL,  // DRAFTED → PENDING_APPROVAL
     APPROVE,              // → APPROVED
-    REJECT                // → REJECTED, reason_code 에 반려 코드
+    REJECT,               // → REJECTED, reason_code 에 반려 코드
+    REPORT                // 모의 제출 APPROVED → REPORTED (V010, API 12-2)
 }
