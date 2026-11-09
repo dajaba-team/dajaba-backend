@@ -108,6 +108,8 @@ class CaseApiTest {
         JsonNode latestScore = detail.get("latest_score");
         assertThat(latestScore.get("score_status").asText()).isEqualTo("PENDING");
         assertThat(latestScore.get("score").isNull()).isTrue();
+        assertThat(latestScore.get("score_band").isNull()).isTrue();
+        assertThat(detail.get("score").isNull()).isTrue();          // 점수 전이라 맨 위 score 도 null (Q2 MVP)
         assertThat(latestScore.get("reasons").isArray()).isTrue();
         assertThat(detailBody).doesNotContain(accountKey).doesNotContain("account_key");
 

@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
  * 현재 요약 = 케이스별 최신 1건. is_current 는 <b>지금 입력으로 다시 만든 해시</b>와 비교한다
  * (케이스 version 차이로 판정하지 않는다 — 메모·상태만 바뀌면 그대로 true).
  * 상세(API-02)의 latest_summary 도 {@link #latestOf(Case)} 로 같은 값을 준다.
+ * 열람 기록은 남기지 않는다 — 케이스 열람 기록은 상세(API-02)가 남긴다.
  */
 @Service
 public class GetCaseSummary {
