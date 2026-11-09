@@ -3,6 +3,7 @@ package com.team.aml.cases.domain;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 import static com.team.aml.cases.domain.CaseStatus.*;
 import static com.team.aml.cases.domain.RejectionReasonCode.NEED_REVISION;
@@ -61,7 +62,7 @@ class CaseTest {
 
     private static Case rejected(RejectionReasonCode code) {
         Case c = pending();
-        c.reject(APPROVER, code, "거래 목적 확인 내용을 보완해 주세요.");
+        c.reject(APPROVER, false, code, "거래 목적 확인 내용을 보완해 주세요.");
         return c;
     }
 
@@ -113,6 +114,8 @@ class CaseTest {
         assertThat(h.getFromStatus()).isEqualTo(OPEN);
         assertThat(h.getToStatus()).isEqualTo(REVIEWING);
         assertThat(h.getCreatedBy()).isEqualTo(ADMIN);
+        assertThat(h.getFromAssigneeId()).isNull();                 // V010: 배정은 받은 사람만
+        assertThat(h.getToAssigneeId()).isEqualTo(INVESTIGATOR);
     }
 
     @Test
@@ -143,6 +146,20 @@ class CaseTest {
         assertThat(h.getFromStatus()).isEqualTo(DRAFTED);
         assertThat(h.getToStatus()).isEqualTo(DRAFTED);
         assertThat(h.getComment()).isEqualTo("조사 업무 분담");
+        assertThat(h.getFromAssigneeId()).isEqualTo(INVESTIGATOR);   // V010: 넘긴 사람·받은 사람
+        assertThat(h.getToAssigneeId()).isEqualTo(INVESTIGATOR_B);
+    }
+
+    @Test
+    void 배정_재배정이_아닌_이력에는_담당자_칸이_비어_있다() {
+        Case c = pending();
+
+        assertThat(c.getPendingHistories())
+                .filteredOn(h -> h.getAction() != CaseHistoryAction.ASSIGN)
+                .allSatisfy(h -> {
+                    assertThat(h.getFromAssigneeId()).isNull();
+                    assertThat(h.getToAssigneeId()).isNull();
+                });
     }
 
     @Test
@@ -173,7 +190,7 @@ class CaseTest {
                     .isInstanceOf(InvalidCaseTransitionException.class);
         }
         Case approved = pending();
-        approved.approve(APPROVER);
+        approved.approve(APPROVER, false);
         assertThatThrownBy(() -> approved.reassign(INVESTIGATOR_B, ADMIN, null))
                 .isInstanceOf(InvalidCaseTransitionException.class);
     }
@@ -264,7 +281,7 @@ class CaseTest {
     void 다른_사람이_승인하면_APPROVED() {
         Case c = pending();
 
-        c.approve(APPROVER);
+        c.approve(APPROVER, false);
 
         assertThat(c.getStatus()).isEqualTo(APPROVED);
         CaseHistory h = lastHistory(c);
@@ -277,7 +294,7 @@ class CaseTest {
         Case c = pending();
         int before = c.getPendingHistories().size();
 
-        assertThatThrownBy(() -> c.approve(INVESTIGATOR))
+        assertThatThrownBy(() -> c.approve(INVESTIGATOR, false))
                 .isInstanceOf(SelfApprovalException.class)
                 .satisfies(e -> assertThat(((SelfApprovalException) e).code())
                         .isEqualTo("SELF_APPROVAL"));
@@ -287,8 +304,45 @@ class CaseTest {
     }
 
     @Test
+    void 예전에_담당했던_사람은_승인할_수_없다() {
+        Case c = pending();
+        int before = c.getPendingHistories().size();
+
+        // 지금 담당은 INVESTIGATOR — APPROVER 는 예전 담당이었다고 application 이 알려 준 경우 (미결 32)
+        assertThatThrownBy(() -> c.approve(APPROVER, true))
+                .isInstanceOf(SelfApprovalException.class);
+
+        assertThat(c.getStatus()).isEqualTo(PENDING_APPROVAL);
+        assertThat(c.getPendingHistories()).hasSize(before);
+    }
+
+    @Test
+    void 지금_담당자는_예전_담당_표시가_없어도_승인할_수_없다() {
+        assertThatThrownBy(() -> pending().approve(INVESTIGATOR, false))
+                .isInstanceOf(SelfApprovalException.class);
+    }
+
+    @Test
+    void 지금_담당자와_예전_담당자는_반려도_할_수_없다() {
+        for (var attempt : List.<Consumer<Case>>of(
+                c -> c.reject(INVESTIGATOR, false, NEED_REVISION, "보완"),       // 지금 담당
+                c -> c.reject(APPROVER, true, NOT_REPORTABLE, "보고 안 함"))) {  // 예전 담당
+            Case c = pending();
+            int before = c.getPendingHistories().size();
+
+            assertThatThrownBy(() -> attempt.accept(c))
+                    .isInstanceOf(SelfApprovalException.class)
+                    .satisfies(e -> assertThat(((SelfApprovalException) e).code()).isEqualTo("SELF_APPROVAL"));
+
+            assertThat(c.getStatus()).isEqualTo(PENDING_APPROVAL);
+            assertThat(c.getRejectionReasonCode()).isNull();
+            assertThat(c.getPendingHistories()).hasSize(before);
+        }
+    }
+
+    @Test
     void 승인_대기가_아니면_자기승인_검사보다_상태_오류가_먼저다() {
-        assertThatThrownBy(() -> drafted().approve(INVESTIGATOR))
+        assertThatThrownBy(() -> drafted().approve(INVESTIGATOR, false))
                 .isInstanceOf(InvalidCaseTransitionException.class);
     }
 
@@ -298,7 +352,7 @@ class CaseTest {
     void 반려하면_REJECTED와_반려_코드가_함께_저장된다() {
         Case c = pending();
 
-        c.reject(APPROVER, NEED_REVISION, "거래 목적 확인 내용을 보완해 주세요.");
+        c.reject(APPROVER, false, NEED_REVISION, "거래 목적 확인 내용을 보완해 주세요.");
 
         assertThat(c.getStatus()).isEqualTo(REJECTED);
         assertThat(c.getRejectionReasonCode()).isEqualTo(NEED_REVISION);
@@ -312,7 +366,7 @@ class CaseTest {
     void 반려_사유가_비어_있으면_거부한다() {
         Case c = pending();
 
-        assertThatThrownBy(() -> c.reject(APPROVER, NOT_REPORTABLE, " "))
+        assertThatThrownBy(() -> c.reject(APPROVER, false, NOT_REPORTABLE, " "))
                 .isInstanceOf(CommentRequiredException.class);
 
         assertThat(c.getStatus()).isEqualTo(PENDING_APPROVAL);
@@ -468,17 +522,49 @@ class CaseTest {
         assertThat(c.getStatus()).isEqualTo(PENDING_APPROVAL);
     }
 
+    // ── 모의 제출 (REPORT) ──────────────────────────────────
+
+    @Test
+    void 승인된_케이스를_모의_제출하면_REPORTED와_REPORT_이력() {
+        Case c = pending();
+        c.approve(APPROVER, false);
+        int before = c.getPendingHistories().size();
+
+        c.report(APPROVER);
+
+        assertThat(c.getStatus()).isEqualTo(REPORTED);
+        assertThat(c.getPendingHistories()).hasSize(before + 1);
+        CaseHistory last = c.getPendingHistories().get(c.getPendingHistories().size() - 1);
+        assertThat(last.getAction()).isEqualTo(CaseHistoryAction.REPORT);
+        assertThat(last.getFromStatus()).isEqualTo(APPROVED);
+        assertThat(last.getToStatus()).isEqualTo(REPORTED);
+    }
+
+    @Test
+    void 승인_전에는_모의_제출할_수_없고_REPORTED는_끝_상태() {
+        Case c = pending();
+        assertThatThrownBy(() -> c.report(APPROVER)).isInstanceOf(InvalidCaseTransitionException.class);
+        assertThat(c.getStatus()).isEqualTo(PENDING_APPROVAL);
+
+        c.approve(APPROVER, false);
+        c.report(APPROVER);
+        int before = c.getPendingHistories().size();
+        assertThatThrownBy(() -> c.report(APPROVER)).isInstanceOf(InvalidCaseTransitionException.class);
+        assertThatThrownBy(() -> c.close(INVESTIGATOR, CloseReason.NO_ACTION, "종결")).isInstanceOf(InvalidCaseTransitionException.class);
+        assertThat(c.getPendingHistories()).hasSize(before);
+    }
+
     // ── 끝 상태 ──────────────────────────────────────────────
 
     @Test
     void 승인된_케이스는_어떤_행동도_거부한다() {
         Case c = pending();
-        c.approve(APPROVER);
+        c.approve(APPROVER, false);
         int before = c.getPendingHistories().size();
 
         assertThatThrownBy(() -> c.attachDraft(NEW_DRAFT_ID, INVESTIGATOR)).isInstanceOf(InvalidCaseTransitionException.class);
         assertThatThrownBy(() -> c.close(INVESTIGATOR, CloseReason.NO_ACTION, "종결")).isInstanceOf(InvalidCaseTransitionException.class);
-        assertThatThrownBy(() -> c.reject(APPROVER, NEED_REVISION, "반려")).isInstanceOf(InvalidCaseTransitionException.class);
+        assertThatThrownBy(() -> c.reject(APPROVER, false, NEED_REVISION, "반려")).isInstanceOf(InvalidCaseTransitionException.class);
         assertThat(c.getPendingHistories()).hasSize(before);
     }
 
@@ -506,12 +592,12 @@ class CaseTest {
         c.submitForApproval(INVESTIGATOR);
         assertThat(c.getRejectionReasonCode()).isNull();
 
-        c.reject(APPROVER, NEED_REVISION, "보완");
+        c.reject(APPROVER, false, NEED_REVISION, "보완");
         assertThat(c.getRejectionReasonCode()).isNotNull();
 
         c.reopenDraft(INVESTIGATOR);
         c.submitForApproval(INVESTIGATOR);
-        c.approve(APPROVER);
+        c.approve(APPROVER, false);
         assertThat(c.getStatus()).isEqualTo(APPROVED);
         assertThat(c.getRejectionReasonCode()).isNull();
 

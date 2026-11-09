@@ -17,4 +17,7 @@ public interface AlertRepository {
 
     /** 초안 요청용 경보 원문 + reasons + 같은 법인의 앞선 경보 수. 없으면 empty. */
     Optional<AlertForDraft> findForDraft(long alertId);
+
+    /** 케이스 상세용 경보 + 점수 + 거래 수. 없으면 empty. */
+    Optional<AlertSummary> findSummary(long alertId);
 }

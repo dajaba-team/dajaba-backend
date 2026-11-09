@@ -561,7 +561,7 @@ class AttachDraftToCaseDbTest {
                     c.submitForApproval(inv);
                 }
                 if (target == CaseStatus.REJECTED) {
-                    c.reject(apr, rejection, "보완 필요");
+                    c.reject(apr, false, rejection, "보완 필요");
                 }
                 Case saved = cases.save(c);
                 histories.saveAll(saved.takePendingHistories());

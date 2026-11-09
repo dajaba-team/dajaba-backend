@@ -68,12 +68,12 @@ sequenceDiagram
     alt 오탐으로 판단
         Inv->>FE: 종료 + 사유
         FE->>CAS: POST /cases/{id}/close {reason}
-        CAS->>CAS: assertAssignedTo(me) · Case.close(reason) → CLOSED
+        CAS->>CAS: requireAssignee(me) · Case.closeWithoutDraft(reason) → CLOSED
         CAS->>DB: UPDATE, case_history(CLOSE)
     else 보고해야겠다
         Inv->>FE: 에스컬레이션
         FE->>CAS: POST /cases/{id}/escalate
-        CAS->>CAS: assertAssignedTo(me) · Case.escalate() → ESCALATED
+        CAS->>CAS: requireAssignee(me) · Case.escalate() → ESCALATED
         CAS->>DB: UPDATE, case_history(ESCALATE)
         CAS-->>FE: 200 {status: ESCALATED}
         note over FE: 화면은 "초안 생성" 버튼을 보여준다 → ③ STR 흐름

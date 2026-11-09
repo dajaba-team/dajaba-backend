@@ -106,11 +106,11 @@
 |---|---|---|---|
 | `FindAlertsForCaseOpening(batchDate)` | cases 케이스 생성 | `SCORED`·`case_opened = false` 경보 + 최신 점수. **HIGH로 미리 거르지 않음** — 분류는 CasePolicy [CASES 명세] | 읽기 |
 | `MarkCaseOpened(alertId)` | cases 케이스 생성 | `case_opened = true`. 이미 true면 409 | **부르는 쪽 트랜잭션에 참여** (케이스 INSERT와 같이 성공·실패) |
-| `GetAlertSummary(alertId)` | cases 상세 | 경보 + 최신 점수 + 근거 수 | 읽기 |
+| `GetAlertSummary(alertId)` | cases 상세 (`GetCaseDetail`) | 경보(`alert_no`·`rule_id`·`batch_date`·창·`reference_ts`) + 거래 수 + 점수(`score_status`·`score`·실패 코드·모델·피처 버전·`data_quality_status`·`reasons`(저장값 그대로, 없으면 `[]`)). 점수 묶음은 늘 있고, 점수 전·산출 실패면 `score_status`·실패 코드만 있고 점수·버전·`data_quality_status`가 null. `reasons_status`는 값 목록·reasons 형식이 미결(3·5번)이라 안 줌(지윤 요청). 등급·정책 버전은 없음 — cases가 생성 때 저장 [SCRUM-152] | 읽기 |
 | `ListAlertTransactions(alertId, pageable)` | cases 거래 목록 | 근거 거래 페이지. 마스킹은 부르는 쪽 응답에서 | 읽기 |
 | `FindAlertsByEntity(entityId, before)` | cases·str (`prior_alerts`) | 같은 법인의 과거 경보(`reference_ts` 이전만) | 읽기 |
 | `GetAlertForDraft(alertId)` (명세 이름 GetAlertPayload) | str 초안 요청 (`RequestStrDraft`) | `AlertPayload`(규약 §2, `created_at` 포함) + `reasons`(점수 payload 그대로, 없으면 `[]`) + `prior_alert_count`(같은 법인·앞선 경보 수) [SCRUM-155] | 읽기 |
-| `RecordScoreBand(scoreId, band, policySnapshot)` | cases | detection이 자기 점수 행에 등급·정책 결과 저장 — **CASES 명세 추가 제안** | — |
+| ~~`RecordScoreBand`~~ | — | 안 만듦. 등급·정책 버전은 cases가 케이스 생성 때 자기 행에 저장(계약서 Q2, SCRUM-152) | — |
 
 **관리자 API** 〔초안 — SD 명세〕 룰 스캔 `POST /admin/batches/rule-scan?date=`, 점수 `POST /admin/batches/score?date=`, 경보 점검 `GET /admin/alerts`(+`/{alert_no}`, `/{alert_no}/transactions` — 열람 기록), 룰 `GET /admin/rules`·`PUT /admin/rules/{rule_id}/params`(새 버전 행 추가 + 이전 행 비활성을 한 트랜잭션, `(rule_id, version)` unique로 409).
 

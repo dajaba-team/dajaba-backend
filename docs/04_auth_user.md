@@ -43,7 +43,7 @@
 
 **규칙 세 개**
 1. **한 사람에 역할 하나.** 조사도 하고 승인도 하는 계정은 없어요.
-2. **승인자 ≠ 담당 조사역**은 케이스 단위 규칙이에요. 역할이 승인자여도 그 케이스 담당이었다면 409 `SELF_APPROVAL`(`ApprovalGate`가 막음).
+2. **승인자 ≠ 담당 조사역**은 케이스 단위 규칙이에요. 역할이 승인자여도 그 케이스를 지금 또는 예전에 담당했다면 승인도 반려도 409 `SELF_APPROVAL`(`Case.approve()`·`reject()`가 막고, 예전 담당 여부는 `WasCaseAssignee` — V010 `case_history` 담당자 칸, 미결 32).
 3. **조회는 열려 있고, 수정만 담당자로 제한.** 대신 열람은 `access_logs`에 남아요. **예외 — STR 본문·수정 이력·확정본 PDF**는 담당 조사역과 승인자만 봐요(보고 사실 누설 금지). 비담당 조사역·관리자는 상태·날짜만. [서식 안건 4, 10/30]
 
 ## 3. 로그인 — 세션 쿠키 [계정·권한 §3, 레퍼런스 §9.1·§9.3, 코드 `SecurityConfig`]
@@ -123,7 +123,7 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 
 에러 응답은 전부 `{"error": {"code": "NOT_ASSIGNEE", "message": "…", "details": {}}}` 한 모양이에요(details가 없으면 `{}`). 프론트는 `error.message`를 보여 주고 `error.code`로 분기해요. [레퍼런스 §8.2, `03_shared` §2]
 
-①~③은 `SecurityConfig` 한 파일, ④는 각 유스케이스(객체 단위 — `case.assertAssignedTo(currentUser.id())`). 다른 사람은 `SecurityConfig`를 고칠 일이 거의 없어요.
+①~③은 `SecurityConfig` 한 파일, ④는 각 유스케이스(객체 단위 — cases는 `CaseChanges.requireAssignee(case, currentUser.id())`. 404 → version 409 → 담당 403 → 상태 409 순서를 유스케이스가 정해서 엔티티에 두지 않아요, SCRUM-171). 다른 사람은 `SecurityConfig`를 고칠 일이 거의 없어요.
 
 ## 6. 개발·시연 계정 [레퍼런스 §9.5, 계정·권한 §7, 코드 `DevUserSeeder`]
 

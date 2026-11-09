@@ -81,11 +81,15 @@ public class Case extends BaseEntity {
         return c;
     }
 
-    /** 최초 배정 OPEN → REVIEWING. 활성 조사역인지는 application 이 확인한다. */
+    /** 최초 배정 OPEN → REVIEWING. 활성 조사역인지는 application 이 확인한다. 이력에 받은 사람을 남긴다 (V010). */
     public void assign(Long assigneeId, Long actorId) {
         Objects.requireNonNull(assigneeId, "assigneeId");
-        moveTo(CaseStatus.REVIEWING, CaseHistoryAction.ASSIGN, null, null, actorId);
+        status.validateTransition(CaseStatus.REVIEWING, rejectionReasonCode);
+        CaseStatus from = status;
+        this.status = CaseStatus.REVIEWING;
         this.assigneeId = assigneeId;
+        pendingHistories.add(new CaseHistory(CaseHistoryAction.ASSIGN, from, CaseStatus.REVIEWING,
+                null, null, version, actorId, null, assigneeId));
     }
 
     /**
@@ -94,22 +98,25 @@ public class Case extends BaseEntity {
      */
     public boolean reassign(Long newAssigneeId, Long actorId, String comment) {
         Objects.requireNonNull(newAssigneeId, "newAssigneeId");
-        if (!status.isReassignable()) {
+        if (!status.allows(CaseAction.REASSIGN, rejectionReasonCode)) {
             throw InvalidCaseTransitionException.notAllowedIn(status, CaseHistoryAction.REASSIGN, rejectionReasonCode);
         }
         if (newAssigneeId.equals(assigneeId)) {
             return false;
         }
+        Long previous = this.assigneeId;
         this.assigneeId = newAssigneeId;
-        record(CaseHistoryAction.REASSIGN, status, status, null, comment, actorId);
+        // 넘긴 사람도 남겨야 나중에 그 사람이 승인자가 됐을 때 자기 승인을 막을 수 있다 (V010, 미결 32)
+        pendingHistories.add(new CaseHistory(CaseHistoryAction.REASSIGN, status, status,
+                null, comment, version, actorId, previous, newAssigneeId));
         return true;
     }
 
     /** 상신 REVIEWING → ESCALATED. AI 호출 없음, 초안 생성은 별도 요청. */
     public void escalate(Long actorId, String comment) {
-        status.validateTransition(CaseStatus.ESCALATED, rejectionReasonCode);
+        status.validateTransition(CaseStatus.ESCALATED, rejectionReasonCode);   // 상태 409 가 사유 400 보다 먼저
         requireComment(comment, CaseHistoryAction.ESCALATE);
-        moveTo(CaseStatus.ESCALATED, CaseHistoryAction.ESCALATE, null, comment, actorId);
+        applyMove(CaseStatus.ESCALATED, CaseHistoryAction.ESCALATE, null, comment, actorId);
     }
 
     /**
@@ -152,8 +159,7 @@ public class Case extends BaseEntity {
      * 보고 안 함 반려·승인 대기 이후는 내용 편집 금지.
      */
     public boolean isEditableByAssignee() {
-        return status == CaseStatus.REVIEWING || status == CaseStatus.ESCALATED
-                || status == CaseStatus.DRAFTED || isRejectedForRevision();
+        return status.allows(CaseAction.UPDATE_NOTES, rejectionReasonCode);
     }
 
     /** 보완 반려(REJECTED+NEED_REVISION) 상태인가. */
@@ -167,7 +173,7 @@ public class Case extends BaseEntity {
         if (!isRejectedForRevision()) {
             throw new InvalidCaseTransitionException(status, CaseStatus.DRAFTED, rejectionReasonCode);
         }
-        moveTo(CaseStatus.DRAFTED, CaseHistoryAction.REOPEN_DRAFT, null, null, actorId);
+        applyMove(CaseStatus.DRAFTED, CaseHistoryAction.REOPEN_DRAFT, null, null, actorId);   // REJECTED+NEED_REVISION → DRAFTED 는 전이 표에 있음
         this.rejectionReasonCode = null;
     }
 
@@ -176,23 +182,41 @@ public class Case extends BaseEntity {
         moveTo(CaseStatus.PENDING_APPROVAL, CaseHistoryAction.SUBMIT_FOR_APPROVAL, null, null, actorId);
     }
 
-    /** 승인 PENDING_APPROVAL → APPROVED. 담당자 본인은 승인할 수 없다. */
-    public void approve(Long approverId) {
+    /**
+     * 승인 PENDING_APPROVAL → APPROVED. 지금 담당이거나 예전에 담당했던 사람은 승인할 수 없다 (409 SELF_APPROVAL, 미결 32).
+     *
+     * @param approverWasAssignee 승인자가 이 케이스를 맡은 적이 있는가 — application 이 {@code WasCaseAssignee} 로 이력을 보고 넘긴다.
+     *                            케이스는 이력을 들고 있지 않아서(클래스 주석) 여기서 직접 볼 수 없다
+     */
+    public void approve(Long approverId, boolean approverWasAssignee) {
         Objects.requireNonNull(approverId, "approverId");
         status.validateTransition(CaseStatus.APPROVED, rejectionReasonCode);
-        if (approverId.equals(assigneeId)) {
-            throw new SelfApprovalException(caseNo);
-        }
-        moveTo(CaseStatus.APPROVED, CaseHistoryAction.APPROVE, null, null, approverId);
+        requireNotSelfApproval(approverId, approverWasAssignee);
+        applyMove(CaseStatus.APPROVED, CaseHistoryAction.APPROVE, null, null, approverId);
     }
 
-    /** 반려 PENDING_APPROVAL → REJECTED. 코드·사유 필수. */
-    public void reject(Long approverId, RejectionReasonCode code, String comment) {
+    /**
+     * 반려 PENDING_APPROVAL → REJECTED. 코드·사유 필수. 승인과 같이 지금·예전 담당은 반려할 수 없다 (409 SELF_APPROVAL).
+     *
+     * @param approverWasAssignee {@link #approve} 와 같다
+     */
+    public void reject(Long approverId, boolean approverWasAssignee, RejectionReasonCode code, String comment) {
+        Objects.requireNonNull(approverId, "approverId");
         Objects.requireNonNull(code, "rejectionReasonCode");
         status.validateTransition(CaseStatus.REJECTED, rejectionReasonCode);
+        requireNotSelfApproval(approverId, approverWasAssignee);
         requireComment(comment, CaseHistoryAction.REJECT);
-        moveTo(CaseStatus.REJECTED, CaseHistoryAction.REJECT, code.name(), comment, approverId);
+        applyMove(CaseStatus.REJECTED, CaseHistoryAction.REJECT, code.name(), comment, approverId);
         this.rejectionReasonCode = code;
+    }
+
+    /**
+     * 모의 제출 APPROVED → REPORTED (API 12-2, CASES 명세 6.2 ReportCase). 실제 기관 전송은 없다.
+     * str 모의 제출 유스케이스가 제출 기록과 같은 트랜잭션에서 부른다. 누가 부를 수 있는지(APPROVER)는 application 몫.
+     */
+    public void report(Long actorId) {
+        Objects.requireNonNull(actorId, "actorId");
+        moveTo(CaseStatus.REPORTED, CaseHistoryAction.REPORT, null, null, actorId);
     }
 
     /**
@@ -201,10 +225,15 @@ public class Case extends BaseEntity {
      * 직접 종결 API(초안 없음)는 closeWithoutDraft 를 쓴다.
      */
     public void close(Long actorId, CloseReason reason, String comment) {
+        status.validateTransition(CaseStatus.CLOSED, rejectionReasonCode);   // 상태 409 → 사유 (closeChecked) 순서, closeWithoutDraft 와 같음
+        closeChecked(actorId, reason, comment);
+    }
+
+    /** 종결 본체 — 부르는 쪽이 CLOSED 전이를 이미 확인했다. 사유 → 상태·이력. */
+    private void closeChecked(Long actorId, CloseReason reason, String comment) {
         Objects.requireNonNull(reason, "closeReason");
-        status.validateTransition(CaseStatus.CLOSED, rejectionReasonCode);
         requireComment(comment, CaseHistoryAction.CLOSE);
-        moveTo(CaseStatus.CLOSED, CaseHistoryAction.CLOSE, reason.name(), comment, actorId);
+        applyMove(CaseStatus.CLOSED, CaseHistoryAction.CLOSE, reason.name(), comment, actorId);
         this.closeReason = reason;
         this.rejectionReasonCode = null;   // 과거 반려 코드는 REJECT 이력에 남아 있다
     }
@@ -218,7 +247,7 @@ public class Case extends BaseEntity {
         if (currentDraftId != null) {
             throw new CloseRequiresStrException(caseNo);
         }
-        close(actorId, reason, comment);
+        closeChecked(actorId, reason, comment);
     }
 
     /**
@@ -235,9 +264,17 @@ public class Case extends BaseEntity {
         return taken;
     }
 
-    /** 전이 검사 → 상태 변경 → 이력. 검사에 걸리면 아무것도 바뀌지 않는다. */
+    /** 전이 검사 → 상태 변경 → 이력. 검사에 걸리면 아무것도 바뀌지 않는다. 다른 검사가 끼지 않는 전이용. */
     private void moveTo(CaseStatus target, CaseHistoryAction action, String reasonCode, String comment, Long actorId) {
         status.validateTransition(target, rejectionReasonCode);
+        applyMove(target, action, reasonCode, comment, actorId);
+    }
+
+    /**
+     * 상태 변경 → 이력. 부르는 쪽이 이미 validateTransition 으로 전이를 확인한 뒤에만 쓴다 —
+     * 사유·자기 승인 같은 검사를 상태 검사와 그 사이에 넣어야 하는 메서드용(같은 전이를 두 번 검사하지 않게, SCRUM-171).
+     */
+    private void applyMove(CaseStatus target, CaseHistoryAction action, String reasonCode, String comment, Long actorId) {
         CaseStatus from = status;
         this.status = target;
         record(action, from, target, reasonCode, comment, actorId);
@@ -246,6 +283,12 @@ public class Case extends BaseEntity {
     private void record(CaseHistoryAction action, CaseStatus from, CaseStatus to,
                         String reasonCode, String comment, Long actorId) {
         pendingHistories.add(new CaseHistory(action, from, to, reasonCode, comment, version, actorId));
+    }
+
+    private void requireNotSelfApproval(Long approverId, boolean approverWasAssignee) {
+        if (approverWasAssignee || approverId.equals(assigneeId)) {
+            throw new SelfApprovalException(caseNo);
+        }
     }
 
     private static void requireComment(String comment, CaseHistoryAction action) {
