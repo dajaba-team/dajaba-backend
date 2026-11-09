@@ -292,10 +292,39 @@ class CaseUseCasesDbTest {
         assertThat(r.availableActions()).containsExactly(CaseAction.UPDATE_NOTES, CaseAction.REFRESH_SUMMARY,
                 CaseAction.ESCALATE, CaseAction.CLOSE);
         assertThat(viewLogs(c.getId(), inv.userId())).isEqualTo(1);
+        assertThat(r.alert().alertNo()).startsWith("ALT-20230102-");
+        assertThat(r.alert().ruleId()).startsWith("R_UC_");
+        assertThat(r.alert().transactionCount()).isZero();
+        assertThat(r.latestScore().status()).isEqualTo("PENDING");   // 점수 전 — 칸은 null, reasons 는 []
+        assertThat(r.latestScore().score()).isNull();
+        assertThat(r.latestScore().reasons().isArray()).isTrue();
+        assertThat(r.latestScore().reasons()).isEmpty();
 
         login(apr);
         assertThat(detail.execute(c.getCaseNo()).availableActions()).isEmpty();
         assertThat(viewLogs(c.getId(), apr.userId())).isEqualTo(1);
+    }
+
+    @Test
+    void 상세는_경보의_점수와_reasons_를_그대로_준다() {
+        Case c = newCase();
+        jdbc.update("update ops.alerts set score_status = 'SCORED' where id = ?", c.getAlertId());
+        jdbc.update("""
+                insert into ops.alert_scores(alert_id, score, threshold, model_version, feature_version,
+                                             prediction_id, produced_at, payload)
+                values (?, 0.91, 0.7, 'xgb-test', 'f1', ?, now(),
+                        '{"data_quality_status": "OK", "reasons": [{"feature": "fan_in_24h"}]}'::jsonb)""",
+                c.getAlertId(), "p-" + c.getAlertId());
+        login(inv);
+
+        GetCaseDetail.LatestScore s = detail.execute(c.getCaseNo()).latestScore();
+
+        assertThat(s.status()).isEqualTo("SCORED");
+        assertThat(s.score()).isEqualByComparingTo("0.91");
+        assertThat(s.modelVersion()).isEqualTo("xgb-test");
+        assertThat(s.featureVersion()).isEqualTo("f1");
+        assertThat(s.dataQualityStatus()).isEqualTo("OK");
+        assertThat(s.reasons().get(0).get("feature").asText()).isEqualTo("fan_in_24h");
     }
 
     @Test
