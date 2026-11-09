@@ -295,7 +295,7 @@ class CaseUseCasesDbTest {
         assertThat(r.alert().alertNo()).startsWith("ALT-20230102-");
         assertThat(r.alert().ruleId()).startsWith("R_UC_");
         assertThat(r.alert().transactionCount()).isZero();
-        assertThat(r.latestScore().status()).isEqualTo("PENDING");   // 점수 전 — 칸은 null, reasons 는 []
+        assertThat(r.latestScore().scoreStatus()).isEqualTo("PENDING");   // 점수 전 — 칸은 null, reasons 는 []
         assertThat(r.latestScore().score()).isNull();
         assertThat(r.latestScore().reasons().isArray()).isTrue();
         assertThat(r.latestScore().reasons()).isEmpty();
@@ -319,7 +319,7 @@ class CaseUseCasesDbTest {
 
         GetCaseDetail.LatestScore s = detail.execute(c.getCaseNo()).latestScore();
 
-        assertThat(s.status()).isEqualTo("SCORED");
+        assertThat(s.scoreStatus()).isEqualTo("SCORED");
         assertThat(s.score()).isEqualByComparingTo("0.91");
         assertThat(s.modelVersion()).isEqualTo("xgb-test");
         assertThat(s.featureVersion()).isEqualTo("f1");
