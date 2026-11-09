@@ -99,7 +99,18 @@ class CaseApiTest {
         assertThat(detail.get("history").get(0).get("action").asText()).isEqualTo("ASSIGN");
         assertThat(detail.get("history").get(0).get("created_by").asText()).isEqualTo(inv.loginId());
         assertThat(detail.get("prior_alerts").isArray()).isTrue();
-        assertThat(detail.has("alert")).isTrue();
+        JsonNode alert = detail.get("alert");                 // SCRUM-152 — 연결 경보·점수
+        assertThat(alert.get("alert_no").asText()).startsWith("ALT-20230201-");
+        assertThat(alert.get("rule_id").asText()).startsWith("R_API_C");
+        assertThat(alert.get("batch_date").asText()).isEqualTo("2023-02-01");
+        assertThat(alert.get("window_start").asText()).isEqualTo("2023-02-01T00:00:00");
+        assertThat(alert.get("transaction_count").asInt()).isZero();
+        JsonNode latestScore = detail.get("latest_score");
+        assertThat(latestScore.get("score_status").asText()).isEqualTo("PENDING");
+        assertThat(latestScore.get("score").isNull()).isTrue();
+        assertThat(latestScore.get("score_band").isNull()).isTrue();
+        assertThat(detail.get("score").isNull()).isTrue();          // 점수 전이라 맨 위 score 도 null (Q2 MVP)
+        assertThat(latestScore.get("reasons").isArray()).isTrue();
         assertThat(detailBody).doesNotContain(accountKey).doesNotContain("account_key");
 
         // 에스컬레이션 → 종료

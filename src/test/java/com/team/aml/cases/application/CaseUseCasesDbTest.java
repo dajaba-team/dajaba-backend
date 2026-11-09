@@ -12,6 +12,7 @@ import com.team.aml.cases.domain.CloseRequiresStrException;
 import com.team.aml.cases.domain.InvalidAssigneeException;
 import com.team.aml.cases.domain.InvalidCaseTransitionException;
 import com.team.aml.cases.domain.NotAssigneeException;
+import com.team.aml.cases.domain.ScoreBand;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.user.domain.UserNotFoundException;
 import jakarta.persistence.OptimisticLockException;
@@ -46,7 +47,10 @@ import static org.assertj.core.api.Assertions.tuple;
 
 /** 화면에서 부르는 cases 유스케이스 — 배정·에스컬레이션·종료·목록·상세 (SCRUM-105). 실제 PostgreSQL. */
 @Testcontainers
-@SpringBootTest
+@SpringBootTest(properties = {   // 상세 score_band 계산용 (OpenCasesFromAlertsDbTest 와 같은 값)
+        "aml.case-policy.version=test-v1",
+        "aml.case-policy.low-to-medium=0.5",
+        "aml.case-policy.medium-to-high=0.9"})
 @ActiveProfiles("test")
 class CaseUseCasesDbTest {
 
@@ -292,10 +296,44 @@ class CaseUseCasesDbTest {
         assertThat(r.availableActions()).containsExactly(CaseAction.UPDATE_NOTES, CaseAction.REFRESH_SUMMARY,
                 CaseAction.ESCALATE, CaseAction.CLOSE);
         assertThat(viewLogs(c.getId(), inv.userId())).isEqualTo(1);
+        assertThat(r.alert().alertNo()).startsWith("ALT-20230102-");
+        assertThat(r.alert().ruleId()).startsWith("R_UC_");
+        assertThat(r.alert().transactionCount()).isZero();
+        assertThat(r.latestScore().scoreStatus()).isEqualTo("PENDING");   // 점수 전 — 칸은 null, reasons 는 []
+        assertThat(r.latestScore().score()).isNull();
+        assertThat(r.latestScore().scoreBand()).isNull();
+        assertThat(r.policyVersion()).isNull();
+        assertThat(r.latestScore().reasons().isArray()).isTrue();
+        assertThat(r.latestScore().reasons()).isEmpty();
 
         login(apr);
         assertThat(detail.execute(c.getCaseNo()).availableActions()).isEmpty();
         assertThat(viewLogs(c.getId(), apr.userId())).isEqualTo(1);
+    }
+
+    @Test
+    void 상세는_경보의_점수와_reasons_를_그대로_준다() {
+        Case c = newCase();
+        jdbc.update("update ops.alerts set score_status = 'SCORED' where id = ?", c.getAlertId());
+        jdbc.update("""
+                insert into ops.alert_scores(alert_id, score, threshold, model_version, feature_version,
+                                             prediction_id, produced_at, payload)
+                values (?, 0.91, 0.7, 'xgb-test', 'f1', ?, now(),
+                        '{"data_quality_status": "OK", "reasons": [{"feature": "fan_in_24h"}]}'::jsonb)""",
+                c.getAlertId(), "p-" + c.getAlertId());
+        login(inv);
+
+        GetCaseDetail.Result r = detail.execute(c.getCaseNo());
+        GetCaseDetail.LatestScore s = r.latestScore();
+        assertThat(r.policyVersion()).isEqualTo("test-v1");     // 맨 위 score·score_band·policy_version 은 Q2 MVP 로 같은 값
+
+        assertThat(s.scoreStatus()).isEqualTo("SCORED");
+        assertThat(s.score()).isEqualByComparingTo("0.91");
+        assertThat(s.scoreBand()).isEqualTo(ScoreBand.HIGH);   // 0.91 ≥ 0.9
+        assertThat(s.modelVersion()).isEqualTo("xgb-test");
+        assertThat(s.featureVersion()).isEqualTo("f1");
+        assertThat(s.dataQualityStatus()).isEqualTo("OK");
+        assertThat(s.reasons().get(0).get("feature").asText()).isEqualTo("fan_in_24h");
     }
 
     @Test
