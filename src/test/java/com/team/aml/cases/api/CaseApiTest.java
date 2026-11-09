@@ -129,6 +129,9 @@ class CaseApiTest {
         assertThat(code(post("/api/v1/cases/{caseNo}/close", caseNo).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"comment\": \"사유 없음\", \"version\": 1}").with(as(inv)).with(csrf()), 400))
                 .isEqualTo("INVALID_REQUEST");
+        assertThat(json.readTree(body(post("/api/v1/cases/{caseNo}/close", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"comment\": \"사유 없음\", \"version\": 1}").with(as(inv)).with(csrf()), 400))
+                .path("error").path("details").has("close_reason")).isTrue();   // 요청 JSON 이름 그대로 (SCRUM-167)
         assertThat(code(post("/api/v1/cases/{caseNo}/close", caseNo).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"close_reason\": \"NOT_A_REASON\", \"comment\": \"x\", \"version\": 1}")
                 .with(as(inv)).with(csrf()), 400)).isEqualTo("INVALID_REQUEST");

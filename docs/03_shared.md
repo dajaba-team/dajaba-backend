@@ -49,7 +49,7 @@
 
 | 예외 | HTTP | `code` |
 |---|---|---|
-| `@Valid` 실패, JSON 파싱 실패, 쿼리·경로 파라미터 오류(`details.parameter`에 틀린 파라미터 이름) | 400 | `INVALID_REQUEST` |
+| `@Valid` 실패, JSON 파싱 실패, 쿼리·경로 파라미터 오류(`details.parameter`에 틀린 파라미터 이름) | 400 | `INVALID_REQUEST` — `@Valid` 실패(본문·`@ModelAttribute` 쿼리)는 `details`에 **요청 JSON 이름(snake_case)** → 메시지, 중첩은 `items[0].transaction_id`, 한 필드에 위반이 여럿이면 하나만. 클래스 수준 검증(global error)은 지금 없어서 담지 않음. `details.parameter`는 `@RequestParam`·`@PathVariable`에 이름이 있으면 그 이름 [SCRUM-167] |
 | `NotFoundException` 하위 | 404 | 하위 클래스가 정함 (`CASE_NOT_FOUND`, `DRAFT_NOT_FOUND` …) |
 | `ForbiddenException` 하위 | **403** | 클래스 이름 UPPER_SNAKE (`NOT_APPROVER`, `NOT_ASSIGNEE` …) [SCRUM-67] |
 | `DomainException` 하위 전부 (위 둘 제외) | **409** | 클래스 이름 UPPER_SNAKE (`INVALID_CASE_TRANSITION`, `SELF_APPROVAL` …) |

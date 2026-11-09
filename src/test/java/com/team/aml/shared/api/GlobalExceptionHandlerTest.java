@@ -1,23 +1,41 @@
 package com.team.aml.shared.api;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.team.aml.shared.domain.DomainException;
 import com.team.aml.shared.domain.ForbiddenException;
 import com.team.aml.shared.domain.NotFoundException;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.validation.BeanPropertyBindingResult;
+import org.springframework.validation.FieldError;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -28,10 +46,101 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 class GlobalExceptionHandlerTest {
 
+    /** standalone 은 application.yml 의 Jackson 설정을 안 읽는다 — 요청 본문을 snake_case 로 읽도록 같은 전략을 넣는다. */
     private final MockMvc mvc = MockMvcBuilders
             .standaloneSetup(new ThrowingController())
             .setControllerAdvice(new GlobalExceptionHandler())
+            .setMessageConverters(new MappingJackson2HttpMessageConverter(
+                    new ObjectMapper().setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)))
             .build();
+
+    // --- 400 INVALID_REQUEST details 키 = 요청 JSON 이름 (SCRUM-167, IF-COM-03) ---
+
+    @Test
+    void 정상_Valid_실패_details_키는_요청_JSON_이름_snake_case() throws Exception {
+        mvc.perform(post("/test/body").contentType(MediaType.APPLICATION_JSON).content("{\"version\": 0}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details.investigator_notes").value("메모는 필수입니다"))
+                .andExpect(jsonPath("$.error.details.investigatorNotes").doesNotExist());
+    }
+
+    @Test
+    void 정상_중첩_목록은_조각마다_snake_case이고_인덱스는_그대로() throws Exception {
+        mvc.perform(post("/test/body").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"investigator_notes\": \"x\", \"version\": 0, \"items\": [{\"transaction_id\": 0}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details['items[0].transaction_id']").value("거래 번호는 양수입니다"))
+                .andExpect(jsonPath("$.error.details['items[0].transactionId']").doesNotExist());
+    }
+
+    @Test
+    void 회귀_Valid_실패_코드와_메시지는_그대로() throws Exception {
+        mvc.perform(post("/test/body").contentType(MediaType.APPLICATION_JSON).content("{\"version\": 0}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.error.message").value("요청 값이 올바르지 않습니다"));
+    }
+
+    @Test
+    void 경계_한_단어_필드는_이름_그대로() throws Exception {
+        mvc.perform(post("/test/body").contentType(MediaType.APPLICATION_JSON).content("{\"investigator_notes\": \"x\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details.version").value("version 은 필수입니다"));
+    }
+
+    /** 위반 순서는 Bean Validation 이 정하지 않으므로 순서를 정한 BindingResult 로 핸들러를 바로 부른다. */
+    @Test
+    void 경계_같은_필드_위반이_여럿이면_첫_번째만() throws Exception {
+        BeanPropertyBindingResult result = new BeanPropertyBindingResult(new Object(), "body");
+        result.addError(new FieldError("body", "investigatorNotes", "첫 번째"));
+        result.addError(new FieldError("body", "investigatorNotes", "두 번째"));
+        MethodParameter param = new MethodParameter(
+                ThrowingController.class.getDeclaredMethod("body", MemoBody.class), 0);
+
+        ErrorResponse body = new GlobalExceptionHandler()
+                .invalid(new MethodArgumentNotValidException(param, result)).getBody();
+
+        assertThat(body.error().details()).containsExactly(Map.entry("investigator_notes", "첫 번째"));
+    }
+
+    @Test
+    void 정상_RequestParam_이름이_있으면_details_parameter는_그_이름() throws Exception {
+        mvc.perform(get("/test/param").param("target_id", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.error.details.parameter").value("target_id"));
+    }
+
+    @Test
+    void 경계_RequestParam_이름이_없으면_변수_이름() throws Exception {
+        mvc.perform(get("/test/param").param("page", "-1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details.parameter").value("page"));
+    }
+
+    @Test
+    void 회귀_타입이_틀린_쿼리는_details_parameter_그대로() throws Exception {
+        mvc.perform(get("/test/param").param("page", "abc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value("요청 파라미터가 올바르지 않습니다"))
+                .andExpect(jsonPath("$.error.details.parameter").value("page"));
+    }
+
+    @Test
+    void 회귀_빠진_필수_쿼리는_details_parameter_그대로() throws Exception {
+        mvc.perform(get("/test/required"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details.parameter").value("as_of"));
+    }
+
+    @Test
+    void 실패_JSON_파싱_실패는_본문_메시지_그대로() throws Exception {
+        mvc.perform(post("/test/body").contentType(MediaType.APPLICATION_JSON).content("{"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.error.message").value("요청 본문을 읽을 수 없습니다"))
+                .andExpect(jsonPath("$.error.details").isEmpty());
+    }
 
     @Test
     void 정상_ForbiddenException_하위는_403과_클래스_이름_코드로_나간다() throws Exception {
@@ -121,8 +230,29 @@ class GlobalExceptionHandlerTest {
         ThingNotFoundException(String message, Map<String, Object> details) { super(message, details); }
     }
 
+    record MemoBody(@NotNull(message = "메모는 필수입니다") String investigatorNotes,
+                    @NotNull(message = "version 은 필수입니다") Long version,
+                    List<@Valid Item> items) {
+    }
+
+    record Item(@Positive(message = "거래 번호는 양수입니다") Long transactionId) {
+    }
+
     @RestController
     static class ThrowingController {
+
+        @PostMapping("/test/body")
+        void body(@Valid @RequestBody MemoBody body) {
+        }
+
+        @GetMapping("/test/param")
+        void param(@RequestParam(name = "target_id", required = false) @Min(1) Long targetId,
+                   @RequestParam(required = false) @Min(0) Integer page) {
+        }
+
+        @GetMapping("/test/required")
+        void required(@RequestParam("as_of") String asOf) {
+        }
 
         @GetMapping("/test/forbidden")
         void forbidden() {
