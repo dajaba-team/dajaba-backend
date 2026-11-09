@@ -7,6 +7,7 @@ import com.team.aml.detection.application.GetAlertForDraft;
 import com.team.aml.detection.domain.AlertForDraft;
 import com.team.aml.shared.ai.AiClient;
 import com.team.aml.shared.ai.AiDtos;
+import com.team.aml.shared.config.AmlProperties;
 import com.team.aml.shared.domain.DisplayNumber;
 import com.team.aml.shared.security.CurrentUser;
 import com.team.aml.str.domain.DraftInProgressException;
@@ -20,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -29,7 +31,8 @@ import java.util.List;
  *
  * <ol>
  *   <li>요청 기록 트랜잭션(짧게): 케이스 404 → version 409 → 담당 403 → 상태 409(GENERATE_DRAFT 가 안 되는 상태)
- *       → 진행 중 요청이 있으면 409 DRAFT_IN_PROGRESS → draft_id 발급(시퀀스) → AI 요청 본문을 만들어 요청 기록 REQUESTED 로 저장.</li>
+ *       → 진행 중 요청이 있으면 409 DRAFT_IN_PROGRESS (단, AI 예산 + 여유보다 오래된 요청은 서버가 꺼져 남은 것이라 EXPIRED 로 닫고 진행)
+ *       → draft_id 발급(시퀀스) → AI 요청 본문을 만들어 요청 기록 REQUESTED 로 저장.</li>
  *   <li>트랜잭션 밖: AiClient.createDraft (규약 §5.1, draft_id = DRF-%06d).</li>
  *   <li>SaveStrDraft(한 트랜잭션): 케이스 잠금 → 응답 확인 → 초안·수정본 1번 저장 → 케이스 DRAFTED → 요청 SUCCEEDED.</li>
  *   <li>2·3에서 실패하면 요청 기록을 별도 트랜잭션으로 FAILED — 케이스는 그대로(ESCALATED 등). 원래 예외를 그대로 올린다.</li>
@@ -39,6 +42,8 @@ import java.util.List;
 public class RequestStrDraft {
     /** 상태가 맞지 않을 때 details.action. */
     static final String ACTION = "GENERATE_DRAFT";
+    /** AI 예산(aml.ai.timeout-seconds) 뒤 SaveStrDraft·FAILED 기록까지 끝내는 여유. */
+    static final Duration STALE_MARGIN = Duration.ofSeconds(60);
 
     private static final Logger log = LoggerFactory.getLogger(RequestStrDraft.class);
 
@@ -50,10 +55,12 @@ public class RequestStrDraft {
     private final CurrentUser currentUser;
     private final ObjectMapper om;
     private final TransactionTemplate tx;
+    /** 이보다 오래된 REQUESTED 는 살아 있는 요청이 아니다 — 서버가 AI 를 기다리다 꺼진 흔적 (#77 리뷰). */
+    private final Duration staleAfter;
 
     public RequestStrDraft(CaseRepository cases, GetAlertForDraft alertForDraft, StrDraftRequestRepository requests,
                            AiClient aiClient, SaveStrDraft saveStrDraft, CurrentUser currentUser, ObjectMapper om,
-                           PlatformTransactionManager transactionManager){
+                           PlatformTransactionManager transactionManager, AmlProperties props){
         this.cases = cases;
         this.alertForDraft = alertForDraft;
         this.requests = requests;
@@ -62,6 +69,7 @@ public class RequestStrDraft {
         this.currentUser = currentUser;
         this.om = om;
         this.tx = new TransactionTemplate(transactionManager);
+        this.staleAfter = Duration.ofSeconds(props.ai().timeoutSeconds()).plus(STALE_MARGIN);
     }
 
     /**
@@ -89,9 +97,7 @@ public class RequestStrDraft {
             return tx.execute(s -> {
                 Case c = cases.findByCaseNo(caseNo).orElseThrow(() -> new CaseNotFoundException(caseNo));
                 check(c, expectedCaseVersion, actorId);
-                if (requests.findRequestedByCaseId(c.getId()).isPresent()) {
-                    throw new DraftInProgressException(caseNo);
-                }
+                expireStaleOrThrow(c);
                 long draftId = requests.nextDraftId();
                 AiDtos.StrDraftRequest body = bodyFor(c, draftId);
                 requests.save(StrDraftRequest.request(draftId, c.getId(), om.valueToTree(body)));
@@ -101,6 +107,24 @@ public class RequestStrDraft {
             // 두 요청이 동시에 위 검사를 통과하면 V008 partial unique(케이스당 REQUESTED 하나)가 뒤 INSERT 를 막는다
             throw new DraftInProgressException(caseNo);
         }
+    }
+
+    /**
+     * 진행 중 요청이 없으면 그냥 지나간다. 있는데 staleAfter 보다 오래됐으면 EXPIRED 로 닫고 지나가고, 아니면 409.
+     * saveAndFlush — Hibernate 는 커밋 때 INSERT 를 UPDATE 보다 먼저 보내서, flush 안 하면 새 REQUESTED INSERT 가
+     * 아직 REQUESTED 인 옛 행과 V008 partial unique 에 걸린다.
+     */
+    private void expireStaleOrThrow(Case c) {
+        StrDraftRequest running = requests.findRequestedByCaseId(c.getId()).orElse(null);
+        if (running == null) return;
+        Instant now = Instant.now();
+        if (running.getCreatedAt().isAfter(now.minus(staleAfter))) {
+            throw new DraftInProgressException(c.getCaseNo());
+        }
+        log.warn("오래된 초안 요청을 EXPIRED 로 닫음 draft_id={} case_no={} created_at={}",
+                running.getId(), c.getCaseNo(), running.getCreatedAt());
+        running.expire(now);
+        requests.saveAndFlush(running);
     }
 
     /** 검사 순서는 AttachDraftToCase·RefreshCaseSummary 와 같다. str 은 Case 의 get·is 만 부른다(ArchUnit). */

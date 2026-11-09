@@ -223,6 +223,27 @@ class RequestStrDraftDbTest {
                 f.c.getId())).isZero();
     }
 
+    // 7
+    @Test
+    void 정상_AI_예산보다_오래된_REQUESTED는_EXPIRED로_닫고_새로_요청한다() {
+        Fixture f = escalatedCase(true);
+        when(aiClient.createDraft(any())).thenAnswer(i -> ok(i.getArgument(0)));
+        loginAs(inv);
+        long stale = requests.nextDraftId();
+        tx().executeWithoutResult(s -> requests.save(com.team.aml.str.domain.StrDraftRequest.request(
+                stale, f.c.getId(), om.createObjectNode())));
+        // 서버가 AI 를 기다리다 꺼진 상황 — 기록 시각을 예산(90초) + 여유(60초)보다 이전으로
+        jdbc.update("update ops.str_draft_requests set created_at = now() - interval '10 minutes' where draft_id = ?", stale);
+
+        RequestStrDraft.Created created = requestDraft.execute(f.c.getCaseNo(), f.c.getVersion());
+
+        assertThat(jdbc.queryForObject("select status from ops.str_draft_requests where draft_id = ?", String.class,
+                stale)).isEqualTo("EXPIRED");
+        assertThat(jdbc.queryForObject("select status from ops.str_draft_requests where draft_id = ?", String.class,
+                draftId(created.draftNo()))).isEqualTo("SUCCEEDED");
+        assertThat(cases.findById(f.c.getId()).orElseThrow().getStatus()).isEqualTo(CaseStatus.DRAFTED);
+    }
+
     // ── 도우미 ────────────────────────────────────────────────
 
     private record Fixture(Case c, long alertId, String alertNo, long tx1, long tx2) {}

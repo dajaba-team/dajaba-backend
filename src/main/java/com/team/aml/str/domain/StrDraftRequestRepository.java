@@ -7,6 +7,9 @@ public interface StrDraftRequestRepository {
 
     StrDraftRequest save(StrDraftRequest request);
 
+    /** 바로 UPDATE 를 보낸다 — 오래된 REQUESTED 를 EXPIRED 로 닫고 같은 트랜잭션에서 새 REQUESTED 를 넣을 때 (RequestStrDraft). */
+    StrDraftRequest saveAndFlush(StrDraftRequest request);
+
     Optional<StrDraftRequest> findById(Long draftId);
 
     /**
