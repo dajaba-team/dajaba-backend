@@ -192,6 +192,38 @@ class CaseApiTest {
         assertThat(names).containsExactlyInAnyOrder("status", "assignee", "from", "to", "sort", "page", "size");
     }
 
+    @Test
+    void AI_조사_요약_없으면_null_만들면_201_조회는_is_current_true_담당_외_403_버전_409() throws Exception {
+        String caseNo = newOpenCase("010_8000S%05dBD30".formatted(SEQ.incrementAndGet()));
+        assign(caseNo, inv);   // version 1
+
+        JsonNode none = json.readTree(body(get("/api/v1/cases/{caseNo}/summary", caseNo).with(as(inv2)), 200));
+        assertThat(none.get("case_no").asText()).isEqualTo(caseNo);
+        assertThat(none.get("summary").isNull()).isTrue();
+
+        assertThat(code(post("/api/v1/cases/{caseNo}/refresh-summary", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"version\": 1}").with(as(inv2)).with(csrf()), 403)).isEqualTo("NOT_ASSIGNEE");
+        assertThat(code(post("/api/v1/cases/{caseNo}/refresh-summary", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"version\": 0}").with(as(inv)).with(csrf()), 409)).isEqualTo("CONCURRENT_UPDATE");
+
+        // 테스트 프로필은 MockAiClient — 코드 검사 4종 통과
+        JsonNode made = json.readTree(body(post("/api/v1/cases/{caseNo}/refresh-summary", caseNo)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"version\": 1}").with(as(inv)).with(csrf()), 201));
+        assertThat(made.get("case_no").asText()).isEqualTo(caseNo);
+        assertThat(made.get("case_version").asLong()).isEqualTo(2);
+        assertThat(made.get("summary").get("summary_lines").isArray()).isTrue();
+        assertThat(made.get("summary").get("is_current").asBoolean()).isTrue();
+        assertThat(made.get("summary").get("produced_at").asText()).endsWith("Z");
+
+        JsonNode now = json.readTree(body(get("/api/v1/cases/{caseNo}/summary", caseNo).with(as(inv2)), 200));
+        assertThat(now.get("summary").get("is_current").asBoolean()).isTrue();
+        assertThat(now.get("summary").get("input_sha256").asText())
+                .isEqualTo(made.get("summary").get("input_sha256").asText());
+        JsonNode detail = json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(inv)), 200));
+        assertThat(detail.get("latest_summary").get("is_current").asBoolean()).isTrue();
+        assertThat(detail.get("version").asLong()).isEqualTo(2);
+    }
+
     // ── 준비 ──────────────────────────────────────────────────
 
     private void assign(String caseNo, AppUserDetails who) throws Exception {
