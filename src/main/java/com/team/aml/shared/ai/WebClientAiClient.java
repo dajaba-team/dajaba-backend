@@ -27,20 +27,23 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
  * 실제 AI 서버 호출 (aml.ai.mock=false, 규약 v0.2 §6). 유스케이스는 AiClient 인터페이스만 본다.
  *
  * 공통 동작:
- *  - 헤더 X-Internal-Key, X-Request-Id(UUID, 재시도해도 같은 값)
+ *  - 헤더 X-Internal-Key, X-Request-Id(UUID, 재시도해도 같은 값), X-Budget-Ms(그 시도 때 남은 예산 ms)
  *  - 화면 요청 전체 90초(재시도 포함) = aml.ai.timeout-seconds. 점수는 500건 묶음마다 같은 한도.
  *  - 재시도 1회, 남은 시간 안에서만. 판별은 HTTP 5xx 가 아니라 코드/원인으로:
  *      재시도 O: LLM_UNAVAILABLE·MODEL_UNAVAILABLE·DB_UNAVAILABLE, 또는 연결 거부(ConnectException)
  *      재시도 X: 그 밖의 5xx·4xx·409, 연결 타임아웃(ConnectTimeoutException)·응답 타임아웃
  *  - 실패 매핑: AI 가 준 코드 그대로 502. 연결 거부로 끝나면 AI_UNAVAILABLE 502, 타임아웃은 AI_TIMEOUT 502.
  *  - AI 409 GENERATION_IN_PROGRESS → 409 DRAFT_IN_PROGRESS (재시도 없음).
+ *  - AI 404 DRAFT_NOT_FOUND·400 INVALID_REQUEST·401 UNAUTHENTICATED → AI_ 붙여 502 (백엔드 코드와 이름 충돌).
  *
  * HTTP 시도마다 ai_call_logs 에 별도 트랜잭션으로 메타데이터만 기록한다. 요청·응답 본문은 저장하지 않는다 (D5).
+ * 2xx 라도 응답 확인이 실패하면 그 시도는 AI_BAD_RESPONSE 실패 행이다(status 는 실제 2xx).
  */
 @Component
 @ConditionalOnProperty(prefix = "aml.ai", name = "mock", havingValue = "false")
@@ -50,9 +53,19 @@ public class WebClientAiClient implements AiClient {
 
     private static final String HEADER_INTERNAL_KEY = "X-Internal-Key";
     private static final String HEADER_REQUEST_ID = "X-Request-Id";
+    private static final String HEADER_BUDGET_MS = "X-Budget-Ms";
 
     /** 재시도 대상 AI 응답 코드 (HTTP 5xx 여부가 아니라 코드로 판별). */
     private static final Set<String> RETRYABLE_AI_CODES = Set.of("LLM_UNAVAILABLE", "MODEL_UNAVAILABLE", "DB_UNAVAILABLE");
+
+    /**
+     * "HTTP 상태 + AI 코드" → 프론트에 줄 코드. 백엔드 자체 404 DRAFT_NOT_FOUND·400 INVALID_REQUEST·401 UNAUTHENTICATED 와
+     * 이름이 같아 뜻이 섞이지 않게 AI_ 를 붙인다 (502). 03_shared §2 (SCRUM-128).
+     */
+    private static final Map<String, String> RENAMED_AI_CODES = Map.of(
+            "404 DRAFT_NOT_FOUND", "AI_DRAFT_NOT_FOUND",
+            "400 INVALID_REQUEST", "AI_INVALID_REQUEST",
+            "401 UNAUTHENTICATED", "AI_UNAUTHENTICATED");
 
     private final WebClient http;
     private final AiCallLogWriter writer;
@@ -75,10 +88,12 @@ public class WebClientAiClient implements AiClient {
         List<ScoreResult> merged = new ArrayList<>();
         for (int i = 0; i < alerts.size(); i += maxBatch) {       // 500건씩 나눠 보내고 합친다 (규약 6.2)
             List<AlertPayload> chunk = alerts.subList(i, Math.min(i + maxBatch, alerts.size()));
-            JsonNode resp = post("/v1/scores", new ScoresRequest(batchRunId, chunk), "BATCH_RUN", String.valueOf(batchRunId));
-            List<ScoreResult> items = readScoreBatch(om, resp);
-            requireSameBatch(batchRunId, chunk, resp, items);
-            merged.addAll(items);
+            merged.addAll(post("/v1/scores", new ScoresRequest(batchRunId, chunk), "BATCH_RUN", String.valueOf(batchRunId),
+                    resp -> {
+                        List<ScoreResult> items = readScoreBatch(om, resp);
+                        requireSameBatch(batchRunId, chunk, resp, items);
+                        return items;
+                    }));
         }
         return new ScoresResponse(merged);
     }
@@ -136,23 +151,23 @@ public class WebClientAiClient implements AiClient {
 
     @Override
     public StrDraftResponse createDraft(StrDraftRequest request) {
-        JsonNode r = post("/v1/str/drafts", request, "DRAFT", request.draftId());
-        require(r, "draft_id");
-        try {
-            return om.treeToValue(injectRaw(r), StrDraftResponse.class);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new AiClientException("AI_BAD_RESPONSE", "AI 초안 응답 파싱 실패", Map.of(), 502);
-        }
+        return post("/v1/str/drafts", request, "DRAFT", request.draftId(),
+                r -> readRecord(r, "draft_id", StrDraftResponse.class, "AI 초안 응답 파싱 실패"));
     }
 
     @Override
     public VerifyResponse verify(String draftId, VerifyRequest request) {
-        JsonNode r = post("/v1/str/verify", request, "DRAFT", draftId);
-        require(r, "verification_id");
+        return post("/v1/str/verify", request, "DRAFT", draftId,
+                r -> readRecord(r, "verification_id", VerifyResponse.class, "AI 검증 응답 파싱 실패"));
+    }
+
+    /** 필수 칸 확인 + `raw` 넣어 record 로. 실패는 AI_BAD_RESPONSE 502 — withRetry 안에서 불려 실패 행으로 남는다. */
+    private <T> T readRecord(JsonNode r, String requiredField, Class<T> type, String parseFailMessage) {
+        require(r, requiredField);
         try {
-            return om.treeToValue(injectRaw(r), VerifyResponse.class);
+            return om.treeToValue(injectRaw(r), type);
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new AiClientException("AI_BAD_RESPONSE", "AI 검증 응답 파싱 실패", Map.of(), 502);
+            throw new AiClientException("AI_BAD_RESPONSE", parseFailMessage, Map.of(), 502);
         }
     }
 
@@ -166,44 +181,44 @@ public class WebClientAiClient implements AiClient {
 
     @Override
     public CaseSummaryResponse caseSummary(CaseSummaryRequest request) {
-        JsonNode r = post("/v1/cases/summary", request, "CASE", request.caseNo());
-        require(r, "case_no");
-        try {
-            return om.treeToValue(injectRaw(r), CaseSummaryResponse.class);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new AiClientException("AI_BAD_RESPONSE", "AI 요약 응답 파싱 실패", Map.of(), 502);
-        }
+        return post("/v1/cases/summary", request, "CASE", request.caseNo(),
+                r -> readRecord(r, "case_no", CaseSummaryResponse.class, "AI 요약 응답 파싱 실패"));
     }
 
     @Override
     public HealthResponse health() {
-        JsonNode r = get("/v1/health");
-        return new HealthResponse(text(r, "status"), text(r, "db"), text(r, "llm"), text(r, "server_version"),
-                text(r, "model_version"), text(r, "feature_version"), text(r, "retrieval_version"));
+        return get("/v1/health", r -> new HealthResponse(text(r, "status"), text(r, "db"), text(r, "llm"),
+                text(r, "server_version"), text(r, "model_version"), text(r, "feature_version"), text(r, "retrieval_version")));
     }
 
     // --- 호출 + 재시도 ------------------------------------------------------
 
-    private JsonNode post(String path, Object body, String targetType, String targetId) {
+    private <T> T post(String path, Object body, String targetType, String targetId, Function<JsonNode, T> reader) {
         JsonNode json = om.valueToTree(body);   // 요청은 주입된 om(SNAKE_CASE)으로 직렬화해 WebClient 코덱과 무관하게
         return withRetry(path, targetType, targetId, (requestId, remaining) -> exchange(
                 http.post().uri(path).contentType(MediaType.APPLICATION_JSON)
                         .header(HEADER_INTERNAL_KEY, internalKey)
                         .header(HEADER_REQUEST_ID, requestId)
+                        .header(HEADER_BUDGET_MS, String.valueOf(remaining.toMillis()))
                         .bodyValue(json),
-                remaining));
+                remaining), reader);
     }
 
-    private JsonNode get(String path) {
+    private <T> T get(String path, Function<JsonNode, T> reader) {
         return withRetry(path, null, null, (requestId, remaining) -> exchange(
                 http.get().uri(path)
                         .header(HEADER_INTERNAL_KEY, internalKey)
-                        .header(HEADER_REQUEST_ID, requestId),
-                remaining));
+                        .header(HEADER_REQUEST_ID, requestId)
+                        .header(HEADER_BUDGET_MS, String.valueOf(remaining.toMillis())),
+                remaining), reader);
     }
 
-    private JsonNode withRetry(String path, String targetType, String targetId,
-                               BiFunction<String, Duration, Response> attempt) {
+    /**
+     * 시도마다 한 행. 2xx 면 reader(필수 칸·변환·묶음 대조)를 **기록 전에** 돌려, 실패하면 같은 시도를
+     * status=실제 2xx · AI_BAD_RESPONSE 실패 행으로 남기고 재시도 없이 던진다 (형식 오류는 재시도 대상 아님, SCRUM-128).
+     */
+    private <T> T withRetry(String path, String targetType, String targetId,
+                            BiFunction<String, Duration, Response> attempt, Function<JsonNode, T> reader) {
         String requestId = UUID.randomUUID().toString();
         long deadline = System.nanoTime() + budget.toNanos();
         Classified last = null;
@@ -211,11 +226,9 @@ public class WebClientAiClient implements AiClient {
             Duration remaining = Duration.ofNanos(deadline - System.nanoTime());
             if (remaining.toMillis() <= 0) break;                 // 남은 시간 없으면 재시도 안 함
             long start = System.nanoTime();
+            Response response;
             try {
-                Response response = attempt.apply(requestId, remaining);
-                recordAttempt(path, requestId, tries, response.status(), null, start, response.body(), targetType, targetId);
-                log.info("ai call ok path={} request_id={} ms={} try={}", path, requestId, msSince(start), tries);
-                return response.body();
+                response = attempt.apply(requestId, remaining);
             } catch (RuntimeException e) {
                 last = classify(e);
                 Integer status = e instanceof ClassifiedResponse cr ? cr.aiStatus : null;
@@ -223,7 +236,21 @@ public class WebClientAiClient implements AiClient {
                 log.warn("ai call failed path={} request_id={} code={} http={} retryable={} ms={} try={}",
                         path, requestId, last.ex().code(), last.ex().httpStatus(), last.retryable(), msSince(start), tries);
                 if (!last.retryable()) break;
+                continue;
             }
+            T value;
+            try {
+                value = reader.apply(response.body());
+            } catch (RuntimeException e) {
+                AiClientException bad = classify(e).ex();          // AiClientException 은 그대로, 그 밖은 AI_BAD_RESPONSE
+                recordAttempt(path, requestId, tries, response.status(), bad.code(), start, response.body(), targetType, targetId);
+                log.warn("ai response rejected path={} request_id={} code={} http={} ms={} try={}",
+                        path, requestId, bad.code(), response.status(), msSince(start), tries);
+                throw bad;
+            }
+            recordAttempt(path, requestId, tries, response.status(), null, start, response.body(), targetType, targetId);
+            log.info("ai call ok path={} request_id={} ms={} try={}", path, requestId, msSince(start), tries);
+            return value;
         }
         throw last != null ? last.ex() : new AiClientException("AI_TIMEOUT", "AI 서버 응답 시간 초과", Map.of(), 502);
     }
@@ -249,6 +276,10 @@ public class WebClientAiClient implements AiClient {
         String message = body.hasNonNull("message") ? body.get("message").asText() : ("AI 오류 (HTTP " + status + ")");
         if (status == 409 && "GENERATION_IN_PROGRESS".equals(code)) {         // 409 일 때만 "생성 중" 매핑
             return new ClassifiedResponse(new AiClientException("DRAFT_IN_PROGRESS", message, Map.of(), 409), false, status);
+        }
+        String renamed = RENAMED_AI_CODES.get(status + " " + code);          // 백엔드 자체 코드와 이름이 같은 AI 4xx
+        if (renamed != null) {
+            return new ClassifiedResponse(new AiClientException(renamed, message, Map.of(), 502), false, status);
         }
         boolean retryable = status >= 500 && RETRYABLE_AI_CODES.contains(code);   // 5xx + 해당 코드만 재시도 (4xx 는 안 함)
         return new ClassifiedResponse(new AiClientException(code, message, Map.of(), 502), retryable, status);   // AI 코드 그대로 502

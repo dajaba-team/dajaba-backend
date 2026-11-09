@@ -484,6 +484,120 @@ class WebClientAiClientTest {
         assertThat(row.getAiVersion()).isEqualTo("M1");
     }
 
+    // --- 2xx 뒤 응답 확인 실패 = 실패 행 (SCRUM-128 2차) ----------------------------
+
+    /** 시도 한 번, 행 하나: status=실제 2xx, error=AI_BAD_RESPONSE. 재시도 없음. */
+    private void assertOneBadResponseRow(Throwable e, String endpoint) {
+        assertBadResponse(e);
+        assertThat(server.getRequestCount()).isEqualTo(1);
+        assertThat(writer.rows).hasSize(1);
+        AiCallLog row = writer.rows.get(0);
+        assertThat(row.getEndpoint()).isEqualTo(endpoint);
+        assertThat(row.getAttempt()).isEqualTo((short) 1);
+        assertThat(row.getStatusCode()).isEqualTo(200);
+        assertThat(row.getErrorCode()).isEqualTo("AI_BAD_RESPONSE");
+    }
+
+    @Test
+    void 실패_초안_2xx에_draft_id가_없으면_실패_행이고_본문_메타는_남는다() {
+        server.enqueue(json(200, "{\"generation_id\":\"G9\",\"generation_meta\":{\"prompt_version\":\"P9\"}}"));
+
+        assertOneBadResponseRow(catchThrowable(() -> client.createDraft(draftReq())), "/v1/str/drafts");
+        assertThat(writer.rows.get(0).getGenerationId()).isEqualTo("G9");
+        assertThat(writer.rows.get(0).getAiVersion()).isEqualTo("P9");
+    }
+
+    @Test
+    void 실패_검증_2xx에_verification_id가_없으면_실패_행() throws Exception {
+        server.enqueue(json(200, "{\"generation_id\":\"g-1\",\"verifier_version\":\"V1\"}"));
+        VerifyRequest request = om.readValue(example("verify_request.json"), VerifyRequest.class);
+
+        assertOneBadResponseRow(catchThrowable(() -> client.verify("DRF-000312", request)), "/v1/str/verify");
+        assertThat(writer.rows.get(0).getAiVersion()).isEqualTo("V1");
+    }
+
+    @Test
+    void 실패_요약_2xx에_case_no가_없으면_실패_행() {
+        server.enqueue(json(200, "{\"summary_lines\":[],\"generation_meta\":{\"prompt_version\":\"summary_v1\"}}"));
+
+        assertOneBadResponseRow(catchThrowable(() -> client.caseSummary(new CaseSummaryRequest("CASE-2022-000001",
+                null, List.of(), om.createArrayNode(), 0, null))), "/v1/cases/summary");
+    }
+
+    @Test
+    void 실패_점수_2xx에_alert_id_집합이_다르면_실패_행() {
+        server.enqueue(json(200, scoreBody(7L, List.of("A1", "A9"), "M1", "2026-11-06T01:00:00Z")));
+
+        assertOneBadResponseRow(catchThrowable(() -> client.scores(7L, List.of(alert("A1"), alert("A2")))), "/v1/scores");
+        assertThat(writer.rows.get(0).getAiVersion()).isEqualTo("M1");
+    }
+
+    // --- AI 4xx 이름 충돌 → AI_ 붙여 502 (SCRUM-128 2차) -----------------------------
+
+    private void assertRenamed(int status, String aiCode, String expected) throws Exception {
+        server.enqueue(json(status, "{\"code\":\"" + aiCode + "\",\"message\":\"m\",\"request_id\":\"r\"}"));
+        VerifyRequest request = om.readValue(example("verify_request.json"), VerifyRequest.class);
+
+        assertThatThrownBy(() -> client.verify("DRF-000312", request))
+                .isInstanceOfSatisfying(AiClientException.class, e -> {
+                    assertThat(e.code()).isEqualTo(expected);
+                    assertThat(e.httpStatus()).isEqualTo(502);
+                });
+        assertThat(server.getRequestCount()).isEqualTo(1);
+        assertThat(writer.rows).extracting(AiCallLog::getStatusCode).containsExactly(status);
+        assertThat(writer.rows).extracting(AiCallLog::getErrorCode).containsExactly(expected);
+    }
+
+    @Test
+    void 실패_AI_404_DRAFT_NOT_FOUND는_AI_DRAFT_NOT_FOUND_502() throws Exception {
+        assertRenamed(404, "DRAFT_NOT_FOUND", "AI_DRAFT_NOT_FOUND");
+    }
+
+    @Test
+    void 실패_AI_400_INVALID_REQUEST는_AI_INVALID_REQUEST_502() throws Exception {
+        assertRenamed(400, "INVALID_REQUEST", "AI_INVALID_REQUEST");
+    }
+
+    @Test
+    void 실패_AI_401_UNAUTHENTICATED는_AI_UNAUTHENTICATED_502() throws Exception {
+        assertRenamed(401, "UNAUTHENTICATED", "AI_UNAUTHENTICATED");
+    }
+
+    @Test
+    void 경계_이름이_겹치지_않는_AI_4xx_코드는_그대로_502() throws Exception {
+        assertRenamed(404, "SOMETHING_ELSE", "SOMETHING_ELSE");
+    }
+
+    // --- X-Budget-Ms (SCRUM-128 2차, 11/8 리뷰) -------------------------------------
+
+    private static long budgetMs(RecordedRequest req) {
+        String v = req.getHeader("X-Budget-Ms");
+        assertThat(v).as("X-Budget-Ms").isNotNull().containsOnlyDigits();
+        return Long.parseLong(v);
+    }
+
+    @Test
+    void 정상_매_시도에_남은_예산_ms를_X_Budget_Ms로_보내고_재시도는_줄어든_값() throws Exception {
+        server.enqueue(json(503, "{\"code\":\"LLM_UNAVAILABLE\"}").setBodyDelay(50, TimeUnit.MILLISECONDS));
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));
+
+        client.createDraft(draftReq());
+
+        long first = budgetMs(server.takeRequest());
+        long second = budgetMs(server.takeRequest());
+        assertThat(first).isPositive().isLessThanOrEqualTo(5_000);   // 예산 5초
+        assertThat(second).isPositive().isLessThan(first);
+    }
+
+    @Test
+    void 정상_health에도_X_Budget_Ms를_보낸다() throws Exception {
+        server.enqueue(json(200, "{\"status\":\"ok\"}"));
+
+        client.health();
+
+        assertThat(budgetMs(server.takeRequest())).isPositive().isLessThanOrEqualTo(5_000);
+    }
+
     // --- health (SCRUM-22, 미결 28) — AI main.py health() 실제 칸 ------------------
 
     @Test
