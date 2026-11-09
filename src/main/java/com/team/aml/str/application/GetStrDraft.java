@@ -1,11 +1,9 @@
-
 package com.team.aml.str.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.team.aml.cases.domain.Case;
 import com.team.aml.cases.domain.CaseNotFoundException;
 import com.team.aml.cases.domain.CaseRepository;
-import com.team.aml.cases.domain.NotAssigneeException;
 import com.team.aml.shared.audit.AccessLogWriter;
 import com.team.aml.shared.domain.DisplayNumber;
 import com.team.aml.shared.security.AppUserDetails;
@@ -17,21 +15,25 @@ import com.team.aml.str.domain.StrDraft;
 import com.team.aml.str.domain.StrDraftRepository;
 import com.team.aml.str.domain.StrDraftStatus;
 import com.team.aml.user.domain.Role;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * STR 초안 상세 조회 (계약서 S2).
+ * 본문(FULL)은 담당 조사역·승인자만. 비담당 조사역·ADMIN 은 403 이 아니라 제한 응답(META_ONLY).
+ * 열람 기록 STR_VIEW 는 FULL·META_ONLY 모두 한 줄 — 권한 판단 뒤, 본문 읽기 전. 404 는 기록하지 않는다.
+ */
 @Service
 public class GetStrDraft {
 
-    private static final Pattern DRAFT_NO =
-            Pattern.compile("^DRF-(\\d{6,})$");
+    private static final Pattern DRAFT_NO = Pattern.compile("DRF-(\\d{6,})");
 
     private final StrDraftRepository drafts;
     private final CaseRepository cases;
@@ -39,13 +41,8 @@ public class GetStrDraft {
     private final CurrentUser currentUser;
     private final AccessLogWriter accessLog;
 
-    public GetStrDraft(
-            StrDraftRepository drafts,
-            CaseRepository cases,
-            LatestVerificationRepository verifications,
-            CurrentUser currentUser,
-            AccessLogWriter accessLog
-    ) {
+    public GetStrDraft(StrDraftRepository drafts, CaseRepository cases, LatestVerificationRepository verifications,
+                       CurrentUser currentUser, AccessLogWriter accessLog) {
         this.drafts = drafts;
         this.cases = cases;
         this.verifications = verifications;
@@ -53,154 +50,63 @@ public class GetStrDraft {
         this.accessLog = accessLog;
     }
 
-    /**
-     * 비담당 조사역의 403 시도도 access_logs에 남겨야 한다.
-     * noRollbackFor로 감사 로그 INSERT를 커밋한다.
-     */
-    @Transactional(noRollbackFor = NotAssigneeException.class)
+    /** readOnly 아님 — accessLog.strView 가 MANDATORY·쓰기 트랜잭션을 요구한다. */
+    @Transactional
     public Result execute(String draftNo) {
-
-        // 1. 로그인 사용자 확인
-        AppUserDetails actor = currentUser.require();
-
-        // 2. 화면용 초안 번호를 DB ID로 변환
-        long draftId = parseDraftId(draftNo);
-
-        // 3. 초안 조회
-        StrDraft draft = drafts.findById(draftId)
-                .orElseThrow(() ->
-                        new DraftNotFoundException(draftNo)
-                );
-
-        // 4. 초안이 속한 케이스 조회
-        Case investigationCase = cases.findById(draft.getCaseId())
-                .orElseThrow(() ->
-                        new CaseNotFoundException(draft.getCaseId())
-                );
-
-        // 5. 역할별 권한 검사
-        Role role = Role.valueOf(actor.role());
-
-        if (role == Role.INVESTIGATOR
-                && !Objects.equals(
-                investigationCase.getAssigneeId(),
-                actor.userId()
-        )) {
-
-            // 403 접근 시도도 감사 로그에 기록
-            accessLog.strView(draft.getId());
-
-            throw new NotAssigneeException(
-                    investigationCase.getCaseNo()
-            );
-        }
-
-        if (role != Role.INVESTIGATOR
-                && role != Role.APPROVER
-                && role != Role.ADMIN) {
-            throw new AccessDeniedException(
-                    "STR 초안을 조회할 수 있는 역할이 아닙니다"
-            );
-        }
-
-        // 6. 정상 조회 이력 기록
-        accessLog.strView(draft.getId());
-
-        // 7. ADMIN은 메타데이터만 반환
-        if (role == Role.ADMIN) {
-            return Result.metaOnly(draft);
-        }
-
-        // 8. 전체 조회 권한이면 최신 검증 결과 조회
-        JsonNode latestVerification =
-                verifications.findLatestPayloadByDraftId(draftId)
-                        .orElse(null);
-
-        return Result.full(
-                draft,
-                investigationCase.getCaseNo(),
-                latestVerification
-        );
+        AppUserDetails me = currentUser.require();
+        long draftId = parseDraftNo(draftNo).orElseThrow(() -> new DraftNotFoundException(draftNo));
+        StrDraft draft = drafts.findById(draftId).orElseThrow(() -> new DraftNotFoundException(draftNo));
+        Case c = cases.findById(draft.getCaseId()).orElseThrow(() -> new CaseNotFoundException(draft.getCaseId()));
+        accessLog.strView(draftId);
+        if (!canReadBody(Role.valueOf(me.role()), c, me.userId())) return Result.metaOnly(draft);
+        JsonNode verification = verifications.findLatestByDraftId(draftId).orElse(null);
+        return Result.full(draft, c, verification);
     }
 
-    /**
-     * DRF-000123 → 123
-     * 숫자 ID나 잘못된 형식은 외부에서 허용하지 않는다.
-     */
-    private static long parseDraftId(String draftNo) {
+    /** 본문은 승인자 또는 담당 조사역만. */
+    private static boolean canReadBody(Role role, Case c, long userId) {
+        return role == Role.APPROVER || (role == Role.INVESTIGATOR && Objects.equals(c.getAssigneeId(), userId));
+    }
 
-        Matcher matcher = draftNo == null
-                ? null
-                : DRAFT_NO.matcher(draftNo);
-
-        if (matcher == null || !matcher.matches()) {
-            throw new DraftNotFoundException(
-                    String.valueOf(draftNo)
-            );
+    /** DRF-000123 → 123. 형식이 틀리거나 long 범위를 넘으면 비어 있다(404). DisplayNumber.draftNo 의 반대. */
+    private static Optional<Long> parseDraftNo(String draftNo) {
+        Matcher m = draftNo == null ? null : DRAFT_NO.matcher(draftNo);
+        if (m == null || !m.matches()) {
+            return Optional.empty();
         }
-
         try {
-            return Long.parseLong(matcher.group(1));
+            return Optional.of(Long.parseLong(m.group(1)));
         } catch (NumberFormatException e) {
-            throw new DraftNotFoundException(draftNo);
+            return Optional.empty();
         }
     }
 
-    /**
-     * Application 결과.
-     * API DTO에 의존하지 않고 조회 결과만 전달한다.
-     */
+    public enum Access { FULL, META_ONLY }
+
+    /** 조회 결과. META_ONLY 면 draftNo·access·status·producedAt 만 채우고 나머지는 null. */
     public record Result(
-            String draftId,
-            String generationId,
+            String draftNo,
+            Access access,
             String caseNo,
             StrDraftStatus status,
             Long version,
-            String generatorVersion,
+            Long caseVersion,
             Instant producedAt,
             JsonNode facts,
             List<NarrativeSection> narrative,
             Integer currentRevisionNo,
-            JsonNode latestVerification,
-            boolean metaOnly
+            JsonNode latestVerification
     ) {
 
-        static Result full(
-                StrDraft draft,
-                String caseNo,
-                JsonNode latestVerification
-        ) {
-            return new Result(
-                    DisplayNumber.draftNo(draft.getId()),
-                    draft.getGenerationId(),
-                    caseNo,
-                    draft.getStatus(),
-                    draft.getVersion(),
-                    draft.getGeneratorVersion(),
-                    draft.getProducedAt(),
-                    draft.getFacts(),
-                    draft.currentBody(),
-                    draft.getCurrentRevision().getRevisionNo(),
-                    latestVerification,
-                    false
-            );
+        static Result full(StrDraft draft, Case c, JsonNode latestVerification) {
+            return new Result(DisplayNumber.draftNo(draft.getId()), Access.FULL, c.getCaseNo(), draft.getStatus(),
+                    draft.getVersion(), c.getVersion(), draft.getProducedAt(), draft.getFacts(), draft.currentBody(),
+                    draft.getCurrentRevision().getRevisionNo(), latestVerification);
         }
 
         static Result metaOnly(StrDraft draft) {
-            return new Result(
-                    DisplayNumber.draftNo(draft.getId()),
-                    null,
-                    null,
-                    draft.getStatus(),
-                    null,
-                    null,
-                    draft.getProducedAt(),
-                    null,
-                    null,
-                    null,
-                    null,
-                    true
-            );
+            return new Result(DisplayNumber.draftNo(draft.getId()), Access.META_ONLY, null, draft.getStatus(),
+                    null, null, draft.getProducedAt(), null, null, null, null);
         }
     }
 }

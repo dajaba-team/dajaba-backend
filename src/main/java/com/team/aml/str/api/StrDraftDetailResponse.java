@@ -1,26 +1,26 @@
 package com.team.aml.str.api;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.databind.node.TextNode;
 import com.team.aml.str.application.GetStrDraft;
+import com.team.aml.str.domain.NarrativeSection;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 
-@JsonInclude(JsonInclude.Include.NON_NULL)
+/**
+ * S2 응답. 키는 META_ONLY 여도 모두 나간다(값만 null) — @JsonInclude 를 쓰지 않는다.
+ * facts 의 *account_key 는 원문 대신 *account_no(가린 값)·*account_ref 로 바꾼다 (계약서 2.4, 미결 19).
+ */
 public record StrDraftDetailResponse(
-        String draftId,
-        String generationId,
+        String draftNo,
+        String access,
         String caseNo,
         String status,
         Long version,
-        String generatorVersion,
+        Long caseVersion,
         Instant producedAt,
         JsonNode facts,
         List<Narrative> narrative,
@@ -28,134 +28,55 @@ public record StrDraftDetailResponse(
         JsonNode latestVerification
 ) {
 
-    public static StrDraftDetailResponse from(
-            GetStrDraft.Result result
-    ) {
+    private static final String ACCOUNT_KEY = "account_key";
 
-        // ADMIN: 상태와 생성 시각만 반환
-        if (result.metaOnly()) {
-            return new StrDraftDetailResponse(
-                    result.draftId(),
-                    null,
-                    null,
-                    result.status().name(),
-                    null,
-                    null,
-                    result.producedAt(),
-                    null,
-                    null,
-                    null,
-                    null
-            );
-        }
-
-        // INVESTIGATOR 담당자 / APPROVER: 전체 반환
+    public static StrDraftDetailResponse from(GetStrDraft.Result r) {
         return new StrDraftDetailResponse(
-                result.draftId(),
-                result.generationId(),
-                result.caseNo(),
-                result.status().name(),
-                result.version(),
-                result.generatorVersion(),
-                result.producedAt(),
-                maskAccountKeys(result.facts()),
-                result.narrative().stream()
-                        .map(Narrative::from)
-                        .toList(),
-                result.currentRevisionNo(),
-                result.latestVerification()
-        );
+                r.draftNo(),
+                r.access().name(),
+                r.caseNo(),
+                r.status().name(),
+                r.version(),
+                r.caseVersion(),
+                r.producedAt(),
+                r.facts() == null ? null : maskAccountKeys(r.facts()),
+                r.narrative() == null ? null : r.narrative().stream().map(Narrative::from).toList(),
+                r.currentRevisionNo(),
+                r.latestVerification());
     }
 
-    /**
-     * facts 안의 account_key를 account_masked로 치환한다.
-     * 원본 JsonNode는 수정하지 않는다.
-     */
-    private static JsonNode maskAccountKeys(JsonNode source) {
-
-        JsonNode copy = source.deepCopy();
-        maskRecursively(copy);
-
+    /** 원본은 두고 복사본을 고친다. */
+    private static JsonNode maskAccountKeys(JsonNode facts) {
+        JsonNode copy = facts.deepCopy();
+        mask(copy);
         return copy;
     }
 
-    private static void maskRecursively(JsonNode node) {
-
+    private static void mask(JsonNode node) {
         if (node instanceof ObjectNode object) {
-
             List<String> names = new ArrayList<>();
-
-            Iterator<String> iterator = object.fieldNames();
-            iterator.forEachRemaining(names::add);
-
+            object.fieldNames().forEachRemaining(names::add);
             for (String name : names) {
-
                 JsonNode value = object.get(name);
-
-                if ("account_key".equals(name)) {
-
+                if (name.endsWith(ACCOUNT_KEY)) {
+                    String prefix = name.substring(0, name.length() - ACCOUNT_KEY.length());
+                    String key = value == null || value.isNull() ? null : value.asText();
                     object.remove(name);
-
-                    if (value != null && value.isTextual()) {
-                        object.set(
-                                "account_masked",
-                                TextNode.valueOf(
-                                        maskedAccount(value.asText())
-                                )
-                        );
-                    }
-
+                    object.put(prefix + "account_no", StrAccountDisplay.maskedNo(key));
+                    object.put(prefix + "account_ref", StrAccountDisplay.ref(key));
                 } else {
-                    maskRecursively(value);
+                    mask(value);
                 }
             }
-
         } else if (node instanceof ArrayNode array) {
-            array.forEach(
-                    StrDraftDetailResponse::maskRecursively
-            );
+            array.forEach(StrDraftDetailResponse::mask);
         }
     }
 
-    /**
-     * 010_8000EBD30 → 010_****BD30
-     */
-    private static String maskedAccount(String accountKey) {
+    public record Narrative(String section, String text, List<String> cites, List<Long> evidenceIds) {
 
-        int separator = accountKey.indexOf('_');
-
-        String bank = separator < 0
-                ? ""
-                : accountKey.substring(0, separator + 1);
-
-        String number = separator < 0
-                ? accountKey
-                : accountKey.substring(separator + 1);
-
-        String tail = number.length() > 4
-                ? number.substring(number.length() - 4)
-                : "";
-
-        return bank + "****" + tail;
-    }
-
-    public record Narrative(
-            String section,
-            String text,
-            List<String> cites,
-            @JsonProperty("evidence_ids")
-            List<Long> evidenceIds
-    ) {
-
-        static Narrative from(
-                com.team.aml.str.domain.NarrativeSection section
-        ) {
-            return new Narrative(
-                    section.section().name(),
-                    section.text(),
-                    section.cites(),
-                    section.evidenceIds()
-            );
+        static Narrative from(NarrativeSection s) {
+            return new Narrative(s.section().name(), s.text(), s.cites(), s.evidenceIds());
         }
     }
 }

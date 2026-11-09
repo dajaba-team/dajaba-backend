@@ -5,5 +5,5 @@ import java.util.Optional;
 
 public interface LatestVerificationRepository {
 
-    Optional<JsonNode> findLatestPayloadByDraftId(long draftId);
+    Optional<JsonNode> findLatestByDraftId(long draftId);
 }

@@ -10,7 +10,7 @@ public class DraftNotFoundException extends NotFoundException {
     public DraftNotFoundException(String draftNo) {
         super(
                 "STR 초안을 찾을 수 없습니다: " + draftNo,
-                Map.of("draft_id", draftNo)
+                Map.of("draft_no", draftNo)
         );
     }
 }

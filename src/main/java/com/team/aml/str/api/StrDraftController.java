@@ -36,8 +36,8 @@ public class StrDraftController {
 
     @Operation(
             summary = "STR 초안 상세 조회",
-            description = "담당 조사역·책임자는 전체 조회, ADMIN은 상태·생성 시각만 조회합니다. "
-                    + "담당자가 아닌 조사역은 403 NOT_ASSIGNEE입니다."
+            description = "담당 조사역·승인자는 access FULL(본문 포함). 담당이 아닌 조사역·ADMIN은 200 access META_ONLY "
+                    + "(draft_no·status·produced_at만 값, 나머지 키는 null). 없는 번호·형식 오류는 404 DRAFT_NOT_FOUND."
     )
     @GetMapping("/str-drafts/{draftNo}")
     public StrDraftDetailResponse get(
