@@ -9,7 +9,13 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -146,6 +152,57 @@ class AiExamplesContractTest {
         JsonNode original = readExample("score_response.json").get("scoring_meta");
         ScoringMeta dto = om.treeToValue(original, ScoringMeta.class);
         assertThat(om.valueToTree(dto).toString()).isEqualTo(original.toString());
+    }
+
+    // --- SCRUM-128 요약 예시 (규약 v0.4 §6.1) · MANIFEST ---------------------------
+
+    @Test
+    void summary_request_roundtrip() throws Exception {
+        JsonNode original = readExample("summary_request.json");
+        CaseSummaryRequest dto = om.treeToValue(original, CaseSummaryRequest.class);
+        assertThat(om.valueToTree(dto).toString()).isEqualTo(original.toString());
+        assertThat(dto.caseNo()).isEqualTo("CASE-2022-000057");
+        assertThat(dto.alert().alertId()).isEqualTo("ALT-20220903-000142");
+        assertThat(dto.evidenceTransactionIds()).containsExactly(104221L, 104233L, 104301L);
+        assertThat(dto.priorAlertCount()).isEqualTo(1);
+        assertThat(dto.reportingInstitution()).isEqualTo("Portugal Bank #4507");
+    }
+
+    @Test
+    void summary_response_fields_populated_and_raw_has_original() throws Exception {
+        JsonNode original = readExample("summary_response.json");
+        CaseSummaryResponse dto = om.treeToValue(withRaw(original), CaseSummaryResponse.class);
+        assertThat(dto.producedAt()).isEqualTo("2026-11-06T05:20:00Z");
+        assertThat(dto.caseNo()).isEqualTo("CASE-2022-000057");
+        assertThat(dto.generationId()).isEqualTo("g-2b7c91");
+        assertThat(dto.summaryLines()).hasSize(2);
+        assertThat(dto.codeChecks()).hasSize(4);
+        assertThat(dto.codeChecks().get(0).get("match").asBoolean()).isTrue();
+        assertThat(dto.promptVersion()).isEqualTo("summary_v1");
+        assertThat(dto.raw().toString()).isEqualTo(original.toString());   // model_focus 등 안 쓰는 칸도 원문에
+    }
+
+    /** contracts/MANIFEST.sha256 = AI 리포 기준 커밋의 해시. 사본이 몰래 바뀌거나 MANIFEST 에 빠진 예시가 있으면 깨진다. */
+    @Test
+    void manifest_hashes_match_copies_and_cover_every_example() throws Exception {
+        Path contracts = EXAMPLES.getParent();
+        Map<String, String> manifest = new TreeMap<>();
+        for (String line : Files.readAllLines(contracts.resolve("MANIFEST.sha256"))) {
+            if (line.isBlank()) continue;
+            String[] parts = line.split("\\s+", 2);
+            manifest.put(parts[1].trim(), parts[0]);
+        }
+        Set<String> examples = new TreeSet<>();
+        try (var files = Files.list(EXAMPLES)) {
+            files.map(p -> "examples/" + p.getFileName()).filter(n -> n.endsWith(".json")).forEach(examples::add);
+        }
+
+        assertThat(manifest.keySet()).isEqualTo(examples);
+        MessageDigest sha = MessageDigest.getInstance("SHA-256");
+        for (var e : manifest.entrySet()) {
+            String actual = HexFormat.of().formatHex(sha.digest(Files.readAllBytes(contracts.resolve(e.getKey()))));
+            assertThat(actual).as(e.getKey()).isEqualTo(e.getValue());
+        }
     }
 
     @Test
