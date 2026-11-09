@@ -55,6 +55,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -90,6 +91,8 @@ class RefreshCaseSummaryDbTest {
 
     @MockBean AiClient aiClient;
     @Autowired RefreshCaseSummary refreshSummary;
+    @Autowired GetCaseSummary getSummary;
+    @Autowired GetCaseDetail getDetail;
     @Autowired CaseRepository cases;
     @Autowired CaseHistoryRepository histories;
     @Autowired CaseSummaryRepository summaries;
@@ -342,6 +345,55 @@ class RefreshCaseSummaryDbTest {
     }
 
     // ── 도우미 ────────────────────────────────────────────────
+
+    // ── 현재 요약 조회 (API-13) · 상세 latest_summary ─────────────────
+
+    @Test
+    void 조회_요약이_없으면_summary는_null이고_상세_latest_summary도_null() {
+        Fixture f = caseWithAlert(CaseStatus.REVIEWING, true);
+        loginAs(inv);
+
+        GetCaseSummary.Result r = getSummary.execute(f.c.getCaseNo());
+
+        assertThat(r.caseNo()).isEqualTo(f.c.getCaseNo());
+        assertThat(r.summary()).isNull();
+        assertThat(getDetail.execute(f.c.getCaseNo()).latestSummary()).isNull();
+        verifyNoInteractions(aiClient);
+    }
+
+    @Test
+    void 조회_만든_직후는_is_current_true이고_상세_latest_summary와_같다() {
+        Fixture f = caseWithAlert(CaseStatus.REVIEWING, true);
+        when(aiClient.caseSummary(any())).thenAnswer(i -> ok(i.getArgument(0)));
+        loginAs(inv);
+        CaseSummaryResult made = refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion());
+
+        CaseSummaryResult.Summary now = getSummary.execute(f.c.getCaseNo()).summary();
+
+        assertThat(now.isCurrent()).isTrue();
+        assertThat(now.inputSha256()).isEqualTo(made.summary().inputSha256());
+        assertThat(now.summaryLines()).containsExactly("첫 줄", "둘째 줄");
+        assertThat(getDetail.execute(f.c.getCaseNo()).latestSummary()).isEqualTo(now);
+    }
+
+    @Test
+    void 조회_요약_입력이_바뀌면_is_current_false이고_요약은_그대로_준다() {
+        Fixture f = caseWithAlert(CaseStatus.REVIEWING, false);   // 점수 없음 → reasons []
+        when(aiClient.caseSummary(any())).thenAnswer(i -> ok(i.getArgument(0)));
+        loginAs(inv);
+        refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion());
+        score(f.alertId);                                         // 점수가 들어와 reasons 가 바뀜
+
+        CaseSummaryResult.Summary now = getSummary.execute(f.c.getCaseNo()).summary();
+
+        assertThat(now.isCurrent()).isFalse();
+        assertThat(now.summaryLines()).containsExactly("첫 줄", "둘째 줄");
+    }
+
+    @Test
+    void 실패_없는_케이스_요약_조회는_404() {
+        assertThatThrownBy(() -> getSummary.execute("CASE-2099-999997")).isInstanceOf(CaseNotFoundException.class);
+    }
 
     private record Fixture(Case c, long alertId, String alertNo, long tx1, long tx2) {}
 

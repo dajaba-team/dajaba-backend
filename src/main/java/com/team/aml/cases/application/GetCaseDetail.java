@@ -39,10 +39,11 @@ import java.util.Map;
  * 열람 기록이 조회 트랜잭션에 참여하므로 readOnly 가 아니다 — 커넥션 하나, 조회가 실패하면 기록도 롤백.
  * 순서: 케이스 조회(없으면 404, 기록 안 함) → accessLog.view(CASE) → 이력·담당자·버튼 계산.
  *
- * <p>이번에 채우는 것: 케이스 칸·담당자·최근 이력 20건·available_actions, alert·latest_score(detection GetAlertSummary, SCRUM-152).
+ * <p>이번에 채우는 것: 케이스 칸·담당자·최근 이력 20건·available_actions, alert·latest_score(detection GetAlertSummary, SCRUM-152),
+ * latest_summary(API-13 과 같은 값 — GetCaseSummary, SCRUM-175).
  * score·score_band·policy_version 은 계약서 Q2 MVP 대로 latest_score 와 같은 값(지금 정책으로 계산). 생성 때 스냅샷은 후속.
- * 아직 없는 것(후속): aggregates·latest_summary·investigator_notes
- * (API-08·12·05), current_draft 본문(str 조합 계층, 노션 미결 17). 컨트롤러가 그 칸은 null 로 내보낸다.
+ * 아직 없는 것(후속): aggregates·investigator_notes
+ * (API-08·05), current_draft 본문(str 조합 계층, 노션 미결 17). 컨트롤러가 그 칸은 null 로 내보낸다.
  */
 @Service
 public class GetCaseDetail {
@@ -50,7 +51,8 @@ public class GetCaseDetail {
     public record Result(String caseNo, CaseStatus status, String accountKey, String entityId, UserRef assignee,
                          RejectionReasonCode rejectionReasonCode, CloseReason closeReason, Long currentDraftId,
                          long version, Instant createdAt, Instant updatedAt, Alert alert, LatestScore latestScore,
-                         String policyVersion, List<History> history, List<CaseAction> availableActions) {
+                         String policyVersion, CaseSummaryResult.Summary latestSummary, List<History> history,
+                         List<CaseAction> availableActions) {
         public Result {
             history = history == null ? List.of() : List.copyOf(history);
             availableActions = availableActions == null ? List.of() : List.copyOf(availableActions);
@@ -84,10 +86,11 @@ public class GetCaseDetail {
     private final CurrentUser currentUser;
     private final GetAlertSummary alertSummary;
     private final CasePolicySource policySource;
+    private final GetCaseSummary caseSummary;
 
     public GetCaseDetail(CaseRepository cases, CaseHistoryRepository histories, UserRefs userRefs,
                          AccessLogWriter accessLog, CurrentUser currentUser, GetAlertSummary alertSummary,
-                         CasePolicySource policySource) {
+                         CasePolicySource policySource, GetCaseSummary caseSummary) {
         this.cases = cases;
         this.histories = histories;
         this.userRefs = userRefs;
@@ -95,6 +98,7 @@ public class GetCaseDetail {
         this.currentUser = currentUser;
         this.alertSummary = alertSummary;
         this.policySource = policySource;
+        this.caseSummary = caseSummary;
     }
 
     @Transactional
@@ -124,7 +128,7 @@ public class GetCaseDetail {
                         a.transactionCount()),
                 new LatestScore(s.status(), s.score(), band == null ? null : band.band(), s.failureCode(),
                         s.modelVersion(), s.featureVersion(), s.dataQualityStatus(), s.reasons()),
-                band == null ? null : band.policyVersion(), history, actions);
+                band == null ? null : band.policyVersion(), caseSummary.latestOf(c), history, actions);
     }
 
     /** 점수가 없거나 정책이 설정되지 않았으면 null. 등급이 없다고 LOW 로 바꾸지 않는다. */

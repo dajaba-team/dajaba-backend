@@ -64,11 +64,12 @@
 
 **AI 조사 요약** 〔초안 — CASES 명세 API-12·13·§7.2〕 "DB → AI → DB" 패턴. 입력 스냅샷과 `input_sha256`을 저장해 `is_current`를 계산(케이스 version 차이로 계산하지 않음). 실패해도 조사는 계속(요약은 보조). AI 실패를 빈 요약·LOW로 바꾸지 않아요.
 
-**`RefreshCaseSummary` — 구현됨 (API-12, 컨트롤러는 SCRUM-106)** `execute(caseNo, version)` → `CaseSummaryResult{case_no, summary{summary_lines, model_focus, produced_at, generator_version, based_on_case_version, is_current, input_sha256}, case_version}`. 클래스에 트랜잭션이 없어요(AI 대기 중 DB 트랜잭션·락 없음).
+**`RefreshCaseSummary` — 구현됨 (API-12, 컨트롤러 `POST …/refresh-summary` → 201, SCRUM-175)** `execute(caseNo, version)` → `CaseSummaryResult{case_no, summary{summary_lines, model_focus, produced_at, generator_version, based_on_case_version, is_current, input_sha256}, case_version}`. 클래스에 트랜잭션이 없어요(AI 대기 중 DB 트랜잭션·락 없음).
 - **요청 모양 — 규약 v0.4 §6.1 (11/6)** `{case_no, alert, evidence_transaction_ids, reasons, prior_alert_count, reporting_institution}`. `alert`·`reasons`·`prior_alert_count`는 STR 초안 요청과 같은 값이라 detection `GetAlertForDraft`(#64, SCRUM-155)로 만들어요. `evidence_transaction_ids`는 경보 거래 전체(중복 제거·오름차순), 점수가 아직 없으면 `reasons`는 `[]`(AI는 null을 422로 거절), `reporting_institution`은 null(AI가 거래자 계좌 은행명). **메모는 넣지 않아요**(C6) — 메모만 바뀌면 `is_current`는 그대로.
 - 순서: ① 읽기 트랜잭션 — 404 `CASE_NOT_FOUND` → 409 `CONCURRENT_UPDATE`(version) → 403 `NOT_ASSIGNEE` → 409 `INVALID_CASE_TRANSITION`(`isEditableByAssignee` 아님, `details.action = REFRESH_SUMMARY`) → 요청 구성·입력 해시. ② 트랜잭션 밖 `AiClient.caseSummary`. 실패는 AI 코드 그대로 502. 응답 `case_no`가 다르거나 `produced_at`·`generation_meta.prompt_version`·`code_checks`가 없거나 비었거나(AI 요약은 4종을 항상 줌) `summary_lines`가 없거나 6개를 넘으면 502 `AI_BAD_RESPONSE`. **`code_checks` 중 하나라도 `match=false`면 저장하지 않고 502 `SUMMARY_CODE_CHECK_FAILED`**(`details.failed_checks`, 〔제안 코드〕). ③ 저장 트랜잭션 — `findForUpdate` 뒤 ①의 검사를 다시 하고(그사이 종결·재배정이면 409) 요약 입력을 다시 만들어 해시가 다르면 409 `CONCURRENT_UPDATE`. 통과하면 `case_summaries` 한 행(응답 원문·입력 스냅샷·해시·`based_on_case_version` = 호출 전 version) + `cases.version` +1(`bumpVersion`, 이력 행 없음). `model_focus`("모델이 주목한 점" 한 줄, null 가능)는 `summary_lines`와 섞지 않고 따로 내보내요.
 - 입력 해시(`CaseSummaryInput`): 요청 본문 JSON의 객체 키를 재귀 정렬, 공백 없이 UTF-8 SHA-256. 배열 순서는 그대로. 백엔드 안에서만 비교해요(AI와 맞출 벡터 없음).
-- 남은 것: API-13 `GET …/summary`(같은 `Summary` 모양 + 지금 입력으로 다시 만든 해시로 `is_current`), 상세의 `latest_summary`, 컨트롤러(SCRUM-106).
+- 요청·입력 해시는 `CaseSummaryInputs` 한 곳에서 만들어요 — 갱신과 `is_current` 판정이 같은 코드를 써야 해시가 맞아요.
+- **`GetCaseSummary` — 구현됨 (API-13 `GET …/summary`, SCRUM-175)** 조회 3역할. `{case_no, summary}` — 요약이 없으면 `summary: null`. `is_current`는 지금 입력으로 다시 만든 해시와 비교(메모·상태만 바뀌면 그대로 true). 상세의 `latest_summary`도 같은 값(`latestOf`). **C7은 열람 기록을 남기지 않아요** — 케이스 열람 기록은 상세(API-02)가 남겨요(#79 리뷰).
 
 **API** 〔초안 — CASES 명세 v0.5〕
 | ID | API | 권한 |
@@ -102,7 +103,7 @@
 - **`available_actions` (`CaseAction`)** — 계약서 §4의 8개. `ASSIGN`(OPEN, 조사역·ADMIN) · `REASSIGN`(ADMIN, 재배정 가능 상태) · 담당만: `UPDATE_NOTES`·`REFRESH_SUMMARY`(REVIEWING·ESCALATED·DRAFTED·보완 반려) · `ESCALATE` · `CLOSE`/`CLOSE_WITH_DRAFT`(닫을 수 있는 상태에서 초안 유무로 하나) · `GENERATE_DRAFT`(초안을 붙일 수 있는 상태). 상태 판단은 **`CaseStatus.allows(CaseAction, 반려 코드)` 한 곳**이에요 — 상태를 바꾸는 동작은 전이 표 그대로, 상태가 그대로인 동작(재배정·메모·요약)은 같은 enum의 집합으로. `Case.reassign`·`isEditableByAssignee`도 이걸 불러요. 누가(역할·담당자)와 초안 유무는 `availableFor`·유스케이스가 더 봐요 [SCRUM-171, 3주차 리뷰 질문 2].
 - **경보·점수 칸** — 상세 `alert`(alert_no·rule_id·batch_date·window_start·window_end·reference_ts·transaction_count)와 `latest_score`(score_status·score·score_band·failure_code·model_version·feature_version·data_quality_status·reasons)는 detection `GetAlertSummary`로 채워요(SCRUM-152·103). `latest_score`는 늘 있고, 점수 전(PENDING)·실패(FAILED)면 score_status만 있고 점수 칸은 null, reasons는 `[]`. `score_band`는 지금 운영 정책(`CasePolicy`)으로 계산 — 정책이 설정되지 않았으면 null(상세는 막지 않음, LOW로 바꾸지 않음). 계약서 C2에 없던 `transaction_count`·`failure_code`는 계약서에 한 줄씩 추가.
 - **맨 위 `score`·`score_band`·`policy_version`** — 계약서 Q2 MVP대로 `latest_score.score`·`score_band`와 그때 쓴 정책 버전(#78 리뷰). 케이스 생성 때 저장하는 스냅샷은 후속.
-- **아직 null인 칸 (후속)** — 목록의 `score`·`score_band`는 아직 null이에요(상세만 채움). 그래서 지금 `sort=score`는 "점수 전부 null"과 같은 결과(= 동률 규칙 `created_at DESC, id DESC`). `aggregates`·`latest_summary`·`investigator_notes`는 API-08·12·05, `current_draft`는 str 조합 계층(미결 17).
+- **아직 null인 칸 (후속)** — 목록의 `score`·`score_band`는 아직 null이에요(상세만 채움). 그래서 지금 `sort=score`는 "점수 전부 null"과 같은 결과(= 동률 규칙 `created_at DESC, id DESC`). `aggregates`·`investigator_notes`는 API-08·05, `current_draft`는 str 조합 계층(미결 17).
 - 조사역이 다른 assignee를 지정하면 **409 `INVALID_ASSIGNEE`(`details.reason = SELF_ONLY`)** 로 확정(11/6). 명세 API-03은 400이었지만 400 `INVALID_REQUEST`는 형식 오류용이에요. 프론트는 `reason`으로 문구를 나눠요(`08_decisions.md` 11/6, SCRUM-153).
 
 **컨트롤러 — 구현됨 (SCRUM-106)** `CaseController` `/api/v1/cases` — 01 목록 · 02 상세 · 03 배정 · 07 에스컬레이션 · 06 종료(초안 없음). 응답은 계약서 v0.2 C1·C2·5.3 모양이에요.
@@ -110,7 +111,7 @@
 - **계좌(미결 19)** — 원본 `account_key`는 응답에 없어요. `account_no` = 은행ID + `****` + 끝 4자리(`010_****BD30`, 번호가 4자리 이하면 끝자리도 가림), `account_ref` = `ACR-` + `account_key` SHA-256 앞 12자리(같은 계좌는 어느 응답에서나 같은 값). 〔확인 필요〕 키 없는 해시라 계좌 목록이 있으면 대조할 수 있어요 — 발급 규칙은 SOURCE·공통 담당이 정하기로 했으니(CASES 명세 §5) 실데이터 전에 서버 비밀값 HMAC 같은 규칙으로 바꿔요. 형식은 그대로. `AccountDisplay` 한 곳만 고치면 돼요.
 - **초안 번호** — `current_draft_id`(내부 id)는 `current_draft_no`(`DRF-000123`, `DisplayNumber.draftNo`)로 바꿔 보내요(계약서 Q14).
 - **아직 null·[]인 칸**은 위 "아직 null인 칸"과 같아요. 키는 빼지 않아요(계약서 2.3). `customer`·`prior_alerts`도 후속.
-- 남은 API: 04 재배정, 05 메모, 08~11·15 거래·근거·그래프·이력·메모 이력, 12·13 요약 — 각각 유스케이스가 생기면 이 컨트롤러에 붙여요.
+- 남은 API: 04 재배정, 05 메모, 08~11·15 거래·근거·그래프·이력·메모 이력 — 각각 유스케이스가 생기면 이 컨트롤러에 붙여요.
 
 **str에 주는 공개 기능 — 구현됨 (SCRUM-98)** 모두 `Propagation.MANDATORY`라 str 트랜잭션 안에서만 불러요(혼자 부르면 `IllegalTransactionStateException`).
 
