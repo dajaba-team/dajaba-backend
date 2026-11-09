@@ -12,6 +12,7 @@ import com.team.aml.cases.domain.CloseRequiresStrException;
 import com.team.aml.cases.domain.InvalidAssigneeException;
 import com.team.aml.cases.domain.InvalidCaseTransitionException;
 import com.team.aml.cases.domain.NotAssigneeException;
+import com.team.aml.cases.domain.ScoreBand;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.user.domain.UserNotFoundException;
 import jakarta.persistence.OptimisticLockException;
@@ -46,7 +47,10 @@ import static org.assertj.core.api.Assertions.tuple;
 
 /** 화면에서 부르는 cases 유스케이스 — 배정·에스컬레이션·종료·목록·상세 (SCRUM-105). 실제 PostgreSQL. */
 @Testcontainers
-@SpringBootTest
+@SpringBootTest(properties = {   // 상세 score_band 계산용 (OpenCasesFromAlertsDbTest 와 같은 값)
+        "aml.case-policy.version=test-v1",
+        "aml.case-policy.low-to-medium=0.5",
+        "aml.case-policy.medium-to-high=0.9"})
 @ActiveProfiles("test")
 class CaseUseCasesDbTest {
 
@@ -297,6 +301,8 @@ class CaseUseCasesDbTest {
         assertThat(r.alert().transactionCount()).isZero();
         assertThat(r.latestScore().scoreStatus()).isEqualTo("PENDING");   // 점수 전 — 칸은 null, reasons 는 []
         assertThat(r.latestScore().score()).isNull();
+        assertThat(r.latestScore().scoreBand()).isNull();
+        assertThat(r.policyVersion()).isNull();
         assertThat(r.latestScore().reasons().isArray()).isTrue();
         assertThat(r.latestScore().reasons()).isEmpty();
 
@@ -317,10 +323,13 @@ class CaseUseCasesDbTest {
                 c.getAlertId(), "p-" + c.getAlertId());
         login(inv);
 
-        GetCaseDetail.LatestScore s = detail.execute(c.getCaseNo()).latestScore();
+        GetCaseDetail.Result r = detail.execute(c.getCaseNo());
+        GetCaseDetail.LatestScore s = r.latestScore();
+        assertThat(r.policyVersion()).isEqualTo("test-v1");     // 맨 위 score·score_band·policy_version 은 Q2 MVP 로 같은 값
 
         assertThat(s.scoreStatus()).isEqualTo("SCORED");
         assertThat(s.score()).isEqualByComparingTo("0.91");
+        assertThat(s.scoreBand()).isEqualTo(ScoreBand.HIGH);   // 0.91 ≥ 0.9
         assertThat(s.modelVersion()).isEqualTo("xgb-test");
         assertThat(s.featureVersion()).isEqualTo("f1");
         assertThat(s.dataQualityStatus()).isEqualTo("OK");

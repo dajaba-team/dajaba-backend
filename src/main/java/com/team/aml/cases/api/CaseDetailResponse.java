@@ -16,7 +16,7 @@ import java.util.List;
  * 통합 상세 (계약서 C2, CASES 명세 API-02). 키는 계약서 모양 그대로 두고, 아직 채울 수 없는 칸은 null·[] 로 보낸다.
  * <ul>
  *   <li>alert·latest_score — detection GetAlertSummary 로 채운다 (SCRUM-152)</li>
- *   <li>score·score_band·policy_version — 케이스 생성 때 cases 가 저장하는 스냅샷 후 (계약서 Q2)</li>
+ *   <li>score·score_band·policy_version — 계약서 Q2 MVP: latest_score 와 같은 값 (생성 때 스냅샷은 후속)</li>
  *   <li>aggregates·latest_summary·investigator_notes — API-08·12·05 후</li>
  *   <li>current_draft 본문 — str 조합 계층 후 (노션 미결 17). 번호 current_draft_no 는 지금 준다</li>
  *   <li>customer·prior_alerts — 후속</li>
@@ -40,7 +40,8 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
 
     static CaseDetailResponse from(GetCaseDetail.Result r) {
         return new CaseDetailResponse(r.caseNo(), r.status(), AccountDisplay.ref(r.accountKey()),
-                AccountDisplay.maskedNo(r.accountKey()), r.entityId(), r.assignee(), null, null, null,
+                AccountDisplay.maskedNo(r.accountKey()), r.entityId(), r.assignee(), r.latestScore().score(),
+                r.latestScore().scoreBand(), r.policyVersion(),
                 r.rejectionReasonCode(), r.version(), r.createdAt(), r.updatedAt(), r.alert(), null, null,
                 r.closeReason(), r.latestScore(), null, null, CaseChangeResponse.draftNo(r.currentDraftId()), null,
                 List.of(), r.history(), r.availableActions());

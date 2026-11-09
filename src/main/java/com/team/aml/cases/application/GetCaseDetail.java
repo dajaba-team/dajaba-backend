@@ -9,8 +9,12 @@ import com.team.aml.cases.domain.CaseHistoryRepository;
 import com.team.aml.cases.domain.CaseNotFoundException;
 import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.cases.domain.CaseStatus;
+import com.team.aml.cases.domain.CasePolicySource;
 import com.team.aml.cases.domain.CloseReason;
+import com.team.aml.cases.domain.PolicyNotConfiguredException;
 import com.team.aml.cases.domain.RejectionReasonCode;
+import com.team.aml.cases.domain.ScoreBand;
+import com.team.aml.cases.domain.ScoreClassification;
 import com.team.aml.detection.application.GetAlertSummary;
 import com.team.aml.detection.domain.AlertSummary;
 import com.team.aml.shared.audit.AccessLogWriter;
@@ -36,7 +40,8 @@ import java.util.Map;
  * 순서: 케이스 조회(없으면 404, 기록 안 함) → accessLog.view(CASE) → 이력·담당자·버튼 계산.
  *
  * <p>이번에 채우는 것: 케이스 칸·담당자·최근 이력 20건·available_actions, alert·latest_score(detection GetAlertSummary, SCRUM-152).
- * 아직 없는 것(후속): score·score_band·policy_version(케이스 생성 때 저장하는 스냅샷, 계약서 Q2), aggregates·latest_summary·investigator_notes
+ * score·score_band·policy_version 은 계약서 Q2 MVP 대로 latest_score 와 같은 값(지금 정책으로 계산). 생성 때 스냅샷은 후속.
+ * 아직 없는 것(후속): aggregates·latest_summary·investigator_notes
  * (API-08·12·05), current_draft 본문(str 조합 계층, 노션 미결 17). 컨트롤러가 그 칸은 null 로 내보낸다.
  */
 @Service
@@ -45,7 +50,7 @@ public class GetCaseDetail {
     public record Result(String caseNo, CaseStatus status, String accountKey, String entityId, UserRef assignee,
                          RejectionReasonCode rejectionReasonCode, CloseReason closeReason, Long currentDraftId,
                          long version, Instant createdAt, Instant updatedAt, Alert alert, LatestScore latestScore,
-                         List<History> history, List<CaseAction> availableActions) {
+                         String policyVersion, List<History> history, List<CaseAction> availableActions) {
         public Result {
             history = history == null ? List.of() : List.copyOf(history);
             availableActions = availableActions == null ? List.of() : List.copyOf(availableActions);
@@ -59,9 +64,11 @@ public class GetCaseDetail {
 
     /**
      * 경보의 최근 점수 (계약서 C2 latest_score). 늘 있다 — 점수 전(PENDING)·실패(FAILED)면 scoreStatus 만 있고
-     * score·modelVersion·featureVersion·dataQualityStatus 는 null, reasons 는 [] (계약서 2.3).
+     * score·scoreBand·modelVersion·featureVersion·dataQualityStatus 는 null, reasons 는 [] (계약서 2.3).
+     * scoreBand 는 지금 운영 정책(CasePolicy)으로 계산한다. 정책이 설정되지 않았으면 null — 상세 조회는 막지 않는다.
      */
-    public record LatestScore(String scoreStatus, BigDecimal score, String failureCode, String modelVersion,
+    public record LatestScore(String scoreStatus, BigDecimal score, ScoreBand scoreBand, String failureCode,
+                              String modelVersion,
                               String featureVersion, String dataQualityStatus, JsonNode reasons) {
     }
 
@@ -76,15 +83,18 @@ public class GetCaseDetail {
     private final AccessLogWriter accessLog;
     private final CurrentUser currentUser;
     private final GetAlertSummary alertSummary;
+    private final CasePolicySource policySource;
 
     public GetCaseDetail(CaseRepository cases, CaseHistoryRepository histories, UserRefs userRefs,
-                         AccessLogWriter accessLog, CurrentUser currentUser, GetAlertSummary alertSummary) {
+                         AccessLogWriter accessLog, CurrentUser currentUser, GetAlertSummary alertSummary,
+                         CasePolicySource policySource) {
         this.cases = cases;
         this.histories = histories;
         this.userRefs = userRefs;
         this.accessLog = accessLog;
         this.currentUser = currentUser;
         this.alertSummary = alertSummary;
+        this.policySource = policySource;
     }
 
     @Transactional
@@ -104,6 +114,7 @@ public class GetCaseDetail {
         List<CaseAction> actions = CaseAction.availableFor(c, me.userId(), Role.valueOf(me.role()));
         AlertSummary a = alertSummary.execute(c.getAlertId());   // alert_id 는 FK·NOT NULL 이라 늘 있다
         AlertSummary.Score s = a.score();
+        ScoreClassification band = classify(s.score());
 
         return new Result(c.getCaseNo(), c.getStatus(), c.getAccountKey(), c.getEntityId(),
                 refs.get(c.getAssigneeId()), c.getRejectionReasonCode(), c.getCloseReason(), c.getCurrentDraftId(),
@@ -111,9 +122,21 @@ public class GetCaseDetail {
                 c.getUpdatedAt().truncatedTo(ChronoUnit.SECONDS),
                 new Alert(a.alertNo(), a.ruleId(), a.batchDate(), a.windowStart(), a.windowEnd(), a.referenceTs(),
                         a.transactionCount()),
-                new LatestScore(s.status(), s.score(), s.failureCode(), s.modelVersion(), s.featureVersion(),
-                        s.dataQualityStatus(), s.reasons()),
-                history, actions);
+                new LatestScore(s.status(), s.score(), band == null ? null : band.band(), s.failureCode(),
+                        s.modelVersion(), s.featureVersion(), s.dataQualityStatus(), s.reasons()),
+                band == null ? null : band.policyVersion(), history, actions);
+    }
+
+    /** 점수가 없거나 정책이 설정되지 않았으면 null. 등급이 없다고 LOW 로 바꾸지 않는다. */
+    private ScoreClassification classify(BigDecimal score) {
+        if (score == null) {
+            return null;
+        }
+        try {
+            return policySource.current().classify(score, null);
+        } catch (PolicyNotConfiguredException e) {
+            return null;
+        }
     }
 
     private static String loginIdOf(UserRef ref) {
