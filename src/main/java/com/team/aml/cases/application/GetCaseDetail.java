@@ -35,8 +35,9 @@ import java.util.Map;
  * 열람 기록이 조회 트랜잭션에 참여하므로 readOnly 가 아니다 — 커넥션 하나, 조회가 실패하면 기록도 롤백.
  * 순서: 케이스 조회(없으면 404, 기록 안 함) → accessLog.view(CASE) → 이력·담당자·버튼 계산.
  *
- * <p>이번에 채우는 것: 케이스 칸·담당자·최근 이력 20건·available_actions, alert·latest_score(detection GetAlertSummary, SCRUM-152).
- * 아직 없는 것(후속): score·score_band·policy_version(케이스 생성 때 저장하는 스냅샷, 계약서 Q2), aggregates·latest_summary·investigator_notes
+ * <p>이번에 채우는 것: 케이스 칸·담당자·최근 이력 20건·available_actions, alert·latest_score(detection GetAlertSummary, SCRUM-152),
+ * latest_summary(API-13 과 같은 값 — GetCaseSummary, SCRUM-175).
+ * 아직 없는 것(후속): score·score_band·policy_version(케이스 생성 때 저장하는 스냅샷, 계약서 Q2), aggregates·investigator_notes
  * (API-08·12·05), current_draft 본문(str 조합 계층, 노션 미결 17). 컨트롤러가 그 칸은 null 로 내보낸다.
  */
 @Service
@@ -45,7 +46,7 @@ public class GetCaseDetail {
     public record Result(String caseNo, CaseStatus status, String accountKey, String entityId, UserRef assignee,
                          RejectionReasonCode rejectionReasonCode, CloseReason closeReason, Long currentDraftId,
                          long version, Instant createdAt, Instant updatedAt, Alert alert, LatestScore latestScore,
-                         List<History> history, List<CaseAction> availableActions) {
+                         CaseSummaryResult.Summary latestSummary, List<History> history, List<CaseAction> availableActions) {
         public Result {
             history = history == null ? List.of() : List.copyOf(history);
             availableActions = availableActions == null ? List.of() : List.copyOf(availableActions);
@@ -76,15 +77,18 @@ public class GetCaseDetail {
     private final AccessLogWriter accessLog;
     private final CurrentUser currentUser;
     private final GetAlertSummary alertSummary;
+    private final GetCaseSummary caseSummary;
 
     public GetCaseDetail(CaseRepository cases, CaseHistoryRepository histories, UserRefs userRefs,
-                         AccessLogWriter accessLog, CurrentUser currentUser, GetAlertSummary alertSummary) {
+                         AccessLogWriter accessLog, CurrentUser currentUser, GetAlertSummary alertSummary,
+                         GetCaseSummary caseSummary) {
         this.cases = cases;
         this.histories = histories;
         this.userRefs = userRefs;
         this.accessLog = accessLog;
         this.currentUser = currentUser;
         this.alertSummary = alertSummary;
+        this.caseSummary = caseSummary;
     }
 
     @Transactional
@@ -113,7 +117,7 @@ public class GetCaseDetail {
                         a.transactionCount()),
                 new LatestScore(s.status(), s.score(), s.failureCode(), s.modelVersion(), s.featureVersion(),
                         s.dataQualityStatus(), s.reasons()),
-                history, actions);
+                caseSummary.latestOf(c), history, actions);
     }
 
     private static String loginIdOf(UserRef ref) {

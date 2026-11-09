@@ -1,5 +1,6 @@
 package com.team.aml.cases.api;
 
+import com.team.aml.cases.application.CaseSummaryResult;
 import com.team.aml.cases.application.GetCaseDetail;
 import com.team.aml.cases.application.UserRef;
 import com.team.aml.cases.domain.CaseAction;
@@ -17,7 +18,8 @@ import java.util.List;
  * <ul>
  *   <li>alert·latest_score — detection GetAlertSummary 로 채운다 (SCRUM-152)</li>
  *   <li>score·score_band·policy_version — 케이스 생성 때 cases 가 저장하는 스냅샷 후 (계약서 Q2)</li>
- *   <li>aggregates·latest_summary·investigator_notes — API-08·12·05 후</li>
+ *   <li>latest_summary — API-13 과 같은 값 (요약 없으면 null, SCRUM-175)</li>
+ *   <li>aggregates·investigator_notes — API-08·05 후</li>
  *   <li>current_draft 본문 — str 조합 계층 후 (노션 미결 17). 번호 current_draft_no 는 지금 준다</li>
  *   <li>customer·prior_alerts — 후속</li>
  * </ul>
@@ -28,7 +30,7 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
                                  String policyVersion, RejectionReasonCode rejectionReasonCode, long version,
                                  Instant createdAt, Instant updatedAt, GetCaseDetail.Alert alert, Object customer,
                                  String investigatorNotes, CloseReason closeReason, GetCaseDetail.LatestScore latestScore,
-                                 Object aggregates, Object latestSummary, String currentDraftNo, Object currentDraft,
+                                 Object aggregates, CaseSummaryResult.Summary latestSummary, String currentDraftNo, Object currentDraft,
                                  List<Object> priorAlerts, List<GetCaseDetail.History> history,
                                  List<CaseAction> availableActions) {
 
@@ -42,7 +44,7 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
         return new CaseDetailResponse(r.caseNo(), r.status(), AccountDisplay.ref(r.accountKey()),
                 AccountDisplay.maskedNo(r.accountKey()), r.entityId(), r.assignee(), null, null, null,
                 r.rejectionReasonCode(), r.version(), r.createdAt(), r.updatedAt(), r.alert(), null, null,
-                r.closeReason(), r.latestScore(), null, null, CaseChangeResponse.draftNo(r.currentDraftId()), null,
-                List.of(), r.history(), r.availableActions());
+                r.closeReason(), r.latestScore(), null, r.latestSummary(),
+                CaseChangeResponse.draftNo(r.currentDraftId()), null, List.of(), r.history(), r.availableActions());
     }
 }

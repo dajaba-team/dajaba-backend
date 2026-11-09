@@ -1,25 +1,30 @@
 package com.team.aml.cases.api;
 
 import com.team.aml.cases.application.AssignCase;
+import com.team.aml.cases.application.CaseSummaryResult;
 import com.team.aml.cases.application.CloseCase;
 import com.team.aml.cases.application.EscalateCase;
 import com.team.aml.cases.application.GetCaseDetail;
+import com.team.aml.cases.application.GetCaseSummary;
 import com.team.aml.cases.application.ListCases;
+import com.team.aml.cases.application.RefreshCaseSummary;
 import com.team.aml.shared.api.PageResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springdoc.core.annotations.ParameterObject;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 케이스 목록·상세·배정·에스컬레이션·종료 (CASES 명세 API-01·02·03·06·07, 계약서 C1·C2·A1·A4·A5).
+ * 케이스 목록·상세·배정·에스컬레이션·종료·AI 조사 요약 (CASES 명세 API-01·02·03·06·07·12·13, 계약서 C1·C2·C7·A1·A4·A5·A7).
  * 조회 3역할 모두 — SecurityConfig 의 /api/** authenticated. 담당자·상태 검사는 유스케이스·엔티티가 한다.
  * 응답은 유스케이스 record 를 화면 모양으로 바꾼 것 — 원본 account_key 는 내보내지 않는다(AccountDisplay).
  */
@@ -33,14 +38,19 @@ public class CaseController {
     private final AssignCase assignCase;
     private final EscalateCase escalateCase;
     private final CloseCase closeCase;
+    private final RefreshCaseSummary refreshCaseSummary;
+    private final GetCaseSummary getCaseSummary;
 
     public CaseController(ListCases listCases, GetCaseDetail getCaseDetail, AssignCase assignCase,
-                          EscalateCase escalateCase, CloseCase closeCase) {
+                          EscalateCase escalateCase, CloseCase closeCase, RefreshCaseSummary refreshCaseSummary,
+                          GetCaseSummary getCaseSummary) {
         this.listCases = listCases;
         this.getCaseDetail = getCaseDetail;
         this.assignCase = assignCase;
         this.escalateCase = escalateCase;
         this.closeCase = closeCase;
+        this.refreshCaseSummary = refreshCaseSummary;
+        this.getCaseSummary = getCaseSummary;
     }
 
     @Operation(summary = "케이스 목록",
@@ -78,5 +88,23 @@ public class CaseController {
     public CaseChangeResponse close(@PathVariable String caseNo, @Valid @RequestBody CloseCaseRequest request) {
         return CaseChangeResponse.from(
                 closeCase.execute(caseNo, request.version(), request.closeReason(), request.comment()));
+    }
+
+    @Operation(summary = "AI 조사 요약 생성·갱신",
+            description = "담당만(403 NOT_ASSIGNEE), 편집 가능 상태만(409 INVALID_CASE_TRANSITION·action=REFRESH_SUMMARY). "
+                    + "버전 다르면 409 CONCURRENT_UPDATE. AI 실패·코드 검사 실패(502 SUMMARY_CODE_CHECK_FAILED)는 "
+                    + "기존 요약을 그대로 둔다. 성공하면 201, case_version 은 +1 (이력 행 없음)")
+    @PostMapping("/{caseNo}/refresh-summary")
+    @ResponseStatus(HttpStatus.CREATED)
+    public CaseSummaryResult refreshSummary(@PathVariable String caseNo,
+                                            @Valid @RequestBody RefreshSummaryRequest request) {
+        return refreshCaseSummary.execute(caseNo, request.version());
+    }
+
+    @Operation(summary = "현재 AI 조사 요약",
+            description = "조회 3역할. 요약이 없으면 summary: null. is_current 는 지금 요약 입력(경보·점수·근거)의 해시로 판정")
+    @GetMapping("/{caseNo}/summary")
+    public GetCaseSummary.Result summary(@PathVariable String caseNo) {
+        return getCaseSummary.execute(caseNo);
     }
 }
