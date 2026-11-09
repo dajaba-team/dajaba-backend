@@ -106,7 +106,7 @@ class CaseApiTest {
         assertThat(alert.get("window_start").asText()).isEqualTo("2023-02-01T00:00:00");
         assertThat(alert.get("transaction_count").asInt()).isZero();
         JsonNode latestScore = detail.get("latest_score");
-        assertThat(latestScore.get("status").asText()).isEqualTo("PENDING");
+        assertThat(latestScore.get("score_status").asText()).isEqualTo("PENDING");
         assertThat(latestScore.get("score").isNull()).isTrue();
         assertThat(latestScore.get("reasons").isArray()).isTrue();
         assertThat(detailBody).doesNotContain(accountKey).doesNotContain("account_key");

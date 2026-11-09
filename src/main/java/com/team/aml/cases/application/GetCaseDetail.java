@@ -59,10 +59,10 @@ public class GetCaseDetail {
     }
 
     /**
-     * 경보의 최근 점수 (계약서 C2 latest_score). 늘 있다 — 점수 전(PENDING)·실패(FAILED)면 status 만 있고
+     * 경보의 최근 점수 (계약서 C2 latest_score). 늘 있다 — 점수 전(PENDING)·실패(FAILED)면 scoreStatus 만 있고
      * score·modelVersion·featureVersion·dataQualityStatus 는 null, reasons 는 [] (계약서 2.3).
      */
-    public record LatestScore(String status, BigDecimal score, String failureCode, String modelVersion,
+    public record LatestScore(String scoreStatus, BigDecimal score, String failureCode, String modelVersion,
                               String featureVersion, String dataQualityStatus, JsonNode reasons) {
     }
 
