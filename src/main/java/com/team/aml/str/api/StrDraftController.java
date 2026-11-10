@@ -1,6 +1,6 @@
 package com.team.aml.str.api;
 
-import com.team.aml.shared.ai.AiDtos;
+import com.team.aml.str.application.GetStrDraft;
 import com.team.aml.str.application.RequestStrDraft;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -17,9 +17,11 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/v1")
 public class StrDraftController {
     private final RequestStrDraft requestStrDraft;
+    private final GetStrDraft getStrDraft;
 
-    public StrDraftController(RequestStrDraft requestStrDraft) {
+    public StrDraftController(RequestStrDraft requestStrDraft, GetStrDraft getStrDraft) {
         this.requestStrDraft = requestStrDraft;
+        this.getStrDraft = getStrDraft;
     }
 
     @Operation(summary = "STR 초안 생성·재생성 (최대 90초)",
@@ -30,5 +32,19 @@ public class StrDraftController {
     public StrDraftCreatedResponse create(@PathVariable String caseNo,
                                           @Valid @RequestBody CreateStrDraftRequest request) {
         return StrDraftCreatedResponse.from(requestStrDraft.execute(caseNo, request.caseVersion()));
+    }
+
+    @Operation(
+            summary = "STR 초안 상세 조회",
+            description = "담당 조사역·승인자는 access FULL(본문 포함). 담당이 아닌 조사역·ADMIN은 200 access META_ONLY "
+                    + "(draft_no·status·produced_at만 값, 나머지 키는 null). 없는 번호·형식 오류는 404 DRAFT_NOT_FOUND."
+    )
+    @GetMapping("/str-drafts/{draftNo}")
+    public StrDraftDetailResponse get(
+            @PathVariable String draftNo
+    ) {
+        return StrDraftDetailResponse.from(
+                getStrDraft.execute(draftNo)
+        );
     }
 }

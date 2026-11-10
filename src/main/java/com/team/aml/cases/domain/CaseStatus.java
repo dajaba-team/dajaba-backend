@@ -34,6 +34,18 @@ public enum CaseStatus {
     private static final Set<CaseStatus> REASSIGNABLE = Set.of(REVIEWING, ESCALATED, DRAFTED, REJECTED);
     // 메모·요약 편집 — 여기에 REJECTED+NEED_REVISION 이 더해진다 (CASES 명세 §2.3)
     private static final Set<CaseStatus> EDITABLE = Set.of(REVIEWING, ESCALATED, DRAFTED);
+    // 진행 중 — 담당 조사역이 아직 손에 쥐고 있는 상태 (미결 33, SCRUM-178). 계정 목록 건수·역할 변경 검사가 이것만 쓴다.
+    // OPEN(담당 없음)·APPROVED·REPORTED·CLOSED 는 세지 않는다.
+    private static final Set<CaseStatus> ACTIVE = Set.of(REVIEWING, ESCALATED, DRAFTED, PENDING_APPROVAL, REJECTED);
+
+    /** 진행 중 상태 집합 (미결 33). 이 정의는 여기 한 곳에만 둔다. */
+    public static Set<CaseStatus> active() {
+        return ACTIVE;
+    }
+
+    public boolean isActive() {
+        return ACTIVE.contains(this);
+    }
 
     public boolean isTerminal() {
         return NEXT.get(this).isEmpty();

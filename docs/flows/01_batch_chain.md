@@ -39,8 +39,8 @@ sequenceDiagram
     Admin->>API: POST /admin/batches/rule-scan?date=2022-09-02
     API->>BR: start(RULE_SCAN, date) — 이미 SUCCEEDED면 409
     API->>DET: RunRuleScan(date)
-    DET->>DB: 집계 네이티브 쿼리 (수신 계좌 × 일자 …)
-    DET->>DET: FanInRule.evaluate(row) → AlertCandidate (룰 8개 같은 틀)
+    DET->>DB: 집계 SQL (계좌 × 거래가 있는 분 E, 지금 창·1분 전 창)
+    DET->>DET: FanInRule.fires(분) — 거짓→참이면 경보 (룰 6개 같은 틀)
     DET->>DB: INSERT alerts (+ batch_run_id, alert_no) , alert_transactions
     DET->>BR: finish(SUCCEEDED, rows_in=거래 수, rows_out=경보 수)
     API-->>Admin: 200 {경보 수}

@@ -23,13 +23,13 @@
 | 10/27 | 메모는 `case_history` NOTE 행이 권장 — **이름 확인 남음** | 이력 원칙과 같음 | 안건 16 |
 | 10/27 | 초안 생성·검증 버튼 분리, 자동 검증 없음 | 90초 + 90초는 길다 | 안건 17 |
 | 10/27 | 금액 `numeric(18,2)` 유지 〔11/2 `numeric(20,6)`으로 바뀜 — 아래 11/2 줄〕 | 서비스 DB는 IBM만 | 안건 19 |
-| 10/27 | 룰 공통 네 가지(규약 번호·통화별·달력일·자기계좌 제외), 대표 룰 R02 | 백엔드 룰과 학습용 룰 정합 | 안건 20 |
+| 10/27 | 룰 공통 네 가지(규약 번호·통화별·달력일·자기계좌 제외), 대표 룰 R02 〔달력일·룰 ID 모양은 11/9 룰 v2로 바뀜 — 아래 11/9 줄〕 | 백엔드 룰과 학습용 룰 정합 | 안건 20 |
 | 10/27 | `AiClient` 재시도 1회 — `LLM_UNAVAILABLE`·`MODEL_UNAVAILABLE`·연결 계열 5xx만, 그 밖 0회. `alert_scores.alert_id` UNIQUE 유지 | 현값 유지 | 안건 21, 규약 v0.2 §6.2 |
 | 10/27 | AI가 facts 계산, `draft_id` 백엔드 선발급, 검증은 `generation_id` + 본문 해시로 묶음 | facts·검증이 한 기준 | 안건 23 |
 | 10/27 | 반려 두 갈래(`NEED_REVISION`/`NOT_REPORTABLE`) + 사유 필수, 같은 본문 재요청 409, PENDING_APPROVAL → CLOSED 없음, 반려 코드 검사는 cases 값 | 반려 판단을 데이터로 | 안건 24 |
 | 10/28 | 상태 전이 에러 이름 `INVALID_CASE_TRANSITION`으로 통일 | 문서마다 달랐음 | STR 문서, CASES 명세 |
 | 10/28 | `reasons` = 관측·기준·기여 분리, 확인 못 한 값 null. STR은 관측값만 | 기여값을 관측값처럼 쓰는 위험 | 안건 3 |
-| 10/28 | R04 최대 3홉, R05 유지, R06 교체(대체 룰 미정), R04·R05는 `rule_facts.paths` | 일정·구현 난이도 | 안건 20(준혁), ML 규약 §2.4 |
+| 10/28 | R04 최대 3홉, R05 유지, R06 교체(대체 룰 미정), R04·R05는 `rule_facts.paths` 〔11/9 룰 v2로 바뀜 — R04 4홉, R05 `R05_SCATTER_GATHER`, R06 `R06_GATHER_SCATTER`, 아래 11/9 줄〕 | 일정·구현 난이도 | 안건 20(준혁), ML 규약 §2.4 |
 | 10/29 | AI 호출 시간 한도는 **화면 요청(초안·검증·요약) 전체 90초**(재시도 포함), 점수 배치는 묶음 호출마다. 재시도 1회는 남은 시간 안에서 AI가 바로 돌려준 `LLM_UNAVAILABLE`·`MODEL_UNAVAILABLE`·연결 거부만, 백엔드 쪽 타임아웃은 재시도 안 함 | 재시도까지 하면 180초가 될 수 있었음 | 설계 피드백 4, 규약 §6.2 |
 | 10/29 | AI 409 `GENERATION_IN_PROGRESS`는 프론트에 409 `DRAFT_IN_PROGRESS`로 (일괄 502 아님) | "생성 중"과 AI 장애를 화면이 구분해야 함 | 설계 피드백 5 |
 | 10/29 | `/approvals/**` 권한은 메서드별 — GET ADMIN·APPROVER, POST APPROVER (`SecurityConfig`는 SCRUM-19에서 반영) | 권한표(ADMIN 조회 가능)와 코드가 달랐음 | 설계 피드백 5, 계정·권한 16~18번 |
@@ -62,6 +62,7 @@
 | 11/6 | health 응답 칸을 AI 실제 응답에 맞춤(SCRUM-22, 미결 28) — `HealthResponse(status, db, llm, serverVersion, modelVersion, featureVersion, retrievalVersion)`, 전부 String·없으면 null, `generatorVersion` 뺌. 기동 로그 info 한 줄 `AI server health: status= db= llm= server= model= feature= retrieval=`, `status`·`db`·`llm` 중 하나라도 `ok` 가 아니면(**null 포함**) warn 한 줄 `AI server health degraded` — 기동은 계속. `ai_call_logs` 의 `/v1/health` `ai_version` 은 null 그대로 | AI `/v1/health` 는 `generator_version` 을 안 줘서 로그가 늘 null 이었음. null 도 경고하는 이유는 칸이 빠진 옛 AI 서버도 드러나게. health 는 기동 때 한 번이라 버전은 로그로 충분. 고르지 않은 안: 옛 칸 두고 새 칸만 추가(늘 null인 칸이 남음), info 한 줄에만 찍기, `server_version` 을 `ai_version` 에 | AI `main.py` `health()`·`shared/versioning.py` `health_versions()`, 규약 §6.1, 11/6 진희, SCRUM-22 |
 | 11/8 | AI 호출 기록 조회 `GET /api/v1/admin/ai-calls`(ADMIN만, 메타만, 권한 표 24번 이름). 결과 필터 `outcome=SUCCESS\|FAILURE`는 **`error_code` 유무로** 가름(SUCCESS = null) — `status_code`로 가르지 않음. `error_code` 정확히 같음 필터도 둠. `target_id`는 `target_type`과 같이만(없으면 400), 기간 없으면 전체 최신순, `from`·`to`는 `Z`만(오프셋은 400). 이 목록을 여는 건 `access_logs`에 안 남김. 조회는 `AiCallLogQuery`(JdbcTemplate) — `AiCallLogRepository`는 `save`만 그대로 | 2xx 빈 본문은 `status_code=200` + `AI_BAD_RESPONSE`로 남아 상태 코드로는 실패가 성공으로 잡힘, 타임아웃은 상태 코드가 null. `access_logs.action`에 맞는 값이 없고 이 목록엔 본문·계좌·메모가 없음. 고르지 않은 안: `status_code` 숫자 그대로 받기(null을 못 거름), Jira의 `/admin/ai-call-logs`(권한 표·정의서와 다름), 기본 7일 제한 | SCRUM-134, 11/8 진희 |
 | 11/8 | DB 계정·스키마·마이그레이션 규칙을 `03_shared` §11 한 곳에. compose 프로젝트 이름 **`name: dajaba` 고정**(네트워크 `dajaba_default`, 볼륨 `dajaba_aml-db-data`). db 이미지 **`pgvector/pgvector:0.8.2-pg16-trixie`**(확장 0.8.2 고정) + `db/init/00_extensions.sql`(새 볼륨), 이미 있는 볼륨은 `docker exec aml-db psql -U postgres …` 1회. compose 앱에 `AML_CASE_POLICY_*` 3개를 넘김. README `.env` 표는 `application.yml`·`compose.yaml`이 읽는 변수 전부(값 없이, 값은 노션) | 폴더 이름이 프로젝트 이름이 되면 AI compose의 external 네트워크 `dajaba_default`가 안 생기고 `aml-db` 이름이 부딪힘(11/7 실제 연결). 확장 생성은 superuser만이라 Flyway·Alembic 계정으로 못 함. bookworm 태그는 기존 trixie 볼륨과 collation 버전이 달라 경고 — trixie로. compose 앱만 경계값을 못 받아 `POLICY_NOT_CONFIGURED`였음. 고르지 않은 안: README에 `-p dajaba`만(사람마다 빠뜨림), pgvector는 SCRUM-125 직전(화요일 시작이라 그 전에 볼륨을 맞춰야 함) — 다른 폴더 이름으로 띄운 팀원은 새 빈 볼륨이라 적재 다시 | SCRUM-124, 노션 「운영·배포 구성안」, AI `shared/03`, 11/8 진희 |
+| 11/9 | **룰 v2** — 6개, 전부 96시간 B7 슬라이딩(관련 거래가 있는 분에만 평가, 거짓→참일 때만 경보). 룰 ID에서 시간을 빼고 창은 `params.window_hours`. R01 수신 상대 ≥ 10 · R02 송신 상대 ≥ 5 · R03 → `R03_FX_RELAY`(환전 중계: 늦은 분·다른 통화·USD 환산 ±10%, 15개 통화 고정 환율표 `params.usd_rates`, 백엔드·AI 같은 표) · R04 최대 4홉 · R05 → `R05_SCATTER_GATHER`(중간 계좌 ≥ 3) · R06 → `R06_GATHER_SCATTER`(입금·출금 상대 각각 5~100) · R07·R08 뺌(번호·ID 재사용 안 함). R04·R05 `paths`는 창 안 모든 유효 경로 | HI-Small 9/1~9/10(비자기계좌 4,486,418건, 정답 이벤트 363개) 평가. v1 8개는 근거 거래가 전체의 17.8%라 정답 216개 중 209개가 우연 수준(+6.9). v2는 경보 125,970 → 20,477, 정답 239개(+148.9), lift 1.89 → 8.72, 세탁 재현율 33.7% → 40.2%. R04 4홉은 3홉과 합집합이 같지만 CYCLE 이벤트를 R04로 잡으려고. 고르지 않은 안: 경보 총량 4만·8만(정답은 278·285로 늘지만 우연 대비 초과가 +87·+73으로 떨어짐), R07·R08 유지(excess 5%p 미만) | 노션 「탐지 룰 v2 기준값 선정 근거」, SCRUM-73·99 |
 
 ## 2. 문서끼리 다른 곳 — 이 docs에서 고른 것
 
@@ -103,7 +104,7 @@
 | 12 | 감사 시각 표기 | 응답에서 UTC `Z`를 붙일지 (원천 거래 시각은 시간대 없음 — 확정). 〔제안〕 붙이자 — `01_code_rules.md` §5 | 공통 |
 | 13 | "신규 제안" 에러 코드 | SD 명세 6개, CASES 명세 3개 | 진희 확인 후 반영 |
 | 14 | ~~적재 검증값~~ | 정리됨 — 11/1 실측으로 확정(§1 표). 공통 규약 §1.2·§1.5는 반영 요청(SCRUM-71) | 준혁 |
-| 15 | 룰 세부 | R06 대체 룰, R05 수치 한도, R08 기준, 룰 스캔 날짜 범위, 섞인 통화의 `rule_facts` | 준혁·준영 |
+| 15 | 룰 세부 | ~~R06 대체 룰, R05 수치 한도, R08 기준~~ 11/9 룰 v2로 정리(§1 표). 남은 것: 룰 스캔 날짜 범위, 섞인 통화의 `rule_facts` | 준혁·준영 |
 | 16 | ~~점수 공개 실패 코드(`failure_code`)~~ | 10/29 준혁 확인으로 확정(§1 표). 규약 §3·§6.3은 규약 변경 요청 | 진희 |
 | 17 | 상세 화면에 현재 초안을 합치는 위치 | cases → str 의존 금지 | 지윤·채영·진희 |
 | 18 | 서식 회의 (승인 이후·PDF·7항목·열람 제한·DB 변경) | **회의 전**, 의견 칸 비어 있음 | 전원 |
@@ -114,7 +115,7 @@
 | 23 | HIGH 판정 기준 | 규약 §3에 `score ≥ threshold → HIGH`가 남아 있음 — HIGH는 CasePolicy `medium_to_high`, AI threshold는 추천값으로 고치기 (규약 변경) | 지윤·진희·준영 |
 | 24 | STR 수정 길이 | 백엔드 5,000자 vs AI 검증 스키마 1,200자 — 생성 1,200 / 수정본 검증 5,000 분리, 글자 수 기준 통일 | 채영·진희 |
 | 25 | `revision_no` | 규약·AI는 1 = AI 원문, STR 명세는 원문 `null` — 규약대로 맞추기 | 채영·진희 |
-| 26 | 경로형 경보 `paths` 계약 | 합집합 = `transaction_ids`·R04 3홉(백엔드·ML) vs 부분집합·길이 제한 없음(AI) — 400과 UNVERIFIED 경계 정하기 | 준혁·진희·준영 |
+| 26 | 경로형 경보 `paths` 계약 | 합집합 = `transaction_ids`·R04 3홉〔11/9 룰 v2: 4홉, 창 안 모든 유효 경로〕(백엔드·ML) vs 부분집합·길이 제한 없음(AI) — 400과 UNVERIFIED 경계 정하기 | 준혁·진희·준영 |
 | 28 | ~~health 응답 버전 필드~~ | SCRUM-22(11/6) 에서 결정 — `HealthResponse` 를 AI 실제 칸(`status·db·llm·server_version·model_version·feature_version·retrieval_version`)으로, `generator_version` 뺌. 위 11/6 결정 줄 참조 | 완료 |
 | 29 | ~~`ai_call_logs` drafts 대상~~ | SCRUM-151(11/6) 에서 결정 — 초안 `DRAFT`/`draft_id`, 검증도 `DRAFT`/`draft_id` 그대로(`GENERATION` 안 추가, Flyway CHECK 변경 피함). 위 11/6 결정 줄 참조 | 완료 |
 | 30 | ~~403 시도 기록~~ | 정리됨 — 11/2 경고 로그(③), SCRUM-74(§1 표) | 진희 |

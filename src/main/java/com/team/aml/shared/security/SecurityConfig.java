@@ -41,6 +41,7 @@ import java.util.List;
  *  /api/v1/admin/**                              → ADMIN
  *  GET  /api/v1/approvals/**                     → ADMIN·APPROVER (10/29)
  *  POST /api/v1/approvals/**                     → APPROVER
+ *  POST /api/v1/cases/{case_no}/reassign        → ADMIN (권한 표 7, SCRUM-177)
  *  /api/**                                       → 로그인만
  *  그 외                                         → 거부
  * "담당 케이스만" 같은 객체 규칙은 여기서 못 막는다 → 유스케이스 안에서 (NotAssigneeException 403, SelfApprovalException 409).

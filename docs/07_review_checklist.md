@@ -111,7 +111,7 @@
 
 **source** — 원천은 COPY로, 적재 트랜잭션이 원천 4개 전부를 감쌈, 검증 쿼리, 빈 DB에서만 적재, `transaction_id`·`source_files` 규칙(안건 1), 은행 ID 형식(〔확인 필요〕)
 
-**detection** — 집계는 SQL·판정은 Java, 기준값 없으면 예외(기본값 금지), 룰 공통 네 가지(통화별·달력일·`reference_ts`=창 끝·자기계좌 제외), 룰 스캔은 한 트랜잭션, 점수는 500개 묶음마다 커밋, `score_band`를 detection에서 정하지 않음(CasePolicy), `MarkCaseOpened`는 부르는 쪽 트랜잭션에 참여, R04·R05 `paths`
+**detection** — 집계는 SQL·판정은 Java, 기준값 없으면 예외(기본값 금지), 룰 공통(창 길이는 `params.window_hours`·B7 슬라이딩 창에서 거짓→참일 때만 경보·`reference_ts`=창 끝·경로·중계는 늦은 분 순서·자기계좌 제외), 룰 스캔은 한 트랜잭션, 점수는 500개 묶음마다 커밋, `score_band`를 detection에서 정하지 않음(CasePolicy), `MarkCaseOpened`는 부르는 쪽 트랜잭션에 참여, R04·R05 `paths`(창 안 모든 유효 경로)
 
 **cases** — 전이 표 그대로, 반려 코드 분기, 케이스 생성은 HIGH만·경보별 한 트랜잭션·보충 실행 허용, CasePolicy에 임의 기본 경계값 없음, cases → str 의존 없음
 

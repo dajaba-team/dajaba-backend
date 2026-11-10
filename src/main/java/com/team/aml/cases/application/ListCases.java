@@ -1,10 +1,13 @@
 package com.team.aml.cases.application;
 
 import com.team.aml.cases.domain.Case;
+import com.team.aml.cases.domain.CaseAction;
 import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.cases.domain.CaseStatus;
 import com.team.aml.cases.domain.RejectionReasonCode;
+import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.shared.security.CurrentUser;
+import com.team.aml.user.domain.Role;
 import com.team.aml.user.domain.User;
 import com.team.aml.user.domain.UserRepository;
 import org.springframework.data.domain.Page;
@@ -18,6 +21,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -57,9 +61,16 @@ public class ListCases {
         }
     }
 
-    /** 목록 한 줄. accountKey 는 내부 키 — 가린 account_no·account_ref 로 바꾸는 건 컨트롤러 응답 몫(SCRUM-106). */
+    /**
+     * 목록 한 줄. accountKey 는 내부 키 — 가린 account_no·account_ref 로 바꾸는 건 컨트롤러 응답 몫(SCRUM-106).
+     * availableActions 는 상세와 같은 CaseAction.availableFor — 목록의 [배정]·[담당자 변경]도 이것만 보고 켠다(#23 리뷰).
+     */
     public record Item(String caseNo, CaseStatus status, String accountKey, String entityId, UserRef assignee,
-                       RejectionReasonCode rejectionReasonCode, long version, Instant createdAt) {
+                       RejectionReasonCode rejectionReasonCode, long version, Instant createdAt,
+                       List<CaseAction> availableActions) {
+        public Item {
+            availableActions = availableActions == null ? List.of() : List.copyOf(availableActions);
+        }
     }
 
     private final CaseRepository cases;
@@ -87,9 +98,11 @@ public class ListCases {
 
         Page<Case> found = cases.search(q.statuses(), assigneeId.orElse(null), from, toExclusive, pageable);
         Map<Long, UserRef> refs = userRefs.of(found.map(Case::getAssigneeId).getContent());
+        AppUserDetails me = currentUser.require();
+        Role role = Role.valueOf(me.role());
         return found.map(c -> new Item(c.getCaseNo(), c.getStatus(), c.getAccountKey(), c.getEntityId(),
                 refs.get(c.getAssigneeId()), c.getRejectionReasonCode(), c.getVersion(),
-                c.getCreatedAt().truncatedTo(ChronoUnit.SECONDS)));
+                c.getCreatedAt().truncatedTo(ChronoUnit.SECONDS), CaseAction.availableFor(c, me.userId(), role)));
     }
 
     private Optional<Long> resolveAssignee(String assignee) {

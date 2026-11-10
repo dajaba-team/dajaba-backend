@@ -330,6 +330,14 @@ class CaseApiTest {
         String caseNo = newOpenCase("010_RSGN%05d".formatted(SEQ.incrementAndGet()));
         assign(caseNo, inv);   // version 1
 
+        // 목록 한 줄에도 상세와 같은 available_actions — 관리자에게만 REASSIGN (#23 리뷰)
+        JsonNode adminRow = itemOf(json.readTree(body(get("/api/v1/cases").param("status", "REVIEWING")
+                .param("size", "100").with(as(admin)), 200)), caseNo);
+        assertThat(texts(adminRow.get("available_actions"))).contains("REASSIGN");
+        JsonNode invRow = itemOf(json.readTree(body(get("/api/v1/cases").param("status", "REVIEWING")
+                .param("size", "100").with(as(inv)), 200)), caseNo);
+        assertThat(texts(invRow.get("available_actions"))).doesNotContain("REASSIGN").contains("ESCALATE");
+
         JsonNode moved = json.readTree(body(reassign(caseNo, inv2.loginId(), "조사 업무 분담", 1, admin), 200));
         assertThat(moved.get("status").asText()).isEqualTo("REVIEWING");
         assertThat(moved.get("assignee").get("login_id").asText()).isEqualTo(inv2.loginId());
