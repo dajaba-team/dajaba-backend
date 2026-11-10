@@ -10,4 +10,9 @@ public class UserNotFoundException extends NotFoundException {
     public UserNotFoundException(String loginId) {
         super("사용자가 없습니다: " + loginId, Map.of("login_id", loginId));
     }
+
+    /** 계정 관리 대상(id)이 없을 때 (SCRUM-135 ②). */
+    public UserNotFoundException(long id) {
+        super("사용자가 없습니다: id=" + id, Map.of("id", id));
+    }
 }

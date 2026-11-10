@@ -140,12 +140,16 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 
 | 기능 | API | 규칙 |
 |---|---|---|
-| 계정 목록 | `GET /admin/users` | 필터 `role`·`is_active`(**안 보내면 활성만**), `display_name` 오름차순(같으면 `id`) 고정·`sort` 안 받음, `size` ≤ 100(기본 20). 항목 `{id, login_id, display_name, role, is_active, active_case_count}` — `active_case_count` 는 지금 `null`, SCRUM-135 ②에서 조사역 행만 채우고 **다른 역할 행은 계속 `null`**. SYSTEM 행(비활성)은 `is_active=false` 일 때 보임 |
-| 계정 발급 | `POST /admin/users {login_id, display_name, role, initial_password}` | `login_id` 유일, 역할 3개 중 하나, 서버에서 BCrypt. 응답에 비밀번호 없음 |
+| 계정 목록 | `GET /admin/users` | 필터 `role`·`is_active`(**안 보내면 활성만**), `display_name` 오름차순(같으면 `id`) 고정·`sort` 안 받음, `size` ≤ 100(기본 20). 항목 `{id, login_id, display_name, role, is_active, active_case_count}` — `active_case_count`는 **조사역 행만** 진행 중 담당 건수(0 포함, 한 페이지에 쿼리 1번), **다른 역할 행은 `null`**. SYSTEM 행(비활성)은 `is_active=false` 일 때 보임 [SCRUM-135 ②] |
+| 계정 발급 | `POST /admin/users {login_id, display_name, role, initial_password}` | **201 + 계정 한 줄**(목록 항목 모양). `login_id` `^[A-Za-z0-9_-]{3,64}$`·유일(중복 409 `LOGIN_ID_TAKEN`, 동시에 두 번 보내 DB unique에 걸려도 같은 409), `display_name` 앞뒤 공백 뺀 1~50자, `role` INVESTIGATOR·APPROVER·ADMIN, `initial_password` 8~128자 **+ UTF-8 72바이트까지**(아래). 서버에서 BCrypt. 응답·로그에 비밀번호 없음. `USER_CREATED` |
 | 역할 변경 | `POST /admin/users/{id}/change-role {role}` | ROLE_CHANGED, 그 사용자 세션 끊김 |
-| 비활성화 / 재활성화 | `POST /admin/users/{id}/deactivate` · `/activate` | 세션 끊김. 담당 케이스가 있으면 응답에 개수 |
+| 비활성화 | `POST /admin/users/{id}/deactivate` | 세션 끊김. 담당 케이스가 있으면 응답에 개수 |
+| 재활성화 | `POST /admin/users/{id}/activate` | **200 + 한 줄**. 기록 없음, 세션 그대로(비활성일 때 이미 끊김) |
 | 비밀번호 초기화 | `POST /admin/users/{id}/reset-password {new_password}` | 세션 끊김 |
 
+- **막는 대상** — 재활성화의 대상이 **지금 로그인한 관리자 본인**이거나 **SYSTEM**(id 1)이면 409 `ACCOUNT_CHANGE_NOT_ALLOWED` + `details.reason` = `SELF` | `SYSTEM`(`AdminUserTargets`). 역할 변경·비활성화·초기화도 다음 PR에서 같은 규칙을 써요. 화면은 버튼을 숨기지만 swagger로 보낼 수 있어 서버도 막아요. **다른 관리자**는 막지 않아요(화면과 같음, 11/7 D7). 검사 순서: 없는 id 404 `USER_NOT_FOUND` → 막는 대상 409.
+- **이미 그 상태** — 활성 계정 활성화는 **200 + 지금 한 줄**(두 번 눌러도 안전).
+- **비밀번호 72바이트** — BCrypt는 앞 72바이트만 써요(Spring Security 6.3.4는 넘는 부분을 예외 없이 버림 → 앞 72바이트만 같으면 다른 비밀번호로도 로그인됨). 그래서 규칙 8~128자는 그대로 두고 **UTF-8 72바이트를 넘으면 400**(`details.initial_password`, "72바이트(영문 72자, 한글 24자)까지"). 실제 상한은 영문 72자예요. **공백만인 비밀번호도 400**("공백만으로는 쓸 수 없습니다") — 로그인이 `String.isBlank()`면 거절해서 발급해도 못 들어가요. 같은 `isBlank` 기준이라 전각 공백(U+3000)도 걸러요. 값은 자르지 않아요(앞뒤 공백도 비밀번호).
 - 관리자가 안 하는 것: 자기 역할 변경, 자기 비활성화, 계정 삭제(기능 없음).
 - 엔티티는 `User`, `Role` 둘. 검사는 ID 중복·역할 값·비활성 사용자 로그인 거부 세 개. 테스트는 그 세 개 + "역할 바꾸면 세션이 끊긴다".
 - 상태 변경은 `POST /admin/users/{id}/{동사}`만, **PATCH 없음**(레퍼런스 §12, 미결 11, 10/30). 동사 이름은 프론트 API 계약서(SCRUM-21)에서 확정해요.
