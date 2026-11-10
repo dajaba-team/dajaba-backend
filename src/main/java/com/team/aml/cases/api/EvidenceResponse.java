@@ -12,6 +12,8 @@ public record EvidenceResponse(String caseNo, CaseTransactionResponse transactio
     public record Source(String dataset, long recordId, boolean isSynthetic) {
     }
 
+    // 지금은 IBM HI-Small 한 가지만 적재한다(SD 명세) — source_files 에는 파일 이름·해시만 있어 데이터셋을 읽을 칸이 없다.
+    // 다른 데이터셋을 넣을 때 적재 기록에 데이터셋·합성 여부 칸을 만들고 여기서 읽는다 (#88 리뷰).
     static final String DATASET = "IBM AML HI-Small";
 
     static EvidenceResponse from(CaseTransactions.Evidence e) {
