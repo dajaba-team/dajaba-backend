@@ -111,6 +111,7 @@ class GetStrDraftDbTest {
         assertThat(r.access()).isEqualTo(Access.FULL);
         assertThat(r.draftNo()).isEqualTo(DisplayNumber.draftNo(draftId));
         assertThat(r.caseNo()).isEqualTo(caseNo(caseId));
+        assertThat(r.caseStatus()).isEqualTo("DRAFTED");
         assertThat(r.caseVersion()).isEqualTo(caseVersion(caseId));
         assertThat(r.version()).isNotNull();
         assertThat(r.facts().path("subject").path("account_key").asText()).isEqualTo(ACCOUNT_KEY);   // 가리기는 api 몫
@@ -175,7 +176,12 @@ class GetStrDraftDbTest {
                 .contains("\"account_ref\":\"ACR-")
                 .contains("\"from_account_no\":\"010_****BD30\"")       // 접두어가 붙은 키도
                 .contains("\"evidence_ids\"")
-                .contains("\"case_version\"");
+                .contains("\"case_version\"")
+                .contains("\"case_status\":\"DRAFTED\"");
+        JsonNode narrative = om.readTree(json).path("narrative");
+        assertThat(narrative.get(0).path("section").asText()).isEqualTo("SUBJECT");
+        assertThat(narrative.get(0).path("label").asText()).isEqualTo("거래자");
+        assertThat(narrative.get(6).path("label").asText()).isEqualTo("종합의견");
     }
 
     // 6
@@ -189,7 +195,7 @@ class GetStrDraftDbTest {
                 StrDraftDetailResponse.from(getDraft.execute(DisplayNumber.draftNo(draftId)))));
 
         assertThat(body.path("access").asText()).isEqualTo("META_ONLY");
-        for (String key : new String[] {"case_no", "version", "case_version", "facts", "narrative",
+        for (String key : new String[] {"case_no", "case_status", "version", "case_version", "facts", "narrative",
                 "current_revision_no", "latest_verification"}) {
             assertThat(body.has(key)).as(key).isTrue();
             assertThat(body.get(key).isNull()).as(key).isTrue();
@@ -209,6 +215,21 @@ class GetStrDraftDbTest {
 
         assertThat(r.latestVerification().path("verification_id").asText()).isEqualTo("v-new-" + draftId);
         assertThat(r.latestVerification().path("revision_no").asInt()).isEqualTo(1);
+        assertThat(r.latestVerification().path("is_current").asBoolean()).isTrue();
+    }
+
+    // 7-2
+    @Test
+    void 정상_예전_수정본을_검사한_검증이면_is_current가_false() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        // 지금 저장본은 1번. 수정 API(S3)가 아직 없어 검증 행의 수정본 번호만 다르게 넣는다 — S3 PR 에서 실제 수정으로 바꾼다
+        verification(draftId, "v-" + draftId, "2026-11-03T02:00:00Z", 2);
+        login(investigator, "INVESTIGATOR");
+
+        GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+
+        assertThat(r.latestVerification().path("is_current").asBoolean()).isFalse();
     }
 
     // ── 실패 ──────────────────────────────────────────────────
@@ -237,6 +258,7 @@ class GetStrDraftDbTest {
         assertThat(r.narrative()).isNull();
         assertThat(r.latestVerification()).isNull();
         assertThat(r.caseNo()).isNull();
+        assertThat(r.caseStatus()).isNull();
         assertThat(r.version()).isNull();
         assertThat(r.caseVersion()).isNull();
         assertThat(r.currentRevisionNo()).isNull();
@@ -280,10 +302,14 @@ class GetStrDraftDbTest {
     }
 
     private void verification(long draftId, String verificationId, String producedAt) {
+        verification(draftId, verificationId, producedAt, 1);
+    }
+
+    private void verification(long draftId, String verificationId, String producedAt, int revisionNo) {
         jdbc.update("insert into ops.verification_results(verification_id, draft_id, generation_id, revision_no, "
                         + "narrative_sha256, status, verifier_version, produced_at, payload, created_by) "
-                        + "values (?, ?, ?, 1, ?, 'PASSED', 'verify_v1', ?::timestamptz, ?::jsonb, 1)",
-                verificationId, draftId, "g-" + draftId, "a".repeat(64), producedAt,
+                        + "values (?, ?, ?, ?, ?, 'PASSED', 'verify_v1', ?::timestamptz, ?::jsonb, 1)",
+                verificationId, draftId, "g-" + draftId, revisionNo, "a".repeat(64), producedAt,
                 "{\"verification_id\":\"" + verificationId + "\",\"status\":\"PASSED\"}");
     }
 

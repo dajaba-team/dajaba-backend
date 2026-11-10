@@ -1,6 +1,7 @@
 package com.team.aml.str.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.cases.domain.Case;
 import com.team.aml.cases.domain.CaseNotFoundException;
 import com.team.aml.cases.domain.CaseRepository;
@@ -88,6 +89,7 @@ public class GetStrDraft {
             String draftNo,
             Access access,
             String caseNo,
+            String caseStatus,
             StrDraftStatus status,
             Long version,
             Long caseVersion,
@@ -99,13 +101,26 @@ public class GetStrDraft {
     ) {
 
         static Result full(StrDraft draft, Case c, JsonNode latestVerification) {
-            return new Result(DisplayNumber.draftNo(draft.getId()), Access.FULL, c.getCaseNo(), draft.getStatus(),
-                    draft.getVersion(), c.getVersion(), draft.getProducedAt(), draft.getFacts(), draft.currentBody(),
-                    draft.getCurrentRevision().getRevisionNo(), latestVerification);
+            int currentRevisionNo = draft.getCurrentRevision().getRevisionNo();
+            return new Result(DisplayNumber.draftNo(draft.getId()), Access.FULL, c.getCaseNo(), c.getStatus().name(),
+                    draft.getStatus(), draft.getVersion(), c.getVersion(), draft.getProducedAt(), draft.getFacts(),
+                    draft.currentBody(), currentRevisionNo, withIsCurrent(latestVerification, currentRevisionNo));
+        }
+
+        /**
+         * is_current = 이 검증이 지금 저장본(current_revision_no)을 검사했는가. false 면 화면은 [승인 요청]을 끄고
+         * "다시 검증"을 띄운다 (S6 버튼, #84 리뷰). 최종 판단은 S6 의 ApprovalGate(같은 해시 최신 검증)가 한다.
+         */
+        private static JsonNode withIsCurrent(JsonNode verification, int currentRevisionNo) {
+            if (!(verification instanceof ObjectNode v)) {
+                return verification;
+            }
+            v.put("is_current", v.path("revision_no").asInt(-1) == currentRevisionNo);
+            return v;
         }
 
         static Result metaOnly(StrDraft draft) {
-            return new Result(DisplayNumber.draftNo(draft.getId()), Access.META_ONLY, null, draft.getStatus(),
+            return new Result(DisplayNumber.draftNo(draft.getId()), Access.META_ONLY, null, null, draft.getStatus(),
                     null, null, draft.getProducedAt(), null, null, null, null);
         }
     }

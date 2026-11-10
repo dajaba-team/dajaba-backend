@@ -28,7 +28,11 @@ final class StrAccountDisplay {
         return bank + MASK + tail;
     }
 
-    /** "ACR-" + account_key 의 SHA-256(UTF-8) 대문자 hex 앞 12자리. 같은 키는 늘 같은 값. */
+    /**
+     * "ACR-" + account_key 의 SHA-256(UTF-8) 대문자 hex 앞 12자리. 같은 키는 늘 같은 값.
+     * TODO(미결 19): cases/api/AccountDisplay.ref 와 같이 바꾼다. 키 없는 해시라 계좌 목록이 있으면 대조할 수 있다 —
+     *  실데이터 전에 서버 비밀값 HMAC 같은 복원 불가 규칙으로. 형식(ACR-…)은 그대로. 두 곳 결과가 같아야 한다.
+     */
     static String ref(String accountKey) {
         if (accountKey == null) {
             return null;

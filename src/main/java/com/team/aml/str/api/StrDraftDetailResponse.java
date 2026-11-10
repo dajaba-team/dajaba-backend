@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.str.application.GetStrDraft;
 import com.team.aml.str.domain.NarrativeSection;
+import com.team.aml.str.domain.StrSection;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -18,6 +19,7 @@ public record StrDraftDetailResponse(
         String draftNo,
         String access,
         String caseNo,
+        String caseStatus,
         String status,
         Long version,
         Long caseVersion,
@@ -35,6 +37,7 @@ public record StrDraftDetailResponse(
                 r.draftNo(),
                 r.access().name(),
                 r.caseNo(),
+                r.caseStatus(),
                 r.status().name(),
                 r.version(),
                 r.caseVersion(),
@@ -73,10 +76,33 @@ public record StrDraftDetailResponse(
         }
     }
 
-    public record Narrative(String section, String text, List<String> cites, List<Long> evidenceIds) {
+    /**
+     * label = 화면 단락 제목. AI 응답에는 없어서 백엔드가 섹션 이름으로 붙인다 (11/6 7항목 전환, #84 리뷰).
+     * cites 는 규약 v0.4 단락 인용 — 계약서 S2 에 추가 요청 (#84 리뷰).
+     */
+    public record Narrative(String section, String label, String text, List<String> cites, List<Long> evidenceIds) {
 
         static Narrative from(NarrativeSection s) {
-            return new Narrative(s.section().name(), s.text(), s.cites(), s.evidenceIds());
+            return new Narrative(s.section().name(), label(s.section()), s.text(), s.cites(), s.evidenceIds());
+        }
+
+        /** V2 = 별지 제1호 서술부 1~7 (규약 §5.2 12번). V1 = 11/6 전 6섹션 초안용. */
+        static String label(StrSection section) {
+            return switch (section) {
+                case SUBJECT -> "거래자";
+                case DATE -> "일자";
+                case PLACE -> "장소";
+                case INSTRUMENT -> "수단";
+                case METHOD -> "방법";
+                case GROUNDS -> "사유";
+                case OPINION -> "종합의견";
+                case SUMMARY -> "요약";
+                case WHO -> "누가";
+                case WHAT_WHEN_WHERE -> "무엇을·언제·어디서";
+                case HOW -> "어떻게";
+                case WHY_SUSPICIOUS -> "왜 의심되는지";
+                case CONCLUSION -> "결론";
+            };
         }
     }
 }
