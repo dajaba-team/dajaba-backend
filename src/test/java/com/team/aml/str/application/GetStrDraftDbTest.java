@@ -8,7 +8,9 @@ import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.str.api.StrDraftDetailResponse;
 import com.team.aml.str.application.GetStrDraft.Access;
 import com.team.aml.str.domain.DraftNotFoundException;
+import com.team.aml.str.domain.NarrativeHash;
 import com.team.aml.str.domain.StrDraftRequest;
+import com.team.aml.str.domain.StrDraftRepository;
 import com.team.aml.str.domain.StrDraftRequestRepository;
 import com.team.aml.str.domain.StrSection;
 import org.junit.jupiter.api.AfterEach;
@@ -68,6 +70,7 @@ class GetStrDraftDbTest {
     @Autowired GetStrDraft getDraft;
     @Autowired SaveStrDraft saveDraft;
     @Autowired StrDraftRequestRepository requests;
+    @Autowired StrDraftRepository drafts;
     @Autowired JdbcTemplate jdbc;
     @Autowired TransactionTemplate tx;
     @Autowired ObjectMapper om;
@@ -220,16 +223,66 @@ class GetStrDraftDbTest {
 
     // 7-2
     @Test
-    void 정상_예전_수정본을_검사한_검증이면_is_current가_false() {
+    void 정상_다른_본문을_검사한_검증이면_is_current가_false() {
         long caseId = escalatedCase();
         long draftId = savedDraft(caseId);
-        // 지금 저장본은 1번. 수정 API(S3)가 아직 없어 검증 행의 수정본 번호만 다르게 넣는다 — S3 PR 에서 실제 수정으로 바꾼다
-        verification(draftId, "v-" + draftId, "2026-11-03T02:00:00Z", 2);
+        verification(draftId, "v-" + draftId, "2026-11-03T02:00:00Z", 1, "b".repeat(64));
         login(investigator, "INVESTIGATOR");
 
         GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
 
         assertThat(r.latestVerification().path("is_current").asBoolean()).isFalse();
+    }
+
+    // 7-2-1
+    @Test
+    void 정상_수정본_번호가_달라도_본문_해시가_같으면_is_current가_true() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        // 고쳤다가 되돌린 경우 — 검증한 수정본(2번)과 지금 수정본(1번)은 다르지만 문장이 같다
+        verification(draftId, "v-" + draftId, "2026-11-03T02:00:00Z", 2, currentHash(draftId));
+        login(investigator, "INVESTIGATOR");
+
+        GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+
+        assertThat(r.currentRevisionNo()).isEqualTo(1);
+        assertThat(r.latestVerification().path("is_current").asBoolean()).isTrue();
+    }
+
+    // 7-3
+    @Test
+    void 정상_지금_본문_해시의_최신_검증에_narrative_refs가_있으면_근거는_그_값이고_문장과_수정본은_그대로() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        verificationWithRefs(draftId, "v-refs-" + draftId, currentHash(draftId),
+                "[{\"section\":\"METHOD\",\"cites\":[\"counterparties.count\"],\"evidence_ids\":[104233]}]");
+        login(investigator, "INVESTIGATOR");
+
+        GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+
+        var method = r.narrative().stream().filter(n -> n.section() == StrSection.METHOD).findFirst().orElseThrow();
+        assertThat(method.text()).isEqualTo("AI METHOD 문장");
+        assertThat(method.cites()).containsExactly("counterparties.count");
+        assertThat(method.evidenceIds()).containsExactly(104233L);
+        var date = r.narrative().stream().filter(n -> n.section() == StrSection.DATE).findFirst().orElseThrow();
+        assertThat(date.cites()).containsExactly("period", "inbound.count");          // refs 에 없는 단락은 수정본 값
+        assertThat(jdbc.queryForObject("select narrative_after -> 4 -> 'cites' ->> 0 from ops.str_revisions "
+                + "where draft_id = ?", String.class, draftId)).isEqualTo("period");   // 수정본은 그대로(저장 안 함)
+    }
+
+    // 7-4
+    @Test
+    void 정상_다른_본문을_검사한_검증의_narrative_refs는_쓰지_않는다() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        verificationWithRefs(draftId, "v-old-refs-" + draftId, "b".repeat(64),
+                "[{\"section\":\"METHOD\",\"cites\":[\"counterparties.count\"],\"evidence_ids\":[104233]}]");
+        login(investigator, "INVESTIGATOR");
+
+        GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+
+        var method = r.narrative().stream().filter(n -> n.section() == StrSection.METHOD).findFirst().orElseThrow();
+        assertThat(method.cites()).containsExactly("period", "inbound.count");
     }
 
     // ── 실패 ──────────────────────────────────────────────────
@@ -302,15 +355,28 @@ class GetStrDraftDbTest {
     }
 
     private void verification(long draftId, String verificationId, String producedAt) {
-        verification(draftId, verificationId, producedAt, 1);
+        verification(draftId, verificationId, producedAt, 1, currentHash(draftId));
     }
 
-    private void verification(long draftId, String verificationId, String producedAt, int revisionNo) {
+    private void verification(long draftId, String verificationId, String producedAt, int revisionNo, String hash) {
         jdbc.update("insert into ops.verification_results(verification_id, draft_id, generation_id, revision_no, "
                         + "narrative_sha256, status, verifier_version, produced_at, payload, created_by) "
                         + "values (?, ?, ?, ?, ?, 'PASSED', 'verify_v1', ?::timestamptz, ?::jsonb, 1)",
-                verificationId, draftId, "g-" + draftId, revisionNo, "a".repeat(64), producedAt,
+                verificationId, draftId, "g-" + draftId, revisionNo, hash, producedAt,
                 "{\"verification_id\":\"" + verificationId + "\",\"status\":\"PASSED\"}");
+    }
+
+    /** 지금 수정본 본문의 NarrativeHash — CurrentNarrative 가 찾는 narrative_sha256. */
+    private String currentHash(long draftId) {
+        return tx.execute(s -> NarrativeHash.of(drafts.findById(draftId).orElseThrow().currentBody()));
+    }
+
+    private void verificationWithRefs(long draftId, String verificationId, String hash, String refsJson) {
+        jdbc.update("insert into ops.verification_results(verification_id, draft_id, generation_id, revision_no, "
+                        + "narrative_sha256, status, verifier_version, produced_at, payload, created_by) "
+                        + "values (?, ?, ?, 1, ?, 'PASSED', 'verify_v1', '2026-11-03T04:00:00Z', ?::jsonb, 1)",
+                verificationId, draftId, "g-" + draftId, hash,
+                "{\"verification_id\":\"" + verificationId + "\",\"status\":\"PASSED\",\"narrative_refs\":" + refsJson + "}");
     }
 
     /** 경보 → ESCALATED 케이스, 담당 = investigator. */

@@ -11,6 +11,7 @@ import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.shared.security.CurrentUser;
 import com.team.aml.str.domain.DraftNotFoundException;
 import com.team.aml.str.domain.LatestVerificationRepository;
+import com.team.aml.str.domain.NarrativeHash;
 import com.team.aml.str.domain.NarrativeSection;
 import com.team.aml.str.domain.StrDraft;
 import com.team.aml.str.domain.StrDraftRepository;
@@ -41,14 +42,16 @@ public class GetStrDraft {
     private final LatestVerificationRepository verifications;
     private final CurrentUser currentUser;
     private final AccessLogWriter accessLog;
+    private final CurrentNarrative currentNarrative;
 
     public GetStrDraft(StrDraftRepository drafts, CaseRepository cases, LatestVerificationRepository verifications,
-                       CurrentUser currentUser, AccessLogWriter accessLog) {
+                       CurrentUser currentUser, AccessLogWriter accessLog, CurrentNarrative currentNarrative) {
         this.drafts = drafts;
         this.cases = cases;
         this.verifications = verifications;
         this.currentUser = currentUser;
         this.accessLog = accessLog;
+        this.currentNarrative = currentNarrative;
     }
 
     /** readOnly 아님 — accessLog.strView 가 MANDATORY·쓰기 트랜잭션을 요구한다. */
@@ -61,7 +64,7 @@ public class GetStrDraft {
         accessLog.strView(draftId);
         if (!canReadBody(Role.valueOf(me.role()), c, me.userId())) return Result.metaOnly(draft);
         JsonNode verification = verifications.findLatestByDraftId(draftId).orElse(null);
-        return Result.full(draft, c, verification);
+        return Result.full(draft, c, verification, currentNarrative.of(draft));
     }
 
     /** 본문은 승인자 또는 담당 조사역만. */
@@ -100,22 +103,24 @@ public class GetStrDraft {
             JsonNode latestVerification
     ) {
 
-        static Result full(StrDraft draft, Case c, JsonNode latestVerification) {
+        /** narrative = CurrentNarrative — 문장은 지금 수정본, 근거는 같은 해시 최신 검증의 narrative_refs 우선. */
+        static Result full(StrDraft draft, Case c, JsonNode latestVerification, List<NarrativeSection> narrative) {
             int currentRevisionNo = draft.getCurrentRevision().getRevisionNo();
             return new Result(DisplayNumber.draftNo(draft.getId()), Access.FULL, c.getCaseNo(), c.getStatus().name(),
                     draft.getStatus(), draft.getVersion(), c.getVersion(), draft.getProducedAt(), draft.getFacts(),
-                    draft.currentBody(), currentRevisionNo, withIsCurrent(latestVerification, currentRevisionNo));
+                    narrative, currentRevisionNo, withIsCurrent(latestVerification, NarrativeHash.of(draft.currentBody())));
         }
 
         /**
-         * is_current = 이 검증이 지금 저장본(current_revision_no)을 검사했는가. false 면 화면은 [승인 요청]을 끄고
-         * "다시 검증"을 띄운다 (S6 버튼, #84 리뷰). 최종 판단은 S6 의 ApprovalGate(같은 해시 최신 검증)가 한다.
+         * is_current = 이 검증이 지금 본문(같은 NarrativeHash)을 검사했는가. 수정본 번호가 아니라 해시로 본다 —
+         * 고쳤다가 되돌려 문장이 같으면 true, 근거(cites·evidence_ids)만 바뀌어도 true(해시에 안 들어감).
+         * false 면 화면은 [승인 요청]을 끄고 "다시 검증"을 띄운다 (S6 버튼, #84 리뷰). ApprovalGate 와 같은 기준.
          */
-        private static JsonNode withIsCurrent(JsonNode verification, int currentRevisionNo) {
+        private static JsonNode withIsCurrent(JsonNode verification, String currentHash) {
             if (!(verification instanceof ObjectNode v)) {
                 return verification;
             }
-            v.put("is_current", v.path("revision_no").asInt(-1) == currentRevisionNo);
+            v.put("is_current", currentHash.equals(v.path("narrative_sha256").asText(null)));
             return v;
         }
 

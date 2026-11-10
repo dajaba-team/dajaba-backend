@@ -4,6 +4,8 @@ import com.team.aml.str.application.GetStrDraft;
 import com.team.aml.str.application.ListStrRevisions;
 import com.team.aml.str.application.RequestStrDraft;
 import com.team.aml.str.application.ReviseStrDraft;
+import com.team.aml.str.application.VerifyStrDraft;
+import com.fasterxml.jackson.databind.JsonNode;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -22,13 +24,16 @@ public class StrDraftController {
     private final GetStrDraft getStrDraft;
     private final ReviseStrDraft reviseStrDraft;
     private final ListStrRevisions listStrRevisions;
+    private final VerifyStrDraft verifyStrDraft;
 
     public StrDraftController(RequestStrDraft requestStrDraft, GetStrDraft getStrDraft,
-                              ReviseStrDraft reviseStrDraft, ListStrRevisions listStrRevisions) {
+                              ReviseStrDraft reviseStrDraft, ListStrRevisions listStrRevisions,
+                              VerifyStrDraft verifyStrDraft) {
         this.requestStrDraft = requestStrDraft;
         this.getStrDraft = getStrDraft;
         this.reviseStrDraft = reviseStrDraft;
         this.listStrRevisions = listStrRevisions;
+        this.verifyStrDraft = verifyStrDraft;
     }
 
     @Operation(summary = "STR 초안 생성·재생성 (최대 90초)",
@@ -79,5 +84,15 @@ public class StrDraftController {
     public StrRevisionResponses.RevisionDetail revision(@PathVariable String draftNo,
                                                         @RequestParam("revision_no") int revisionNo) {
         return StrRevisionResponses.RevisionDetail.from(listStrRevisions.one(draftNo, revisionNo));
+    }
+
+    @Operation(summary = "STR 검증 (최대 90초, body {})",
+            description = "지금 저장된 본문을 AI 로 검증하고 결과를 저장한다. 응답은 AI 검증 결과 그대로"
+                    + "(status PASSED·CODE_FAILED·LLM_FAILED·VERIFY_UNAVAILABLE, code_checks, llm_checks). "
+                    + "담당만(403 NOT_ASSIGNEE), DRAFTED·보완 요청 반려에서만(409 INVALID_CASE_TRANSITION), "
+                    + "같은 초안 검증 중이면 409 VERIFY_IN_PROGRESS, AI 실패는 502")
+    @PostMapping("/str-drafts/{draftNo}/verify")
+    public JsonNode verify(@PathVariable String draftNo) {
+        return verifyStrDraft.execute(draftNo);
     }
 }
