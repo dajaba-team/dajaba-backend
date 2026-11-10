@@ -1,11 +1,13 @@
 package com.team.aml.cases.api;
 
 import com.team.aml.cases.application.AssignCase;
+import com.team.aml.cases.application.CaseTransactions;
 import com.team.aml.cases.application.CaseSummaryResult;
 import com.team.aml.cases.application.CloseCase;
 import com.team.aml.cases.application.EscalateCase;
 import com.team.aml.cases.application.GetCaseDetail;
 import com.team.aml.cases.application.GetCaseSummary;
+import com.team.aml.cases.application.ListCaseHistories;
 import com.team.aml.cases.application.ListCaseNoteHistories;
 import com.team.aml.cases.application.ListCases;
 import com.team.aml.cases.application.ReassignCase;
@@ -28,8 +30,8 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 케이스 목록·상세·배정·담당자 변경·메모·에스컬레이션·종료·AI 조사 요약
- * (CASES 명세 API-01·02·03·04·05·06·07·12·13·15, 계약서 C1·C2·C7·C8·A1·A2·A3·A4·A5·A7).
+ * 케이스 목록·상세·근거 거래·그래프·이력·배정·담당자 변경·메모·에스컬레이션·종료·AI 조사 요약
+ * (CASES 명세 API-01~13·15, 계약서 C1~C8·A1·A2·A3·A4·A5·A7).
  * 조회 3역할 모두 — SecurityConfig 의 /api/** authenticated. 담당자·상태 검사는 유스케이스·엔티티가 한다.
  * 응답은 유스케이스 record 를 화면 모양으로 바꾼 것 — 원본 account_key 는 내보내지 않는다(AccountDisplay).
  */
@@ -48,11 +50,14 @@ public class CaseController {
     private final UpdateCaseNotes updateCaseNotes;
     private final ListCaseNoteHistories listCaseNoteHistories;
     private final ReassignCase reassignCase;
+    private final CaseTransactions caseTransactions;
+    private final ListCaseHistories listCaseHistories;
 
     public CaseController(ListCases listCases, GetCaseDetail getCaseDetail, AssignCase assignCase,
                           EscalateCase escalateCase, CloseCase closeCase, RefreshCaseSummary refreshCaseSummary,
                           GetCaseSummary getCaseSummary, UpdateCaseNotes updateCaseNotes,
-                          ListCaseNoteHistories listCaseNoteHistories, ReassignCase reassignCase) {
+                          ListCaseNoteHistories listCaseNoteHistories, ReassignCase reassignCase,
+                          CaseTransactions caseTransactions, ListCaseHistories listCaseHistories) {
         this.listCases = listCases;
         this.getCaseDetail = getCaseDetail;
         this.assignCase = assignCase;
@@ -63,6 +68,8 @@ public class CaseController {
         this.updateCaseNotes = updateCaseNotes;
         this.listCaseNoteHistories = listCaseNoteHistories;
         this.reassignCase = reassignCase;
+        this.caseTransactions = caseTransactions;
+        this.listCaseHistories = listCaseHistories;
     }
 
     @Operation(summary = "케이스 목록",
@@ -77,6 +84,41 @@ public class CaseController {
     @GetMapping("/{caseNo}")
     public CaseDetailResponse detail(@PathVariable String caseNo) {
         return CaseDetailResponse.from(getCaseDetail.execute(caseNo));
+    }
+
+    @Operation(summary = "근거 거래",
+            description = "scope=EVIDENCE(기본, 경보에 묶인 거래 전체)|CONTEXT(경보 밖 참고 거래 — 아직 저장소가 없어 빈 목록). "
+                    + "direction 은 케이스 계좌 기준 INBOUND·OUTBOUND·INDIRECT(경유). sort=ts|transaction_id,asc|desc "
+                    + "(기본 ts,asc), size ≤ 100. 계좌는 가린 값과 account_ref 만")
+    @GetMapping("/{caseNo}/transactions")
+    public PageResponse<CaseTransactionResponse> transactions(
+            @PathVariable String caseNo, @Valid @ParameterObject @ModelAttribute CaseTransactionQuery query) {
+        return PageResponse.from(caseTransactions.list(caseNo, query.scopeOrDefault(), query.order(),
+                query.pageOrDefault(), query.sizeOrDefault()).map(CaseTransactionResponse::from));
+    }
+
+    @Operation(summary = "근거 거래 원본",
+            description = "이 케이스의 근거 거래가 아니면(없는 거래 포함) 404 EVIDENCE_NOT_FOUND. 열람 기록을 남긴다")
+    @GetMapping("/{caseNo}/evidence/{transactionId}")
+    public EvidenceResponse evidence(@PathVariable String caseNo, @PathVariable long transactionId) {
+        return EvidenceResponse.from(caseTransactions.evidence(caseNo, transactionId));
+    }
+
+    @Operation(summary = "자금 흐름 그래프",
+            description = "limit 기본 200(1~1,000), 시각 순. 더 있으면 truncated=true, total_transaction_count 는 전체")
+    @GetMapping("/{caseNo}/graph")
+    public CaseGraphResponse graph(@PathVariable String caseNo,
+                                   @Valid @ParameterObject @ModelAttribute CaseGraphQuery query) {
+        return CaseGraphResponse.from(caseTransactions.graph(caseNo, query.limitOrDefault()));
+    }
+
+    @Operation(summary = "상태·업무 이력 전체",
+            description = "최신 먼저, NOTE 제외(메모 전문은 note-histories). action 하나로 거를 수 있다(NOTE 는 400). size ≤ 100")
+    @GetMapping("/{caseNo}/histories")
+    public PageResponse<GetCaseDetail.History> histories(
+            @PathVariable String caseNo, @Valid @ParameterObject @ModelAttribute CaseHistoryQuery query) {
+        return PageResponse.from(listCaseHistories.execute(caseNo, query.action(), query.pageOrDefault(),
+                query.sizeOrDefault()));
     }
 
     @Operation(summary = "담당 맡기 / 배정",

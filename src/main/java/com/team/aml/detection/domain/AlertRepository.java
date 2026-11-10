@@ -20,4 +20,15 @@ public interface AlertRepository {
 
     /** 케이스 상세용 경보 + 점수 + 거래 수. 없으면 empty. */
     Optional<AlertSummary> findSummary(long alertId);
+
+    /** 경보에 묶인 거래 한 페이지 (케이스 근거 거래 C3·그래프 C5). */
+    List<AlertTransaction> findTransactions(long alertId, AlertTransactionOrder order, long offset, int limit);
+
+    /** 경보에 묶인 거래 전체, 시각·id 순 (케이스 상세 aggregates). */
+    List<AlertTransaction> findAllTransactions(long alertId);
+
+    long countTransactions(long alertId);
+
+    /** 이 경보에 묶인 거래면 그 한 건, 아니면 empty (C4 — 다른 경보의 거래는 없는 것과 같다). */
+    Optional<AlertTransaction> findTransaction(long alertId, long transactionId);
 }

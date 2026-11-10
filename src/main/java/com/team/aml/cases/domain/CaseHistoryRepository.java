@@ -17,6 +17,9 @@ public interface CaseHistoryRepository {
      */
     List<CaseHistory> findTop20ByCaseIdAndActionNotOrderByIdDesc(Long caseId, CaseHistoryAction action);
 
+    /** 이력 전체 한 페이지, NOTE 같은 동작 하나를 뺀다 (API-11). */
+    Page<CaseHistory> findByCaseIdAndActionNotOrderByIdDesc(Long caseId, CaseHistoryAction action, Pageable pageable);
+
     /** 이 동작의 마지막 행 — 메모는 마지막 NOTE 행의 comment 가 지금 메모 (API-05). */
     Optional<CaseHistory> findFirstByCaseIdAndActionOrderByIdDesc(Long caseId, CaseHistoryAction action);
 
