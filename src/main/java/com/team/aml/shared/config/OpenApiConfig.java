@@ -1,5 +1,7 @@
 package com.team.aml.shared.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.swagger.v3.core.jackson.ModelResolver;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
@@ -11,6 +13,12 @@ import org.springframework.context.annotation.Configuration;
 /** swagger-ui: http://localhost:8080/swagger-ui.html (local 만. prod 는 꺼짐). */
 @Configuration
 public class OpenApiConfig {
+
+    /** 스키마·예시를 앱 ObjectMapper(SNAKE_CASE)로 만든다 — 없으면 swagger 가 caseVersion 처럼 camelCase 로 보여 준다. */
+    @Bean
+    public ModelResolver modelResolver(ObjectMapper objectMapper) {
+        return new ModelResolver(objectMapper);
+    }
 
     @Bean
     public OpenAPI openAPI() {
