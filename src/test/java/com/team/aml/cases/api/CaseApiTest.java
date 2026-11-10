@@ -32,7 +32,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
-/** /api/v1/cases — 목록·상세·배정·메모·에스컬레이션·종료를 HTTP 로 (SCRUM-106·176, 계약서 C1·C2·C8·A1·A3·A4·A5). 실제 PostgreSQL. */
+/** /api/v1/cases — 목록·상세·배정·담당자 변경·메모·에스컬레이션·종료를 HTTP 로 (SCRUM-106·176·177, 계약서 C1·C2·C8·A1·A2·A3·A4·A5). 실제 PostgreSQL. */
 @Testcontainers
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -322,7 +322,87 @@ class CaseApiTest {
                 .containsEntry("version", 1L);
     }
 
+    // ── 담당자 변경 (SCRUM-177, 계약서 A2) ───────────────────
+
+    @Test
+    void 담당자_변경_ADMIN이_바꾸면_상태_그대로_REASSIGN_이력에_넘긴_받은_사람() throws Exception {
+        AppUserDetails admin = newUser("api_adm" + SEQ.incrementAndGet(), "ADMIN");
+        String caseNo = newOpenCase("010_RSGN%05d".formatted(SEQ.incrementAndGet()));
+        assign(caseNo, inv);   // version 1
+
+        JsonNode moved = json.readTree(body(reassign(caseNo, inv2.loginId(), "조사 업무 분담", 1, admin), 200));
+        assertThat(moved.get("status").asText()).isEqualTo("REVIEWING");
+        assertThat(moved.get("assignee").get("login_id").asText()).isEqualTo(inv2.loginId());
+        assertThat(moved.get("version").asLong()).isEqualTo(2);
+
+        // 같은 담당자면 그대로 — 이력도 version 도 안 바뀜
+        assertThat(json.readTree(body(reassign(caseNo, inv2.loginId(), null, 2, admin), 200))
+                .get("version").asLong()).isEqualTo(2);
+
+        Map<String, Object> h = jdbc.queryForMap("""
+                select h.action, h.from_status, h.to_status, h.comment, h.from_assignee_id, h.to_assignee_id, h.created_by
+                from ops.case_history h join ops.cases c on c.id = h.case_id
+                where c.case_no = ? order by h.id desc limit 1""", caseNo);
+        assertThat(h).containsEntry("action", "REASSIGN").containsEntry("from_status", "REVIEWING")
+                .containsEntry("to_status", "REVIEWING").containsEntry("comment", "조사 업무 분담")
+                .containsEntry("from_assignee_id", inv.userId()).containsEntry("to_assignee_id", inv2.userId())
+                .containsEntry("created_by", admin.userId());
+        assertThat(jdbc.queryForObject("""
+                select count(*) from ops.case_history h join ops.cases c on c.id = h.case_id
+                where c.case_no = ? and h.action = 'REASSIGN'""", Long.class, caseNo)).isEqualTo(1);
+
+        // 넘긴 조사역은 이제 담당이 아니다
+        assertThat(code(post("/api/v1/cases/{caseNo}/escalate", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"comment\": \"넘긴 뒤\", \"version\": 2}").with(as(inv)).with(csrf()), 403))
+                .isEqualTo("NOT_ASSIGNEE");
+        JsonNode detail = json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(admin)), 200));
+        assertThat(texts(detail.get("available_actions"))).contains("REASSIGN");
+    }
+
+    @Test
+    void 담당자_변경_실패는_400_403_404_409이고_케이스는_그대로() throws Exception {
+        AppUserDetails admin = newUser("api_adm" + SEQ.incrementAndGet(), "ADMIN");
+        AppUserDetails apr = newUser("api_apr" + SEQ.incrementAndGet(), "APPROVER");
+        AppUserDetails retired = newUser("api_old" + SEQ.incrementAndGet(), "INVESTIGATOR");
+        jdbc.update("update ops.users set is_active = false where id = ?", retired.userId());
+        String open = newOpenCase("010_RSGO%05d".formatted(SEQ.incrementAndGet()));
+        String caseNo = newOpenCase("010_RSGX%05d".formatted(SEQ.incrementAndGet()));
+        assign(caseNo, inv);   // version 1
+
+        assertThat(code(reassign(caseNo, inv2.loginId(), null, 1, inv), 403)).isEqualTo("FORBIDDEN");   // 조사역
+        assertThat(code(reassign(caseNo, inv2.loginId(), null, 1, apr), 403)).isEqualTo("FORBIDDEN");   // 승인자
+        assertThat(code(reassign(caseNo, "", null, 1, admin), 400)).isEqualTo("INVALID_REQUEST");
+        assertThat(code(reassign(caseNo, inv2.loginId(), "x".repeat(2001), 1, admin), 400))
+                .isEqualTo("INVALID_REQUEST");
+        assertThat(code(reassign(caseNo, inv2.loginId(), null, 0, admin), 409)).isEqualTo("CONCURRENT_UPDATE");
+        assertThat(code(reassign(caseNo, "nobody", null, 1, admin), 404)).isEqualTo("USER_NOT_FOUND");
+        JsonNode inactive = json.readTree(body(reassign(caseNo, retired.loginId(), null, 1, admin), 409)).get("error");
+        assertThat(inactive.get("code").asText()).isEqualTo("INVALID_ASSIGNEE");
+        assertThat(inactive.get("details").get("reason").asText()).isEqualTo("NOT_ACTIVE_INVESTIGATOR");
+        assertThat(code(reassign(caseNo, apr.loginId(), null, 1, admin), 409)).isEqualTo("INVALID_ASSIGNEE");
+        assertThat(code(reassign(open, inv2.loginId(), null, 0, admin), 409)).isEqualTo("INVALID_CASE_TRANSITION");
+        assertThat(code(reassign("CASE-2099-999999", inv2.loginId(), null, 0, admin), 404)).isEqualTo("CASE_NOT_FOUND");
+
+        assertThat(jdbc.queryForMap("select status, version from ops.cases where case_no = ?", caseNo))
+                .containsEntry("status", "REVIEWING").containsEntry("version", 1L);
+        assertThat(jdbc.queryForObject("select assignee_id from ops.cases where case_no = ?", Long.class, caseNo))
+                .isEqualTo(inv.userId());
+    }
+
     // ── 준비 ──────────────────────────────────────────────────
+
+    private RequestBuilder reassign(String caseNo, String assignee, String comment, long version,
+                                    AppUserDetails who) throws Exception {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("assignee", assignee);
+        if (comment != null) {
+            body.put("comment", comment);
+        }
+        body.put("version", version);
+        return post("/api/v1/cases/{caseNo}/reassign", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(body)).with(as(who)).with(csrf());
+    }
+
 
     private RequestBuilder notes(String caseNo, String text, long version, AppUserDetails who) throws Exception {
         String content = json.writeValueAsString(Map.of("investigator_notes", text, "version", version));

@@ -96,6 +96,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/v1/approvals/**").hasAnyRole("ADMIN", "APPROVER")
                 .requestMatchers("/api/v1/approvals/**").hasRole("APPROVER")
+                .requestMatchers(HttpMethod.POST, "/api/v1/cases/*/reassign").hasRole("ADMIN")   // 권한 표 7 (SCRUM-177)
                 .requestMatchers("/api/**").authenticated()
                 .anyRequest().denyAll())
             .sessionManagement(s -> s
