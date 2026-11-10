@@ -1,5 +1,6 @@
 package com.team.aml.cases.infrastructure;
 
+import com.team.aml.cases.domain.AssigneeCaseCount;
 import com.team.aml.cases.domain.Case;
 import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.cases.domain.CaseStatus;
@@ -13,6 +14,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -36,6 +38,16 @@ public interface CaseJpaRepository extends Repository<Case, Long>, CaseRepositor
     Page<Case> search(@Param("statuses") Collection<CaseStatus> statuses, @Param("assigneeId") Long assigneeId,
                       @Param("createdFrom") Instant createdFrom, @Param("createdTo") Instant createdTo,
                       Pageable pageable);
+
+    @Override
+    @Query("""
+            select new com.team.aml.cases.domain.AssigneeCaseCount(c.assigneeId, count(c))
+            from InvestigationCase c
+            where c.assigneeId in :assigneeIds and c.status in :statuses
+            group by c.assigneeId
+            """)
+    List<AssigneeCaseCount> countByAssignees(@Param("assigneeIds") Collection<Long> assigneeIds,
+                                             @Param("statuses") Collection<CaseStatus> statuses);
 
     @Override
     @Query(value = "select nextval('ops.case_no_seq')", nativeQuery = true)

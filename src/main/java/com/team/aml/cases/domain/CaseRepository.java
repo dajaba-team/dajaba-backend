@@ -5,6 +5,7 @@ import org.springframework.data.domain.Pageable;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -45,6 +46,12 @@ public interface CaseRepository {
      */
     Page<Case> search(Collection<CaseStatus> statuses, Long assigneeId, Instant createdFrom, Instant createdTo,
                       Pageable pageable);
+
+    /**
+     * 담당자별 케이스 수 (미결 33, SCRUM-178). assigneeIds·statuses 는 비우지 않고 넘긴다.
+     * 한 건도 없는 담당자는 결과에 없다 — 0 채우기는 부르는 쪽(ActiveCaseCounter 구현) 몫.
+     */
+    List<AssigneeCaseCount> countByAssignees(Collection<Long> assigneeIds, Collection<CaseStatus> statuses);
 
     /**
      * 케이스 번호 일련번호 (ops.case_no_seq, V006). 번호 형식은 DisplayNumber.caseNo 한 곳.

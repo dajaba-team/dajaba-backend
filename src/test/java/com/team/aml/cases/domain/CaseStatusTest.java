@@ -284,4 +284,15 @@ class CaseStatusTest {
                 .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> assertThat(e.details())
                         .doesNotContainKey("rejection_reason_code"));
     }
+
+    // ── 진행 중 (미결 33, SCRUM-178) ─────────────────────────
+
+    @Test
+    void 진행_중은_담당이_쥐고_있는_다섯_상태() {
+        assertThat(CaseStatus.active()).containsExactlyInAnyOrder(REVIEWING, ESCALATED, DRAFTED, PENDING_APPROVAL, REJECTED);
+        assertThat(OPEN.isActive()).isFalse();
+        assertThat(APPROVED.isActive()).isFalse();
+        assertThat(REPORTED.isActive()).isFalse();
+        assertThat(CLOSED.isActive()).isFalse();
+    }
 }
