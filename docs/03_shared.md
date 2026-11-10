@@ -92,6 +92,7 @@
 | 400·409 | `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
 | 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |
 | 409 | `CASE_ALREADY_OPENED` | detection `MarkCaseOpened` — 이미 케이스가 생긴 경보. 케이스 생성 트랜잭션째 롤백 | 확정 [SCRUM-108] |
+| 409 | `LOGIN_ID_TAKEN`, `ACCOUNT_CHANGE_NOT_ALLOWED` (`details.reason` = `SELF`·`SYSTEM`) | user 계정 관리 — 아이디 중복(DB unique 위반도 같은 409) · 관리자 본인·SYSTEM 계정 변경 | 확정 [SCRUM-135 ②-a, 11/10 진희] |
 | 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 거부), `AI_TIMEOUT`, `AI_BAD_RESPONSE`, `AI_DRAFT_NOT_FOUND`·`AI_INVALID_REQUEST`·`AI_UNAUTHENTICATED`(AI 404·400·401 이름 바꿈, SCRUM-128), `SUMMARY_CODE_CHECK_FAILED` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정. 〔제안〕 `SUMMARY_CODE_CHECK_FAILED` — 요약 응답은 200인데 `code_checks` 중 `match=false`가 있어 저장하지 않음(`details.failed_checks`), 기존 요약 유지 [규약 v0.4 §6.1, RefreshCaseSummary] |
 | 500 | `INTERNAL_ERROR` | 공통 | 확정 |
 
@@ -229,6 +230,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | STR 초안 본문 | str 초안 상세 | `accessLog.strView(draftId)` |
 | 확정본 PDF | str PDF 다운로드 | `accessLog.pdfDownload(draftId)` |
 | ADMIN 내보내기 | 내보내기 유스케이스 | `accessLog.export(type, id)` |
+| 계정 발급 | user `CreateUser` | `accessLog.userCreated(targetUserId)` — target `USER`, 사용자는 관리자. 변경과 같은 트랜잭션 [SCRUM-135 ②] |
 
 - `AccessLogWriter`(`shared/audit`)를 주입받아 부르기만 해요. **사용자는 `CurrentUser`, IP는 지금 요청**에서 Writer가 꺼내요 — 호출부는 넘기지 않아요. action 문자열을 밖에서 넣는 메서드는 없어요.
 - 기록은 **바깥 조회 트랜잭션에 참여**해요(`MANDATORY`, 같은 커넥션). 그래서 **열람 기록을 부르는 조회 유스케이스는 `@Transactional`(readOnly 아님)**이에요. 커넥션은 조회 하나에 하나, 기록과 조회는 **같이 성공·같이 실패**해요 — 기록 뒤에 조회가 실패하면 기록도 롤백되어 **본문을 실제로 돌려준 열람만** 남아요. [11/3, SCRUM-93]
