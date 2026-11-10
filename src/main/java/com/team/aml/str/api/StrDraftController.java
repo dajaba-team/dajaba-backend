@@ -1,7 +1,9 @@
 package com.team.aml.str.api;
 
 import com.team.aml.str.application.GetStrDraft;
+import com.team.aml.str.application.ListStrRevisions;
 import com.team.aml.str.application.RequestStrDraft;
+import com.team.aml.str.application.ReviseStrDraft;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -18,10 +20,15 @@ import org.springframework.web.bind.annotation.*;
 public class StrDraftController {
     private final RequestStrDraft requestStrDraft;
     private final GetStrDraft getStrDraft;
+    private final ReviseStrDraft reviseStrDraft;
+    private final ListStrRevisions listStrRevisions;
 
-    public StrDraftController(RequestStrDraft requestStrDraft, GetStrDraft getStrDraft) {
+    public StrDraftController(RequestStrDraft requestStrDraft, GetStrDraft getStrDraft,
+                              ReviseStrDraft reviseStrDraft, ListStrRevisions listStrRevisions) {
         this.requestStrDraft = requestStrDraft;
         this.getStrDraft = getStrDraft;
+        this.reviseStrDraft = reviseStrDraft;
+        this.listStrRevisions = listStrRevisions;
     }
 
     @Operation(summary = "STR 초안 생성·재생성 (최대 90초)",
@@ -46,5 +53,31 @@ public class StrDraftController {
         return StrDraftDetailResponse.from(
                 getStrDraft.execute(draftNo)
         );
+    }
+
+    @Operation(summary = "STR 본문 수정 저장 (고친 단락만)",
+            description = "담당만(403 NOT_ASSIGNEE). 단락 문장 비었거나 NFC 5,000자 초과·같은 단락 두 번은 400 INVALID_REQUEST. "
+                    + "case_version 다르면 409 CONCURRENT_UPDATE, DRAFTED·보완 요청 반려가 아니면 409 INVALID_CASE_TRANSITION. "
+                    + "근거(cites·evidence_ids)는 서버가 지금 본문에서 그대로 옮긴다")
+    @PutMapping("/str-drafts/{draftNo}/revisions")
+    public StrRevisionResponses.Saved revise(@PathVariable String draftNo,
+                                             @Valid @RequestBody ReviseStrDraftRequest request) {
+        return StrRevisionResponses.Saved.from(
+                reviseStrDraft.execute(draftNo, request.caseVersion(), request.editedTexts()));
+    }
+
+    @Operation(summary = "STR 수정 이력 목록",
+            description = "담당 조사역·승인자만(그 밖 403 NOT_ASSIGNEE). 열람 기록 STR_VIEW. 1번 = AI 원문")
+    @GetMapping(value = "/str-drafts/{draftNo}/revisions", params = "!revision_no")
+    public StrRevisionResponses.RevisionList revisions(@PathVariable String draftNo) {
+        return StrRevisionResponses.RevisionList.from(listStrRevisions.list(draftNo));
+    }
+
+    @Operation(summary = "STR 수정본 한 벌 (전·후 본문)",
+            description = "?revision_no= 그 수정본의 고치기 전·후 본문 전체. 없는 번호는 404 REVISION_NOT_FOUND")
+    @GetMapping(value = "/str-drafts/{draftNo}/revisions", params = "revision_no")
+    public StrRevisionResponses.RevisionDetail revision(@PathVariable String draftNo,
+                                                        @RequestParam("revision_no") int revisionNo) {
+        return StrRevisionResponses.RevisionDetail.from(listStrRevisions.one(draftNo, revisionNo));
     }
 }
