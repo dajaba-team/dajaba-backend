@@ -29,8 +29,11 @@ public class CaseActiveCaseCounter implements ActiveCaseCounter {
     @Override
     @Transactional(readOnly = true)
     public Map<Long, Long> countActiveByAssignees(Collection<Long> userIds) {
-        List<Long> ids = userIds.stream().filter(Objects::nonNull).distinct().toList();
         Map<Long, Long> counts = new LinkedHashMap<>();
+        if (userIds == null) {
+            return counts;
+        }
+        List<Long> ids = userIds.stream().filter(Objects::nonNull).distinct().toList();
         if (ids.isEmpty()) {
             return counts;
         }

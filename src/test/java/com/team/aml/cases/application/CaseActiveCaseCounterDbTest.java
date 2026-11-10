@@ -96,11 +96,12 @@ class CaseActiveCaseCounterDbTest {
     }
 
     @Test
-    void 빈_목록이면_빈_지도_null_과_중복은_건너뛴다() {
+    void 빈_목록이나_null_이면_빈_지도_null_id_와_중복은_건너뛴다() {
         long a = user("ac_dup");
         withStatus(a, CaseStatus.REVIEWING);
 
         assertThat(counter.countActiveByAssignees(List.of())).isEmpty();
+        assertThat(counter.countActiveByAssignees(null)).isEmpty();   // #86 리뷰 — NPE 대신 빈 지도
         assertThat(counter.countActiveByAssignees(Arrays.asList(a, null, a))).containsExactly(Map.entry(a, 1L));
     }
 

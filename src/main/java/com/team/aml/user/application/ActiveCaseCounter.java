@@ -12,8 +12,8 @@ import java.util.Map;
 public interface ActiveCaseCounter {
 
     /**
-     * 계정 목록용. 넘긴 id 는 0건이어도 모두 키로 들어간다. 빈 목록이면 빈 지도(DB 를 읽지 않음).
-     * null id 는 건너뛴다.
+     * 계정 목록용. 넘긴 id 는 0건이어도 모두 키로 들어간다. 목록이 null 이거나 비었으면 빈 지도(DB 를 읽지 않음).
+     * 목록 안의 null id 는 건너뛴다.
      */
     Map<Long, Long> countActiveByAssignees(Collection<Long> userIds);
 
