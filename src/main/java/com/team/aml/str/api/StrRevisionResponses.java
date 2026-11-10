@@ -22,7 +22,7 @@ public final class StrRevisionResponses {
                         long version, long caseVersion) {
         public static Saved from(ReviseStrDraft.Revised r) {
             return new Saved(r.draftNo(), r.revisionNo(), r.changedSections(), r.editedBy(), r.editedAt(),
-                    narrative(r.narrative()), r.needsVerification(), r.version(), r.caseVersion());
+                    StrRevisionResponses.narrative(r.narrative()), r.needsVerification(), r.version(), r.caseVersion());
         }
     }
 
