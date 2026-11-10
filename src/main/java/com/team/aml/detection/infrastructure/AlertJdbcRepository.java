@@ -7,8 +7,11 @@ import com.team.aml.detection.domain.AlertForCaseOpening;
 import com.team.aml.detection.domain.AlertForDraft;
 import com.team.aml.detection.domain.AlertRepository;
 import com.team.aml.detection.domain.AlertSummary;
+import com.team.aml.detection.domain.AlertTransaction;
+import com.team.aml.detection.domain.AlertTransactionOrder;
 import com.team.aml.shared.ai.AiDtos.AlertPayload;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
@@ -57,6 +60,18 @@ public class AlertJdbcRepository implements AlertRepository {
             join ops.rules r on r.id = a.rule_ref_id
             left join ops.alert_scores s on s.alert_id = a.id
             where a.id = ?""";
+    // 경보 거래 (케이스 C3·C4·C5·aggregates). 정답 칸(is_laundering·pattern_*)은 고르지 않는다.
+    private static final String TRANSACTION_COLUMNS = """
+            select t.transaction_id, t.ts, t.from_account_key, t.to_account_key, t.amount_paid, t.currency_paid,
+                   t.amount_received, t.currency_received, t.payment_format, t.is_self_transfer
+            from ops.alert_transactions at
+            join ops.transactions t on t.transaction_id = at.transaction_id
+            where at.alert_id = ?""";
+    private static final RowMapper<AlertTransaction> TRANSACTION = (rs, rowNum) -> new AlertTransaction(
+            rs.getLong("transaction_id"), rs.getObject("ts", LocalDateTime.class), rs.getString("from_account_key"),
+            rs.getString("to_account_key"), rs.getBigDecimal("amount_paid"), rs.getString("currency_paid"),
+            rs.getBigDecimal("amount_received"), rs.getString("currency_received"), rs.getString("payment_format"),
+            rs.getBoolean("is_self_transfer"));
     /** 데이터 시각은 규약 예시처럼 초까지. LocalDateTime.toString 은 초가 0이면 잘라서 쓰지 않는다. */
     private static final DateTimeFormatter DATA_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
@@ -137,5 +152,38 @@ public class AlertJdbcRepository implements AlertRepository {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("저장된 JSON 을 읽을 수 없습니다", e);
         }
+    }
+
+    @Override
+    public List<AlertTransaction> findTransactions(long alertId, AlertTransactionOrder order, long offset, int limit) {
+        return jdbc.query(TRANSACTION_COLUMNS + " order by " + orderBy(order) + " limit ? offset ?",
+                TRANSACTION, alertId, limit, offset);
+    }
+
+    @Override
+    public List<AlertTransaction> findAllTransactions(long alertId) {
+        return jdbc.query(TRANSACTION_COLUMNS + " order by t.ts, t.transaction_id", TRANSACTION, alertId);
+    }
+
+    @Override
+    public long countTransactions(long alertId) {
+        Long n = jdbc.queryForObject("select count(*) from ops.alert_transactions where alert_id = ?", Long.class, alertId);
+        return n == null ? 0 : n;
+    }
+
+    @Override
+    public Optional<AlertTransaction> findTransaction(long alertId, long transactionId) {
+        return jdbc.query(TRANSACTION_COLUMNS + " and t.transaction_id = ?", TRANSACTION, alertId, transactionId)
+                .stream().findFirst();
+    }
+
+    /** enum 에서만 고른다 — 사용자 입력을 SQL 에 이어 붙이지 않는다. */
+    private static String orderBy(AlertTransactionOrder order) {
+        return switch (order) {
+            case TS_ASC -> "t.ts, t.transaction_id";
+            case TS_DESC -> "t.ts desc, t.transaction_id desc";
+            case TRANSACTION_ID_ASC -> "t.transaction_id";
+            case TRANSACTION_ID_DESC -> "t.transaction_id desc";
+        };
     }
 }
