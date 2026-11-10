@@ -111,6 +111,14 @@
 - 이미 성공한 날짜는 다시 스캔하지 않아요(`batch_runs`). 그래서 룰 버전을 올려도 같은 날짜에 같은 룰·계좌·창 경보가 버전별로 또 생기지 않아요. 새 버전은 다음 스캔부터 적용돼요.
 
 **점수 요청** [레퍼런스 §11.1, 안건 2·4·14·21, ML 규약 §2·§3·§6]
+
+**점수 배치 — 구현됨 (SCRUM-100)** `POST /api/v1/admin/batches/score?date=` → 200 `{batch_run_id, batch_type, batch_date, status, requested, scored, failed, chunks{total, failed}, model_versions, started_at, finished_at}` (동기)
+- 시작 전 거절(행 안 남김): 그 날짜 룰 스캔 성공 없음 409 `RULE_SCAN_NOT_DONE` · 실행 중 409 `BATCH_RUNNING`. **성공한 날도 다시 돌려요**(V012) — 대상이 없으면 AI를 부르지 않고 `requested: 0`으로 SUCCEEDED.
+- 대상을 경보 id 순으로 `aml.ai.max-batch`(500)개씩 잘라 묶음마다 `AiClient.scores()`(트랜잭션 밖) → 저장은 묶음마다 한 트랜잭션.
+- 묶음 호출이 실패하면(재시도 1회 뒤, `AI_BAD_RESPONSE` 포함) 그 묶음만 `FAILED` + 코드 NULL로 커밋하고 다음 묶음으로 가요. 앞 묶음의 `SCORED`는 그대로.
+- 항목 확인(`ScoreOutcome`): 점수 상태 3값 + `prediction_id`·버전(64자 이하) + 오프셋 있는 `produced_at`이면 `SCORED` + `alert_scores` 한 행. `FAILED` 항목은 코드가 4값이면 그대로, 아니면 NULL. 그 밖은 `FAILED` + NULL.
+- `batch_runs`: 다시 보낼 실패(코드 NULL·`COMPUTE_ERROR`)가 남으면 **FAILED**(건수 메시지), 없으면 SUCCEEDED(`rows_in` = 보낸 경보 수, `rows_out` = SCORED 수). 대상 조회·DB 오류로 멈추면 FAILED + 500, 이미 커밋한 묶음은 그대로. 앱이 죽어 남은 `RUNNING`은 기동 때 `FAILED`로.
+
 - 대상: 그날 `PENDING`(재실행 땐 남은 `PENDING`과, `FAILED` 중 `score_failure_code`가 **NULL(묶음 실패)이거나 `COMPUTE_ERROR`**인 것 — 10/29) 경보를 **500개씩** `POST /v1/scores`. AI 호출은 트랜잭션 밖, **묶음마다 커밋**.
 - 응답 처리 [10/29 준혁 확인, AI SCRUM-41]:
   - 점수가 있으면(`OK`·`SHORT_HISTORY`·`MISSING_INPUT`) `alert_scores` 한 행 + `SCORED`. 이력 부족·일부 결측도 **실패가 아니에요**.
