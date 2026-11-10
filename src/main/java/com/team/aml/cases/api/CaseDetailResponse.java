@@ -19,7 +19,8 @@ import java.util.List;
  *   <li>alert·latest_score — detection GetAlertSummary 로 채운다 (SCRUM-152)</li>
  *   <li>score·score_band·policy_version — 계약서 Q2 MVP: latest_score 와 같은 값 (생성 때 스냅샷은 후속)</li>
  *   <li>latest_summary — API-13 과 같은 값 (요약 없으면 null, SCRUM-175)</li>
- *   <li>aggregates·investigator_notes — API-08·05 후</li>
+ *   <li>investigator_notes — 마지막 NOTE 행 (메모를 쓴 적이 없으면 null, SCRUM-176)</li>
+ *   <li>aggregates — API-08 후</li>
  *   <li>current_draft 본문 — str 조합 계층 후 (노션 미결 17). 번호 current_draft_no 는 지금 준다</li>
  *   <li>customer·prior_alerts — 후속</li>
  * </ul>
@@ -44,7 +45,7 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
         return new CaseDetailResponse(r.caseNo(), r.status(), AccountDisplay.ref(r.accountKey()),
                 AccountDisplay.maskedNo(r.accountKey()), r.entityId(), r.assignee(), r.latestScore().score(),
                 r.latestScore().scoreBand(), r.policyVersion(),
-                r.rejectionReasonCode(), r.version(), r.createdAt(), r.updatedAt(), r.alert(), null, null,
+                r.rejectionReasonCode(), r.version(), r.createdAt(), r.updatedAt(), r.alert(), null, r.investigatorNotes(),
                 r.closeReason(), r.latestScore(), null, r.latestSummary(),
                 CaseChangeResponse.draftNo(r.currentDraftId()), null, List.of(), r.history(), r.availableActions());
     }

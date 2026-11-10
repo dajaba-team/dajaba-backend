@@ -30,8 +30,9 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
-/** /api/v1/cases — 목록·상세·배정·에스컬레이션·종료를 HTTP 로 (SCRUM-106, 계약서 C1·C2·A1·A4·A5). 실제 PostgreSQL. */
+/** /api/v1/cases — 목록·상세·배정·담당자 변경·메모·에스컬레이션·종료를 HTTP 로 (SCRUM-106·176·177, 계약서 C1·C2·C8·A1·A2·A3·A4·A5). 실제 PostgreSQL. */
 @Testcontainers
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -224,7 +225,216 @@ class CaseApiTest {
         assertThat(detail.get("version").asLong()).isEqualTo(2);
     }
 
+    // ── 메모 (SCRUM-176, 계약서 A3·C8) ───────────────────────
+
+    @Test
+    void 메모_저장하면_NOTE_이력_version_증가_상세에_보이고_이력은_전후_전문() throws Exception {
+        String caseNo = newOpenCase("010_NOTE%05d".formatted(SEQ.incrementAndGet()));
+        assign(caseNo, inv);   // version 1
+
+        JsonNode first = json.readTree(body(notes(caseNo, "거래 목적 확인 필요", 1, inv), 200));
+        assertThat(first.get("status").asText()).isEqualTo("REVIEWING");
+        assertThat(first.get("version").asLong()).isEqualTo(2);
+        assertThat(first.get("updated_at").asText()).endsWith("Z");
+        assertThat(json.readTree(body(notes(caseNo, "거래 목적 자료 요청 완료", 2, inv), 200))
+                .get("version").asLong()).isEqualTo(3);
+
+        // 같은 내용이면 그대로 — 이력도 version 도 안 바뀜
+        assertThat(json.readTree(body(notes(caseNo, "거래 목적 자료 요청 완료", 3, inv), 200))
+                .get("version").asLong()).isEqualTo(3);
+        // 빈 문자열 = 비우기
+        assertThat(json.readTree(body(notes(caseNo, "", 3, inv), 200)).get("version").asLong()).isEqualTo(4);
+
+        JsonNode detail = json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(inv)), 200));
+        assertThat(detail.get("investigator_notes").asText()).isEmpty();
+        assertThat(detail.get("version").asLong()).isEqualTo(4);
+        assertThat(texts(detail.get("available_actions"))).contains("UPDATE_NOTES");
+        detail.get("history").forEach(h -> assertThat(h.get("action").asText()).isNotEqualTo("NOTE"));   // 전문은 C8
+
+        JsonNode page = json.readTree(body(get("/api/v1/cases/{caseNo}/note-histories", caseNo).with(as(inv2)), 200));
+        assertThat(page.get("total").asLong()).isEqualTo(3);
+        JsonNode items = page.get("items");
+        assertThat(items.get(0).get("before_text").asText()).isEqualTo("거래 목적 자료 요청 완료");
+        assertThat(items.get(0).get("after_text").asText()).isEmpty();
+        assertThat(items.get(0).get("case_version_before").asLong()).isEqualTo(3);
+        assertThat(items.get(0).get("created_by").asText()).isEqualTo(inv.loginId());
+        assertThat(items.get(0).get("created_at").asText()).endsWith("Z");
+        assertThat(items.get(2).get("before_text").isNull()).isTrue();          // 첫 기록
+        assertThat(items.get(2).get("after_text").asText()).isEqualTo("거래 목적 확인 필요");
+
+        // 페이지 경계 — 페이지 밖 직전 메모도 before_text 로
+        JsonNode top = json.readTree(body(get("/api/v1/cases/{caseNo}/note-histories", caseNo)
+                .param("page", "0").param("size", "1").with(as(inv)), 200));
+        assertThat(top.get("items")).hasSize(1);
+        assertThat(top.get("items").get(0).get("before_text").asText()).isEqualTo("거래 목적 자료 요청 완료");
+        JsonNode middle = json.readTree(body(get("/api/v1/cases/{caseNo}/note-histories", caseNo)
+                .param("page", "1").param("size", "1").with(as(inv)), 200));
+        assertThat(middle.get("items").get(0).get("before_text").asText()).isEqualTo("거래 목적 확인 필요");
+        assertThat(middle.get("items").get(0).get("after_text").asText()).isEqualTo("거래 목적 자료 요청 완료");
+
+        assertThat(jdbc.queryForList("""
+                select h.action from ops.case_history h join ops.cases c on c.id = h.case_id
+                where c.case_no = ? order by h.id""", String.class, caseNo))
+                .containsExactly("OPEN", "ASSIGN", "NOTE", "NOTE", "NOTE");
+    }
+
+    @Test
+    void 메모_실패는_400_403_404_409이고_아무것도_안_바뀐다() throws Exception {
+        String caseNo = newOpenCase("010_NOTX%05d".formatted(SEQ.incrementAndGet()));
+
+        assertThat(code(notes(caseNo, "배정 전", 0, inv), 403)).isEqualTo("NOT_ASSIGNEE");   // 담당 없음 = 담당 아님
+        assign(caseNo, inv);   // version 1
+
+        assertThat(code(notes(caseNo, "x".repeat(10001), 1, inv), 400)).isEqualTo("INVALID_REQUEST");
+        assertThat(json.readTree(body(put("/api/v1/cases/{caseNo}/notes", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"investigator_notes\": null, \"version\": 1}").with(as(inv)).with(csrf()), 400))
+                .path("error").path("details").has("investigator_notes")).isTrue();
+        assertThat(code(put("/api/v1/cases/{caseNo}/notes", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"version\": 1}").with(as(inv)).with(csrf()), 400)).isEqualTo("INVALID_REQUEST");
+        assertThat(code(notes(caseNo, "남의 케이스", 1, inv2), 403)).isEqualTo("NOT_ASSIGNEE");
+        assertThat(code(notes(caseNo, "", 0, inv), 409)).isEqualTo("CONCURRENT_UPDATE");   // 내용이 같아도 옛 version 은 409
+        assertThat(code(notes("CASE-2099-999999", "x", 0, inv), 404)).isEqualTo("CASE_NOT_FOUND");
+        assertThat(code(get("/api/v1/cases/{caseNo}/note-histories", "CASE-2099-999999").with(as(inv)), 404))
+                .isEqualTo("CASE_NOT_FOUND");
+        assertThat(code(get("/api/v1/cases/{caseNo}/note-histories", caseNo).param("size", "101").with(as(inv)), 400))
+                .isEqualTo("INVALID_REQUEST");
+        assertThat(jdbc.queryForMap("select version from ops.cases where case_no = ?", caseNo))
+                .containsEntry("version", 1L);
+
+        // 10,000자 딱은 저장된다
+        assertThat(json.readTree(body(notes(caseNo, "가".repeat(10000), 1, inv), 200)).get("version").asLong())
+                .isEqualTo(2);
+
+        // 승인 대기처럼 편집 불가 상태는 409 INVALID_CASE_TRANSITION(action=UPDATE_NOTES)
+        String other = newOpenCase("010_NOTP%05d".formatted(SEQ.incrementAndGet()));
+        assign(other, inv);
+        long draftId = newDraft(other);
+        jdbc.update("update ops.cases set status = 'PENDING_APPROVAL', current_draft_id = ? where case_no = ?",
+                draftId, other);
+        JsonNode err = json.readTree(body(notes(other, "승인 대기 중", 1, inv), 409)).get("error");
+        assertThat(err.get("code").asText()).isEqualTo("INVALID_CASE_TRANSITION");
+        assertThat(err.get("details").get("action").asText()).isEqualTo("UPDATE_NOTES");
+
+        JsonNode empty = json.readTree(body(get("/api/v1/cases/{caseNo}/note-histories", other).with(as(inv)), 200));
+        assertThat(empty.get("items")).isEmpty();
+        assertThat(empty.get("total").asLong()).isZero();
+        assertThat(jdbc.queryForMap("select version from ops.cases where case_no = ?", other))
+                .containsEntry("version", 1L);
+    }
+
+    // ── 담당자 변경 (SCRUM-177, 계약서 A2) ───────────────────
+
+    @Test
+    void 담당자_변경_ADMIN이_바꾸면_상태_그대로_REASSIGN_이력에_넘긴_받은_사람() throws Exception {
+        AppUserDetails admin = newUser("api_adm" + SEQ.incrementAndGet(), "ADMIN");
+        String caseNo = newOpenCase("010_RSGN%05d".formatted(SEQ.incrementAndGet()));
+        assign(caseNo, inv);   // version 1
+
+        // 목록 한 줄에도 상세와 같은 available_actions — 관리자에게만 REASSIGN (#23 리뷰)
+        JsonNode adminRow = itemOf(json.readTree(body(get("/api/v1/cases").param("status", "REVIEWING")
+                .param("size", "100").with(as(admin)), 200)), caseNo);
+        assertThat(texts(adminRow.get("available_actions"))).contains("REASSIGN");
+        JsonNode invRow = itemOf(json.readTree(body(get("/api/v1/cases").param("status", "REVIEWING")
+                .param("size", "100").with(as(inv)), 200)), caseNo);
+        assertThat(texts(invRow.get("available_actions"))).doesNotContain("REASSIGN").contains("ESCALATE");
+
+        JsonNode moved = json.readTree(body(reassign(caseNo, inv2.loginId(), "조사 업무 분담", 1, admin), 200));
+        assertThat(moved.get("status").asText()).isEqualTo("REVIEWING");
+        assertThat(moved.get("assignee").get("login_id").asText()).isEqualTo(inv2.loginId());
+        assertThat(moved.get("version").asLong()).isEqualTo(2);
+
+        // 같은 담당자면 그대로 — 이력도 version 도 안 바뀜
+        assertThat(json.readTree(body(reassign(caseNo, inv2.loginId(), null, 2, admin), 200))
+                .get("version").asLong()).isEqualTo(2);
+
+        Map<String, Object> h = jdbc.queryForMap("""
+                select h.action, h.from_status, h.to_status, h.comment, h.from_assignee_id, h.to_assignee_id, h.created_by
+                from ops.case_history h join ops.cases c on c.id = h.case_id
+                where c.case_no = ? order by h.id desc limit 1""", caseNo);
+        assertThat(h).containsEntry("action", "REASSIGN").containsEntry("from_status", "REVIEWING")
+                .containsEntry("to_status", "REVIEWING").containsEntry("comment", "조사 업무 분담")
+                .containsEntry("from_assignee_id", inv.userId()).containsEntry("to_assignee_id", inv2.userId())
+                .containsEntry("created_by", admin.userId());
+        assertThat(jdbc.queryForObject("""
+                select count(*) from ops.case_history h join ops.cases c on c.id = h.case_id
+                where c.case_no = ? and h.action = 'REASSIGN'""", Long.class, caseNo)).isEqualTo(1);
+
+        // 넘긴 조사역은 이제 담당이 아니다
+        assertThat(code(post("/api/v1/cases/{caseNo}/escalate", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"comment\": \"넘긴 뒤\", \"version\": 2}").with(as(inv)).with(csrf()), 403))
+                .isEqualTo("NOT_ASSIGNEE");
+        JsonNode detail = json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(admin)), 200));
+        assertThat(texts(detail.get("available_actions"))).contains("REASSIGN");
+    }
+
+    @Test
+    void 담당자_변경_실패는_400_403_404_409이고_케이스는_그대로() throws Exception {
+        AppUserDetails admin = newUser("api_adm" + SEQ.incrementAndGet(), "ADMIN");
+        AppUserDetails apr = newUser("api_apr" + SEQ.incrementAndGet(), "APPROVER");
+        AppUserDetails retired = newUser("api_old" + SEQ.incrementAndGet(), "INVESTIGATOR");
+        jdbc.update("update ops.users set is_active = false where id = ?", retired.userId());
+        String open = newOpenCase("010_RSGO%05d".formatted(SEQ.incrementAndGet()));
+        String caseNo = newOpenCase("010_RSGX%05d".formatted(SEQ.incrementAndGet()));
+        assign(caseNo, inv);   // version 1
+
+        assertThat(code(reassign(caseNo, inv2.loginId(), null, 1, inv), 403)).isEqualTo("FORBIDDEN");   // 조사역
+        assertThat(code(reassign(caseNo, inv2.loginId(), null, 1, apr), 403)).isEqualTo("FORBIDDEN");   // 승인자
+        assertThat(code(reassign(caseNo, "", null, 1, admin), 400)).isEqualTo("INVALID_REQUEST");
+        assertThat(code(reassign(caseNo, inv2.loginId(), "x".repeat(2001), 1, admin), 400))
+                .isEqualTo("INVALID_REQUEST");
+        assertThat(code(reassign(caseNo, inv2.loginId(), null, 0, admin), 409)).isEqualTo("CONCURRENT_UPDATE");
+        assertThat(code(reassign(caseNo, "nobody", null, 1, admin), 404)).isEqualTo("USER_NOT_FOUND");
+        JsonNode inactive = json.readTree(body(reassign(caseNo, retired.loginId(), null, 1, admin), 409)).get("error");
+        assertThat(inactive.get("code").asText()).isEqualTo("INVALID_ASSIGNEE");
+        assertThat(inactive.get("details").get("reason").asText()).isEqualTo("NOT_ACTIVE_INVESTIGATOR");
+        assertThat(code(reassign(caseNo, apr.loginId(), null, 1, admin), 409)).isEqualTo("INVALID_ASSIGNEE");
+        assertThat(code(reassign(open, inv2.loginId(), null, 0, admin), 409)).isEqualTo("INVALID_CASE_TRANSITION");
+        assertThat(code(reassign("CASE-2099-999999", inv2.loginId(), null, 0, admin), 404)).isEqualTo("CASE_NOT_FOUND");
+
+        assertThat(jdbc.queryForMap("select status, version from ops.cases where case_no = ?", caseNo))
+                .containsEntry("status", "REVIEWING").containsEntry("version", 1L);
+        assertThat(jdbc.queryForObject("select assignee_id from ops.cases where case_no = ?", Long.class, caseNo))
+                .isEqualTo(inv.userId());
+    }
+
     // ── 준비 ──────────────────────────────────────────────────
+
+    private RequestBuilder reassign(String caseNo, String assignee, String comment, long version,
+                                    AppUserDetails who) throws Exception {
+        Map<String, Object> body = new java.util.HashMap<>();
+        body.put("assignee", assignee);
+        if (comment != null) {
+            body.put("comment", comment);
+        }
+        body.put("version", version);
+        return post("/api/v1/cases/{caseNo}/reassign", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(body)).with(as(who)).with(csrf());
+    }
+
+
+    private RequestBuilder notes(String caseNo, String text, long version, AppUserDetails who) throws Exception {
+        String content = json.writeValueAsString(Map.of("investigator_notes", text, "version", version));
+        return put("/api/v1/cases/{caseNo}/notes", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content(content).with(as(who)).with(csrf());
+    }
+
+    /** 승인 대기로 만들 때 필요한 초안 한 건 (V006 cases_current_draft_ck). */
+    private long newDraft(String caseNo) {
+        long caseId = jdbc.queryForObject("select id from ops.cases where case_no = ?", Long.class, caseNo);
+        long draftId = jdbc.queryForObject("select nextval('ops.str_draft_id_seq')", Long.class);
+        jdbc.update("""
+                insert into ops.str_draft_requests (draft_id, case_id, request_snapshot, created_by, updated_by)
+                values (?, ?, '{}'::jsonb, 1, 1)""", draftId, caseId);
+        jdbc.update("update ops.str_draft_requests set status = 'SUCCEEDED', finished_at = now() where draft_id = ?",
+                draftId);
+        jdbc.update("""
+                insert into ops.str_drafts (id, case_id, generation_id, generator_version, produced_at, payload,
+                                            created_by, updated_by)
+                values (?, ?, ?, 'test', '2026-11-03T01:10:00Z', '{"facts":{}}'::jsonb, 1, 1)""",
+                draftId, caseId, "g-" + draftId);
+        return draftId;
+    }
+
 
     private void assign(String caseNo, AppUserDetails who) throws Exception {
         body(post("/api/v1/cases/{caseNo}/assign", caseNo).contentType(MediaType.APPLICATION_JSON)

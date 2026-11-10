@@ -5,9 +5,6 @@ import com.team.aml.cases.domain.InvalidAssigneeException;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.shared.security.CurrentUser;
 import com.team.aml.user.domain.Role;
-import com.team.aml.user.domain.User;
-import com.team.aml.user.domain.UserNotFoundException;
-import com.team.aml.user.domain.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,12 +20,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class AssignCase {
 
     private final CaseChanges changes;
-    private final UserRepository users;
+    private final ActiveInvestigators investigators;
     private final CurrentUser currentUser;
 
-    public AssignCase(CaseChanges changes, UserRepository users, CurrentUser currentUser) {
+    public AssignCase(CaseChanges changes, ActiveInvestigators investigators, CurrentUser currentUser) {
         this.changes = changes;
-        this.users = users;
+        this.investigators = investigators;
         this.currentUser = currentUser;
     }
 
@@ -50,10 +47,6 @@ public class AssignCase {
         }
         // ADMIN 이 대상을 안 주면 본인 — ADMIN 은 조사역이 아니라 INVALID_ASSIGNEE 가 된다
         String target = assigneeLoginId != null ? assigneeLoginId : me.loginId();
-        User assignee = users.findByLoginId(target).orElseThrow(() -> new UserNotFoundException(target));
-        if (!assignee.isActive() || assignee.getRole() != Role.INVESTIGATOR) {
-            throw new InvalidAssigneeException(caseNo, target, InvalidAssigneeException.Reason.NOT_ACTIVE_INVESTIGATOR);
-        }
-        return assignee.getId();
+        return investigators.require(caseNo, target);
     }
 }

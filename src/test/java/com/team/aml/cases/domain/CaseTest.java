@@ -634,4 +634,51 @@ class CaseTest {
         assertThatThrownBy(() -> Case.open(CASE_NO, ALERT_ID, null, null, SYSTEM))
                 .isInstanceOf(NullPointerException.class);
     }
+
+    // ── 메모 (API-05, SCRUM-176) ─────────────────────────────
+
+    @Test
+    void 메모를_저장하면_상태는_그대로_NOTE_이력에_전문이_남는다() {
+        Case c = reviewing();
+        int before = c.getPendingHistories().size();
+
+        assertThat(c.updateNotes("거래 목적 자료 요청 완료", null, INVESTIGATOR)).isTrue();
+
+        assertThat(c.getStatus()).isEqualTo(REVIEWING);
+        assertThat(c.getPendingHistories()).hasSize(before + 1);
+        CaseHistory h = lastHistory(c);
+        assertThat(h.getAction()).isEqualTo(CaseHistoryAction.NOTE);
+        assertThat(h.getFromStatus()).isEqualTo(REVIEWING);
+        assertThat(h.getToStatus()).isEqualTo(REVIEWING);
+        assertThat(h.getComment()).isEqualTo("거래 목적 자료 요청 완료");
+        assertThat(h.getCaseVersionBefore()).isEqualTo(c.getVersion());
+        assertThat(h.getCreatedBy()).isEqualTo(INVESTIGATOR);
+    }
+
+    @Test
+    void 같은_메모면_이력이_안_생기고_빈_문자열은_비우기_기록() {
+        Case c = reviewing();
+        int before = c.getPendingHistories().size();
+
+        assertThat(c.updateNotes("같은 내용", "같은 내용", INVESTIGATOR)).isFalse();
+        assertThat(c.updateNotes("", null, INVESTIGATOR)).isFalse();   // 메모가 없을 때 비우기는 바뀐 게 없음
+        assertThat(c.getPendingHistories()).hasSize(before);
+
+        assertThat(c.updateNotes("", "있던 메모", INVESTIGATOR)).isTrue();
+        assertThat(lastHistory(c).getComment()).isEmpty();
+    }
+
+    @Test
+    void 메모는_편집_가능_상태와_보완_반려에서만() {
+        assertThat(escalated().updateNotes("a", null, INVESTIGATOR)).isTrue();
+        assertThat(drafted().updateNotes("a", null, INVESTIGATOR)).isTrue();
+        assertThat(rejected(NEED_REVISION).updateNotes("a", null, INVESTIGATOR)).isTrue();
+
+        for (Case c : List.of(opened(), pending(), rejected(NOT_REPORTABLE))) {
+            int before = c.getPendingHistories().size();
+            assertThatThrownBy(() -> c.updateNotes("a", null, INVESTIGATOR))
+                    .isInstanceOf(InvalidCaseTransitionException.class);
+            assertThat(c.getPendingHistories()).hasSize(before);
+        }
+    }
 }

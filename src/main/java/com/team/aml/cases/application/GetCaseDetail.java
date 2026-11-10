@@ -40,10 +40,10 @@ import java.util.Map;
  * 순서: 케이스 조회(없으면 404, 기록 안 함) → accessLog.view(CASE) → 이력·담당자·버튼 계산.
  *
  * <p>이번에 채우는 것: 케이스 칸·담당자·최근 이력 20건·available_actions, alert·latest_score(detection GetAlertSummary, SCRUM-152),
- * latest_summary(API-13 과 같은 값 — GetCaseSummary, SCRUM-175).
+ * latest_summary(API-13 과 같은 값 — GetCaseSummary, SCRUM-175), investigator_notes(마지막 NOTE 행, SCRUM-176).
+ * 최근 이력 20건에는 NOTE 를 넣지 않는다 — 메모 전문은 API-15(명세 API-11).
  * score·score_band·policy_version 은 계약서 Q2 MVP 대로 latest_score 와 같은 값(지금 정책으로 계산). 생성 때 스냅샷은 후속.
- * 아직 없는 것(후속): aggregates·investigator_notes
- * (API-08·05), current_draft 본문(str 조합 계층, 노션 미결 17). 컨트롤러가 그 칸은 null 로 내보낸다.
+ * 아직 없는 것(후속): aggregates(API-08), current_draft 본문(str 조합 계층, 노션 미결 17). 컨트롤러가 그 칸은 null 로 내보낸다.
  */
 @Service
 public class GetCaseDetail {
@@ -51,7 +51,8 @@ public class GetCaseDetail {
     public record Result(String caseNo, CaseStatus status, String accountKey, String entityId, UserRef assignee,
                          RejectionReasonCode rejectionReasonCode, CloseReason closeReason, Long currentDraftId,
                          long version, Instant createdAt, Instant updatedAt, Alert alert, LatestScore latestScore,
-                         String policyVersion, CaseSummaryResult.Summary latestSummary, List<History> history,
+                         String policyVersion, CaseSummaryResult.Summary latestSummary, String investigatorNotes,
+                         List<History> history,
                          List<CaseAction> availableActions) {
         public Result {
             history = history == null ? List.of() : List.copyOf(history);
@@ -87,10 +88,11 @@ public class GetCaseDetail {
     private final GetAlertSummary alertSummary;
     private final CasePolicySource policySource;
     private final GetCaseSummary caseSummary;
+    private final CaseNotes notes;
 
     public GetCaseDetail(CaseRepository cases, CaseHistoryRepository histories, UserRefs userRefs,
                          AccessLogWriter accessLog, CurrentUser currentUser, GetAlertSummary alertSummary,
-                         CasePolicySource policySource, GetCaseSummary caseSummary) {
+                         CasePolicySource policySource, GetCaseSummary caseSummary, CaseNotes notes) {
         this.cases = cases;
         this.histories = histories;
         this.userRefs = userRefs;
@@ -99,6 +101,7 @@ public class GetCaseDetail {
         this.alertSummary = alertSummary;
         this.policySource = policySource;
         this.caseSummary = caseSummary;
+        this.notes = notes;
     }
 
     @Transactional
@@ -107,7 +110,7 @@ public class GetCaseDetail {
         Case c = cases.findByCaseNo(caseNo).orElseThrow(() -> new CaseNotFoundException(caseNo));
         accessLog.view(TargetType.CASE, c.getId());
 
-        List<CaseHistory> recent = histories.findTop20ByCaseIdOrderByIdDesc(c.getId());
+        List<CaseHistory> recent = histories.findTop20ByCaseIdAndActionNotOrderByIdDesc(c.getId(), CaseHistoryAction.NOTE);
         List<Long> people = new ArrayList<>(recent.stream().map(CaseHistory::getCreatedBy).toList());
         people.add(c.getAssigneeId());
         Map<Long, UserRef> refs = userRefs.of(people);
@@ -128,7 +131,8 @@ public class GetCaseDetail {
                         a.transactionCount()),
                 new LatestScore(s.status(), s.score(), band == null ? null : band.band(), s.failureCode(),
                         s.modelVersion(), s.featureVersion(), s.dataQualityStatus(), s.reasons()),
-                band == null ? null : band.policyVersion(), caseSummary.latestOf(c), history, actions);
+                band == null ? null : band.policyVersion(), caseSummary.latestOf(c), notes.currentOf(c.getId()),
+                history, actions);
     }
 
     /** 점수가 없거나 정책이 설정되지 않았으면 null. 등급이 없다고 LOW 로 바꾸지 않는다. */
