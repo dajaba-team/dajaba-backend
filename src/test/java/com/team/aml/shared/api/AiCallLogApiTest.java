@@ -197,8 +197,35 @@ class AiCallLogApiTest {
 
         assertThat(ids(call(admin(), URL + "?endpoint=" + ep + "&from=2007-01-01T15:00:00Z"))).containsExactly(hit);
         assertThat(ids(call(admin(), URL + "?endpoint=" + ep + "&from=2007-01-01T15:00:00.000Z"))).containsExactly(hit);
-        // 같은 시각을 +09:00 으로 보내면(%2B 로 인코딩해도) Instant 변환이 거절한다 — 문서·계약서엔 Z 로 보내기.
-        assertInvalid(call(admin(), URL + "?endpoint=" + ep + "&from=2007-01-02T00:00:00%2B09:00"));
+    }
+
+    @Test
+    void 경계_from과_to가_같은_시각이면_200_빈_items() throws Exception {
+        String ep = endpoint();
+        insert(ep, "same", 1, 200, null, 1, null, null, null, null, "2007-02-01T00:00:00Z");
+
+        assertThat(ids(callParams(admin(), "endpoint", ep, "from", "2007-02-01T00:00:00Z", "to", "2007-02-01T00:00:00Z")))
+                .isEmpty();
+    }
+
+    @Test
+    void 실패_시각이_Z가_아니면_400이고_details에_칸_이름() throws Exception {
+        // .param 은 값을 다시 인코딩하지 않아 서버가 '+09:00' 원문을 받는다 (SCRUM-204).
+        for (String name : List.of("from", "to")) {
+            for (String value : List.of("2007-01-02T00:00:00+09:00", "20261108", "2026-13-40T00:00:00Z")) {
+                MvcResult r = callParams(admin(), name, value);
+                assertInvalid(r, name + "=" + value);
+                assertThat(json(r).path("error").path("details").has(name)).as(name + "=" + value).isTrue();
+            }
+        }
+    }
+
+    @Test
+    void 실패_패턴은_맞지만_없는_날짜는_500이_아니라_400() throws Exception {
+        MvcResult feb30 = callParams(admin(), "from", "2026-02-30T00:00:00Z");
+        assertInvalid(feb30, "from");
+        assertThat(json(feb30).path("error").path("details").has("real_dates")).isTrue();   // isRealDates 이름 그대로
+        assertInvalid(callParams(admin(), "to", "2026-04-31T00:00:00Z"), "to");
     }
 
     // --- 잘못된 값 → 400 INVALID_REQUEST ------------------------------------------
@@ -256,6 +283,13 @@ class AiCallLogApiTest {
 
     private MvcResult call(MockHttpSession session, String url) throws Exception {
         return mvc.perform(get(url).session(session)).andReturn();
+    }
+
+    /** 이름·값 짝으로 보낸다 — 값은 원문 그대로 서버에 간다. */
+    private MvcResult callParams(MockHttpSession session, String... nameValues) throws Exception {
+        var req = get(URL).session(session);
+        for (int i = 0; i < nameValues.length; i += 2) req.param(nameValues[i], nameValues[i + 1]);
+        return mvc.perform(req).andReturn();
     }
 
     private MockHttpSession admin() throws Exception {

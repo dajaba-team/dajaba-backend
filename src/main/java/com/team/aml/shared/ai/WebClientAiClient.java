@@ -100,35 +100,76 @@ public class WebClientAiClient implements AiClient {
 
     /**
      * 점수 응답 한 묶음 → 항목 목록 (규약 §3, SCRUM-128). 맨 위 `scoring_meta`·`produced_at` 을 항목마다 붙인다
-     * (같은 묶음은 같은 `ScoringMeta` 객체). `scores`·`scoring_meta`·`produced_at`·항목 `threshold` 가 없거나
-     * 칸 타입이 틀리면 AI_BAD_RESPONSE 502. 계약 예시 테스트가 직접 부른다.
+     * (같은 묶음은 같은 `ScoringMeta` 객체). 칸 확인은 AI 계약(`scores.py`)과 같은 기준 + `threshold` 0~1 (SCRUM-204):
+     * `scoring_meta` 세 버전 문자열(빈 값 허용)·`latency_ms` 0 이상 정수, `threshold` 숫자 0~1,
+     * `score` 는 FAILED 면 null·그 밖엔 숫자 0~1, 거래 ID 원소는 1 이상 정수. 틀리면 AI_BAD_RESPONSE 502 — 메시지엔 칸 이름만.
+     * withRetry 안·기록 전에 불려 실패 행으로 남는다. 계약 예시 테스트가 직접 부른다.
      */
     static List<ScoreResult> readScoreBatch(ObjectMapper om, JsonNode body) {
         require(body, "scores");
         require(body, "scoring_meta");
         require(body, "produced_at");
-        try {
-            ScoringMeta meta = om.treeToValue(body.get("scoring_meta"), ScoringMeta.class);
-            String producedAt = body.get("produced_at").asText();
-            List<ScoreResult> out = new ArrayList<>();
-            for (JsonNode s : body.get("scores")) {
-                require(s, "threshold");
-                Double score = s.hasNonNull("score") ? s.get("score").asDouble() : null;
-                out.add(new ScoreResult(text(s, "alert_id"), text(s, "prediction_id"), score,
-                        s.get("threshold").asDouble(), text(s, "data_quality_status"), text(s, "failure_code"),
-                        s.hasNonNull("reasons") ? s.get("reasons") : om.createArrayNode(),
-                        longs(om, s, "evidence_transaction_ids"), longs(om, s, "context_transaction_ids"),
-                        meta, producedAt, s));
-            }
-            return out;
-        } catch (com.fasterxml.jackson.core.JsonProcessingException | IllegalArgumentException e) {
-            throw new AiClientException("AI_BAD_RESPONSE", "AI 점수 응답 파싱 실패", Map.of(), 502);
+        if (!body.get("scores").isArray()) throw badScore("scores");
+        ScoringMeta meta = readMeta(body.get("scoring_meta"));
+        String producedAt = body.get("produced_at").asText();
+        List<ScoreResult> out = new ArrayList<>();
+        for (JsonNode s : body.get("scores")) {
+            String status = text(s, "data_quality_status");
+            out.add(new ScoreResult(text(s, "alert_id"), text(s, "prediction_id"), score(s, status),
+                    unitNumber(s.get("threshold"), "threshold"), status, text(s, "failure_code"),
+                    s.hasNonNull("reasons") ? s.get("reasons") : om.createArrayNode(),
+                    longs(s, "evidence_transaction_ids"), longs(s, "context_transaction_ids"),
+                    meta, producedAt, s));
         }
+        return out;
     }
 
-    private static List<Long> longs(ObjectMapper om, JsonNode s, String field) {
+    private static ScoringMeta readMeta(JsonNode m) {
+        if (!m.isObject()) throw badScore("scoring_meta");
+        JsonNode latency = m.get("latency_ms");
+        if (latency == null || !latency.isIntegralNumber() || !latency.canConvertToInt() || latency.intValue() < 0) {
+            throw badScore("scoring_meta.latency_ms");
+        }
+        return new ScoringMeta(metaText(m, "model_version"), metaText(m, "feature_version"),
+                metaText(m, "server_version"), latency.intValue());
+    }
+
+    private static String metaText(JsonNode m, String field) {
+        JsonNode v = m.get(field);
+        if (v == null || !v.isTextual()) throw badScore("scoring_meta." + field);
+        return v.textValue();
+    }
+
+    /** FAILED 면 null 이어야 하고, 그 밖엔 숫자 0~1 이 있어야 한다 (AI ScoreItem 규칙). */
+    private static Double score(JsonNode s, String status) {
+        boolean failed = "FAILED".equals(status);
+        if (!s.hasNonNull("score")) {
+            if (failed) return null;
+            throw badScore("score");
+        }
+        if (failed) throw badScore("score");
+        return unitNumber(s.get("score"), "score");
+    }
+
+    private static double unitNumber(JsonNode v, String field) {
+        if (v == null || !v.isNumber() || v.doubleValue() < 0 || v.doubleValue() > 1) throw badScore(field);
+        return v.doubleValue();
+    }
+
+    private static List<Long> longs(JsonNode s, String field) {
         if (!s.hasNonNull(field)) return List.of();
-        return List.copyOf(om.convertValue(s.get(field), om.getTypeFactory().constructCollectionType(List.class, Long.class)));
+        JsonNode arr = s.get(field);
+        if (!arr.isArray()) throw badScore(field);
+        List<Long> out = new ArrayList<>(arr.size());
+        for (JsonNode v : arr) {
+            if (!v.isIntegralNumber() || !v.canConvertToLong() || v.longValue() < 1) throw badScore(field);   // AI TransactionId ge=1
+            out.add(v.longValue());
+        }
+        return List.copyOf(out);
+    }
+
+    private static AiClientException badScore(String field) {
+        return new AiClientException("AI_BAD_RESPONSE", "AI 점수 응답 확인 실패: " + field, Map.of(), 502);
     }
 
     /**

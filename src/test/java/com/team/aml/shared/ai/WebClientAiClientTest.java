@@ -271,6 +271,85 @@ class WebClientAiClientTest {
         assertBadResponse(catchThrowable(() -> client.scores(7L, List.of(alert("A1"), alert("A2")))));
     }
 
+    // --- 점수 응답 칸 확인 (SCRUM-204, AI 계약 scores.py 기준 + threshold 0~1) ------
+
+    /** A1 한 항목짜리 정상 응답을 받아 칸 하나만 바꾼다. */
+    private String scoreBodyWith(java.util.function.Consumer<ObjectNode> edit) throws Exception {
+        ObjectNode body = (ObjectNode) om.readTree(scoreBody(7L, List.of("A1"), "M1", "2026-11-06T01:00:00Z"));
+        edit.accept(body);
+        return body.toString();
+    }
+
+    private static ObjectNode item(ObjectNode body) {
+        return (ObjectNode) body.withArray("scores").get(0);
+    }
+
+    private static ObjectNode meta(ObjectNode body) {
+        return (ObjectNode) body.get("scoring_meta");
+    }
+
+    @Test
+    void 경계_threshold_0과_1_빈_model_version_FAILED_항목_score_null은_통과한다() throws Exception {
+        List<java.util.function.Consumer<ObjectNode>> edits = List.of(
+                b -> item(b).put("threshold", 0),
+                b -> item(b).put("threshold", 1.0),
+                b -> meta(b).put("model_version", "").put("feature_version", "").put("server_version", ""),
+                b -> meta(b).put("latency_ms", 0),
+                b -> item(b).put("data_quality_status", "FAILED").put("failure_code", "COMPUTE_ERROR")
+                        .putNull("prediction_id").putNull("score"));
+        for (var edit : edits) {
+            server.enqueue(json(200, scoreBodyWith(edit)));
+            assertThat(client.scores(7L, List.of(alert("A1"))).scores()).hasSize(1);
+        }
+        assertThat(writer.rows).extracting(AiCallLog::getErrorCode).containsOnlyNulls();
+    }
+
+    @Test
+    void 실패_점수_응답_칸이_틀리면_AI_BAD_RESPONSE_502이고_실패_행_하나만_남고_재시도하지_않는다() throws Exception {
+        record Bad(String field, String value, java.util.function.Consumer<ObjectNode> edit) {}
+        List<Bad> bads = List.of(
+                new Bad("threshold", "abc", b -> item(b).put("threshold", "abc")),
+                new Bad("threshold", "1.5", b -> item(b).put("threshold", 1.5)),
+                new Bad("threshold", "-0.1", b -> item(b).put("threshold", -0.1)),
+                new Bad("threshold", "{}", b -> item(b).putObject("threshold")),
+                new Bad("threshold", "true", b -> item(b).put("threshold", true)),
+                new Bad("scoring_meta", "{}", b -> b.putObject("scoring_meta")),
+                new Bad("model_version", "123", b -> meta(b).put("model_version", 123)),
+                new Bad("server_version", "null", b -> meta(b).putNull("server_version")),
+                new Bad("latency_ms", "-1", b -> meta(b).put("latency_ms", -1)),
+                new Bad("latency_ms", "1.5", b -> meta(b).put("latency_ms", 1.5)),
+                new Bad("score", "x", b -> item(b).put("score", "x")),
+                new Bad("score", "1.2", b -> item(b).put("score", 1.2)),
+                new Bad("score", "null", b -> item(b).putNull("score")),   // OK 항목인데 점수 없음
+                new Bad("evidence_transaction_ids", "null", b -> item(b).putArray("evidence_transaction_ids").add(1L).addNull()),
+                new Bad("context_transaction_ids", "zz", b -> item(b).putArray("context_transaction_ids").add("zz")),
+                new Bad("score", "0.5", b -> item(b).put("data_quality_status", "FAILED")   // FAILED 인데 점수 있음
+                        .put("failure_code", "COMPUTE_ERROR").putNull("prediction_id").put("score", 0.5)),
+                new Bad("scores", "{}", b -> b.putObject("scores")),
+                new Bad("evidence_transaction_ids", "7", b -> item(b).put("evidence_transaction_ids", 7)),
+                new Bad("context_transaction_ids", "{}", b -> item(b).putObject("context_transaction_ids")),
+                new Bad("evidence_transaction_ids", "0", b -> item(b).putArray("evidence_transaction_ids").add(0L)),
+                new Bad("context_transaction_ids", "-1", b -> item(b).putArray("context_transaction_ids").add(-1L)));
+
+        for (Bad bad : bads) {
+            writer.rows.clear();
+            int before = server.getRequestCount();
+            server.enqueue(json(200, scoreBodyWith(bad.edit())));
+
+            Throwable e = catchThrowable(() -> client.scores(7L, List.of(alert("A1"))));
+
+            assertBadResponse(e);
+            assertThat(e.getMessage()).as(bad.field()).contains(bad.field());
+            if (bad.value().length() > 1) assertThat(e.getMessage()).as(bad.field()).doesNotContain(bad.value());
+            assertThat(server.getRequestCount() - before).as(bad.field()).isEqualTo(1);   // 재시도 없음
+            assertThat(writer.rows).as(bad.field()).hasSize(1);
+            AiCallLog row = writer.rows.get(0);
+            assertThat(row.getStatusCode()).as(bad.field()).isEqualTo(200);
+            assertThat(row.getErrorCode()).as(bad.field()).isEqualTo("AI_BAD_RESPONSE");
+            assertThat(row.getAttempt()).as(bad.field()).isEqualTo((short) 1);
+        }
+    }
+
     // --- 경계: 재시도 (코드 기반) -------------------------------------------
 
     @Test
@@ -313,7 +392,7 @@ class WebClientAiClientTest {
     }
 
     @Test
-    void 재시도없음_4xx가_재시도코드를_담아도_재시도하지_않는다() {   // codex: 4xx veto
+    void 재시도없음_4xx가_재시도코드를_담아도_재시도하지_않는다() {
         server.enqueue(json(400, "{\"code\":\"DB_UNAVAILABLE\",\"message\":\"bad request\"}"));
 
         assertThatThrownBy(() -> client.scores(7L, List.of(alert("A1"))))
@@ -326,7 +405,7 @@ class WebClientAiClientTest {
     }
 
     @Test
-    void 실패_빈_200_본문은_성공으로_위장하지_않고_AI_BAD_RESPONSE_502() {   // codex: empty body
+    void 실패_빈_200_본문은_성공으로_위장하지_않고_AI_BAD_RESPONSE_502() {
         server.enqueue(new MockResponse().setResponseCode(200));   // 본문 없음
 
         assertThatThrownBy(() -> client.createDraft(draftReq()))
@@ -337,7 +416,7 @@ class WebClientAiClientTest {
     }
 
     @Test
-    void 경계_GENERATION_IN_PROGRESS가_409가_아니면_매핑하지_않고_502() {   // codex: 409-only mapping
+    void 경계_GENERATION_IN_PROGRESS가_409가_아니면_매핑하지_않고_502() {
         server.enqueue(json(500, "{\"code\":\"GENERATION_IN_PROGRESS\",\"message\":\"x\"}"));
 
         assertThatThrownBy(() -> client.createDraft(draftReq()))
