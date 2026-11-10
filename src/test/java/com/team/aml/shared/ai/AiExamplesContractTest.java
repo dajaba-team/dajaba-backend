@@ -67,6 +67,8 @@ class AiExamplesContractTest {
         assertThat(dto.narrative().get(0).cites()).isNotEmpty();
         assertThat(dto.promptVersion()).isEqualTo("narrative_v1");
         assertThat(dto.raw().toString()).isEqualTo(original.toString());  // 원문 전체 보존
+        // AI 고쳐 쓰기 기록(AI #39, SCRUM-147) — 백엔드는 해석하지 않고 raw 그대로 str_drafts.payload 에 저장한다
+        assertThat(dto.raw().at("/generation_meta/rewrite/skipped_reason").asText()).isEqualTo("not_triggered");
     }
 
     @Test
