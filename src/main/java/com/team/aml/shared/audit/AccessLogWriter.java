@@ -11,6 +11,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /**
  * 팀원용 열람 기록 — 조회 유스케이스에서 한 줄로 부른다 (03_shared §9, 레퍼런스 §3.4. AOP 아님).
  *   accessLog.view(TargetType.CASE, caseId);   accessLog.strView(draftId);   accessLog.pdfDownload(draftId);
+ *   계정 관리(user)도 같은 틀 — accessLog.userCreated(id). 변경과 같은 트랜잭션.
  * 사용자는 CurrentUser(없으면 실패), IP 는 지금 요청(request.getRemoteAddr())에서 꺼낸다 — 호출부는 넘기지 않는다.
  * 바깥 조회 트랜잭션에 참여한다(MANDATORY, 같은 커넥션) — 부르는 유스케이스는 @Transactional(readOnly 아님).
  * 트랜잭션 밖이면 IllegalTransactionStateException, readOnly 안이면 IllegalStateException 으로 바로 실패한다.
@@ -49,6 +50,12 @@ public class AccessLogWriter {
     @Transactional(propagation = Propagation.MANDATORY)
     public void export(TargetType type, long targetId) {
         write(AccessLogAction.EXPORT, type, targetId);
+    }
+
+    /** USER_CREATED — 관리자가 계정을 발급. target_type USER, 대상은 새 사용자 (SCRUM-135 ②). */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void userCreated(long targetUserId) {
+        write(AccessLogAction.USER_CREATED, TargetType.USER, targetUserId);
     }
 
     private void write(AccessLogAction action, TargetType type, long targetId) {

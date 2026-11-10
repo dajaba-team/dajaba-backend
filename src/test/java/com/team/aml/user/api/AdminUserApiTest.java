@@ -62,7 +62,7 @@ class AdminUserApiTest {
     // --- 응답 모양 ----------------------------------------------------------------
 
     @Test
-    void 정상_ADMIN은_200이고_항목_칸은_정확히_여섯이며_active_case_count는_null() throws Exception {
+    void 정상_ADMIN은_200이고_항목_칸은_정확히_여섯이며_active_case_count는_조사역만_숫자() throws Exception {
         MvcResult r = call(admin(), URL + "?size=5");
 
         assertThat(r.getResponse().getStatus()).isEqualTo(200);
@@ -77,7 +77,9 @@ class AdminUserApiTest {
             assertThat(keys).containsExactlyInAnyOrder(
                     "id", "login_id", "display_name", "role", "is_active", "active_case_count");
             assertThat(item.path("is_active").isBoolean()).isTrue();
-            assertThat(item.get("active_case_count").isNull()).isTrue();
+            boolean investigator = "INVESTIGATOR".equals(item.path("role").asText());
+            assertThat(item.get("active_case_count").isNumber()).as(item.toString()).isEqualTo(investigator);   // SCRUM-135 ②
+            assertThat(item.get("active_case_count").isNull()).as(item.toString()).isEqualTo(!investigator);
         }
     }
 
