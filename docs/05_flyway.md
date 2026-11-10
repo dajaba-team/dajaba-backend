@@ -70,7 +70,7 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 | V008 | str — `str_draft_requests`, `str_drafts`, `str_revisions`, `verification_results`, `ops.str_draft_id_seq` + `cases.current_draft_id` FK | 채영 (SCRUM-31) | W2 | 머지됨 #28 | 같음 (W3) |
 | V009 | `approvals` (`reason_code`, `narrative_sha256`, 그 초안의 수정본·검증 복합 FK, 초안당 승인 한 번) | 채영 (SCRUM-32) | W2 | 머지됨 #33 | 같음 (W4) |
 | V010 | `case_history.from_assignee_id`·`to_assignee_id` + CHECK 두 개(배정·재배정 아닌 행은 빈칸 / 배정·재배정은 값 필수 — 예전 이력 때문에 `NOT VALID`). 예전 담당 자기 승인 막기 (미결 32). 같은 파일에서 `case_history.action` CHECK에 `REPORT`(모의 제출) 추가 (SCRUM-174) | 지윤 (W4) | W4 (11/10) | PR | — |
-| V011 | 룰 시드 — `R02_FAN_IN_24H` 버전 1 (`min_distinct_senders` 5, 켬). 다른 룰은 구현할 때 새 번호로 | 준혁 (SCRUM-99) | W4 (11/9) | 예약 | — |
+| V011 | 룰 시드 — `R02_FAN_IN` 버전 1 (`window_hours` 96, `min_distinct_senders` 5, 켬). 다른 룰은 구현할 때 새 번호로 | 준혁 (SCRUM-99) | W4 (11/9) | PR | — |
 | 미배정 | `batch_runs` 재실행 인덱스 좁히기 (안건 14·21, 미결 4) | 진희·준혁 | 점수 배치 PR 직전 | 그때 다음 빈 번호 | — |
 | 미배정 | `str_reports` (확정 보고서 번호·마감·PDF) | 채영 | 서식 회의 뒤 | 그때 다음 빈 번호 | — |
 

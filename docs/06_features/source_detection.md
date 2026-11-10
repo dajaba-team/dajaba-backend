@@ -59,32 +59,54 @@
 **하는 일** — 날짜별로 룰을 돌려 `alerts`를 만들고, AI에 점수를 받아 `alert_scores`에 저장해요. 사람이 고치는 건 `rules`의 기준값뿐이에요. [가이드 §1]
 
 **테이블** [레퍼런스 §3.2]
-- `rules` — `rule_id`(`R02_FAN_IN_24H`), `version`(기준값 바뀔 때마다 +1, `(rule_id, version)` unique), `name`, `typology_hint`, `params jsonb`, `is_active`. 감사 4. 끈 룰도 행은 살려 둬요(과거 경보가 가리킴).
+- `rules` — `rule_id`(`R02_FAN_IN`), `version`(기준값 바뀔 때마다 +1, `(rule_id, version)` unique), `name`, `typology_hint`, `params jsonb`, `is_active`. 감사 4. 끈 룰도 행은 살려 둬요(과거 경보가 가리킴).
 - `alerts` — `alert_no`(unique), `batch_run_id`, `rule_ref_id`(어느 버전의 룰), `account_key`, `entity_id`(null 가능), `window_start`, `window_end`, `reference_ts`, `rule_facts jsonb`, `batch_date`, `score_status`(PENDING/SCORED/FAILED), `score_failure_code`(null 가능 — FAILED일 때 AI `failure_code`, 10/29), `case_opened`. unique `(rule_ref_id, account_key, window_start)`. 만든 뒤 바뀌는 건 `score_status`·`score_failure_code`·`case_opened`뿐.
 - `alert_transactions` — 경보 ↔ 거래 N:M, 복합 PK.
 - `alert_scores` — `score`(not null — 점수 있는 경보만 행을 만들고, FAILED는 행 없음), `threshold`(AI 추천값), `model_version`, `feature_version`, `prediction_id`, `produced_at`, `payload jsonb`(응답 원문 — `data_quality_status`도 여기서 읽어요, 10/29 준혁). **MVP는 `alert_id` UNIQUE 유지**, 다른 모델로 재채점은 고도화. [안건 2·4·5·21, ML 규약 §6.3] 〔레퍼런스·SD 명세의 "경보 하나에 점수 여러 행"은 그 전 안〕 (V005_1, SCRUM-96)
 
-**룰 8개** [안건 20, 규약 §2]
-| 번호 | 룰 | 지금 |
-|---|---|---|
-| R01 | `R01_FAN_OUT_24H` — 서로 다른 수신 계좌 N개 이상으로 송금 | 기준값 스윕 후 |
-| R02 | `R02_FAN_IN_24H` — 서로 다른 송신 계좌 N개 이상에서 입금 | **대표 룰, 먼저 구현** |
-| R03 | `R03_PASS_THROUGH` — 입금 후 T시간 내 P% 이상 출금 | |
-| R04 | `R04_CYCLE` — 자기 계좌로 돌아오는 고리 | **최대 3홉**, `rule_facts.paths` 필수 |
-| R05 | `R05_STACK` — 연속 경유 | **유지**, `rule_facts.paths` 필수, 수치 한도 미정 |
-| R06 | `R06_BIPARTITE` | **교체 — 대체 룰 미정** (준혁) |
-| R07 | `R07_STRUCTURING` — 기준 금액 바로 아래 반복 | |
-| R08 | `R08_NEW_ACCOUNT_LARGE` — 개설 직후 거액 | 필요 데이터·기준 확정 필요 |
+**룰 6개 — v2 (11/9 확정)** [노션 「탐지 룰 v2 기준값 선정 근거」 §3.4, 안건 20]
+| 번호 | 룰 ID | 조건 | v2 `params` | 지금 |
+|---|---|---|---|---|
+| R01 | `R01_FAN_OUT` | 서로 다른 수신 계좌 N개 이상으로 송금 | `window_hours` 96, `min_distinct_receivers` 10 | |
+| R02 | `R02_FAN_IN` | 서로 다른 송신 계좌 N개 이상에서 입금 | `window_hours` 96, `min_distinct_senders` 5 | **구현됨 (SCRUM-99)** |
+| R03 | `R03_FX_RELAY` — 환전 중계 | 받은 거래보다 늦은 분, 창 안에 **다른 통화로** 보낸 거래가 있고 USD 환산 금액 비율(보낸 ÷ 받은)이 0.9~1.1(양 끝 포함). 받은 거래마다 창 안 출금 전부를 봄(건수 상한 없음) | `window_hours` 96, `amount_tolerance` 0.1, `require_currency_change` true, `usd_rates`(15개 통화 고정표) | 옛 `R03_PASS_THROUGH`를 대체 — 번호만 재사용, ID는 다름 |
+| R04 | `R04_CYCLE` | 대표 계좌에서 나가 같은 계좌로 돌아오는 고리 | `window_hours` 96, `max_hops` 4 | `rule_facts.paths` 필수 |
+| R05 | `R05_SCATTER_GATHER` | 흩었다 모으기 — 한 계좌에서 서로 다른 중간 계좌 N개 이상을 거쳐 한 계좌로 모임 | `window_hours` 96, `min_intermediates` 3 | `rule_facts.paths` 필수. 옛 이름 `R05_STACK` |
+| R06 | `R06_GATHER_SCATTER` | 모았다 흩기 — 입금 상대·출금 상대가 **각각** 하한~상한 안 | `window_hours` 96, `min_distinct_senders` 5, `max_distinct_senders` 100, `min_distinct_receivers` 5, `max_distinct_receivers` 100 | 옛 `R06_BIPARTITE`를 대체 |
 
-**룰 공통 네 가지** [안건 20]: ① 룰 ID는 규약 번호 그대로(코드 enum·DB·학습 데이터 같은 문자열) ② 집계는 `amount_paid`·`currency_paid` 기준, **통화별로 따로**(환산 없음) ③ 시간창 기본은 **달력일**, `reference_ts` = 창의 끝 ④ **자기계좌 거래 제외**. 룰 명세는 준혁이 관리하고, 준영의 학습용 경보와 `expected.json`으로 건수·거래 ID를 맞춰 봐요.
+- R07·R08은 v2에서 뺐어요. 번호와 ID는 다른 룰에 다시 쓰지 않아요.
+- `usd_rates`는 실시간 환율이 아니라 HI-Small에서 뽑은 고정값이에요. 백엔드와 AI 전처리가 같은 표·같은 환산 방향(금액 ÷ `usd_rates[통화]`)을 써요.
 
-**`rule_facts.paths` (R04·R05)** [ML 규약 §2.4] — 경로별 실제 거래 ID의 시간순 배열(`[[…],[…]]`). 합집합 = `transaction_ids`. R04는 모든 고리가 대표 계좌에서 시작해 같은 계좌로 돌아와요. 경로를 임의로 재배열·삭제하지 않아요.
+**룰 공통** [안건 20, B7 11/2, 룰 v2]
+1. **룰 ID**는 `번호_유형`이고 코드·DB·학습 데이터에서 같은 문자열이에요. 시간은 ID에 넣지 않고 `params.window_hours`에 둬요.
+2. **창**은 B7 슬라이딩이에요. H = `window_hours`(v2 = 96)일 때 지금 창은 `[E+1분-H, E+1분)`, 1분 전 창은 `[E-H, E)`예요. 1분 전엔 거짓이고 지금 참일 때만 경보를 만들어요. `reference_ts` = `window_end` = E+1분이에요.
+3. **평가 시점**은 관련 거래가 있는 분뿐이에요.
+   - R01·R02·R06은 그 계좌에 거래가 있는 분에 평가해요.
+   - R03·R04·R05는 중계·경로의 마지막 거래가 있는 분에 평가해요.
+   - 오래된 거래가 창에서 빠지기만 해서 참이 된 경우엔 경보를 만들지 않아요.
+4. **순서**: 중계·경로의 다음 거래는 앞 거래보다 **늦은 분**이어야 해요(같은 분은 안 돼요). 모든 거래가 창 안에 있어야 해요.
+5. **자기계좌 거래는 빼요.**
+6. **금액**: 상대 수를 세는 룰은 금액을 보지 않아요. R03만 USD로 환산해 비교해요. `rule_facts`의 금액은 통화 원문 그대로 통화별로 적어요.
+
+룰 명세는 준혁이 관리해요. 준영의 학습용 경보와 `expected.json`으로 건수·거래 ID를 맞춰 봐요.
+
+**`rule_facts.paths` (R04·R05)** [ML 규약 §2.4] — 경로별 실제 거래 ID의 시간순 배열(`[[…],[…]]`)이에요.
+- 합집합 = `transaction_ids`예요.
+- R04는 모든 고리가 대표 계좌에서 시작해 같은 계좌로 돌아와요.
+- 창 안의 **모든 유효 경로**를 담아요. 9/1~9/10 기준 경보당 최대 경로는 R04 16개, R05 106개예요.
+- 경로를 임의로 재배열·삭제하지 않아요.
 
 **룰 엔진 = 두 단계** [레퍼런스 §6.1 ③]
-1. **집계는 SQL**(네이티브 쿼리): "수신 계좌·일자별 서로 다른 송신 계좌 수와 거래 ID 목록"
-2. **판정은 Java**: `FanInRule.evaluate(AggregatedRow) → Optional<AlertCandidate>`. 기준은 이상(≥). 기준값이 없거나 0 이하면 `InvalidRuleParamsException` — 기본값으로 조용히 돌지 않아요. TDD 대상은 2단계.
+1. **집계는 SQL**(`RuleScanJdbcRepository`): R02는 그날 입금이 있었던 (계좌, 분 E)마다 지금 창 `[E+1분-H, E+1분)`과 1분 전 창 `[E-H, E)`의 서로 다른 송금 계좌 수(H = `params.window_hours`). 하루 범위에서도 N이 안 되는 계좌는 먼저 걸러요
+2. **판정은 Java**: `FanInRule.fires(FanInMinute)` — 지금 ≥ N이고 1분 전 < N(거짓→참)일 때만 경보 1건. 기준값(`window_hours`·`min_distinct_senders`)이 없거나 정수가 아니거나 1 미만이면 409 `INVALID_RULE_PARAMS` — 기본값으로 조용히 돌지 않아요 [SCRUM-99]
+- 룰별 조건·창·기준값·`rule_facts`는 룰 명세 `rules.md`(SCRUM-73)가 기준이에요.
 
-**룰 스캔** [레퍼런스 §11.3, SD 명세 §5 〔초안〕] — 룰 전체가 **한 트랜잭션**(하나라도 실패하면 그 실행의 경보 전부 롤백 → 다시 돌려도 두 번 생기지 않음). `alert_no`는 시퀀스, `score_status = PENDING`, `case_opened = false`. 경보 단위는 계좌 × 룰 × 하루 창(00:00:00~23:59:59) — 이름은 "24H"지만 자정에 걸친 패턴은 못 잡아요(받아들인 한계). 〔B7 11/2: R01·R02·R07은 슬라이딩 24시간, 창 `[E+1분-24시간, E+1분)`으로 바뀌어요. 룰 명세(SCRUM-73)에서 반영〕
+**룰 스캔 — 구현됨 (SCRUM-99, R02)** `POST /api/v1/admin/batches/rule-scan?date=` → 200 `{batch_run_id, batch_type, batch_date, status, rows_in(그날 거래 수), rows_out(경보 수), alerts_by_rule[{rule_id, rule_version, alert_count}], started_at, finished_at}`
+- 시작 전 거절(행 안 남김): 거래 없음 409 `DATASET_NOT_LOADED` · 거래 첫날~마지막 날 밖 409 `DATE_OUT_OF_RANGE` · 실행 중 409 `BATCH_RUNNING` · 이미 성공 409 `BATCH_ALREADY_DONE` · 켜진 룰 없음 409 `NO_ACTIVE_RULES`. 〔SD 명세 v0.3의 400 두 개는 409로 — 400은 요청 형식 오류에만〕
+- 룰 전체가 **한 트랜잭션**(하나라도 실패하면 그 실행의 경보 전부 롤백 → 다시 돌려도 두 번 생기지 않음), `SUCCEEDED`도 그 안에서. 실패는 `FAILED`를 따로 커밋. 앱이 죽어 남은 `RUNNING`은 기동 때 `FAILED`로.
+- 경보: `alert_no`는 시퀀스, `score_status = PENDING`, `case_opened = false`. R02 창은 B7(11/2) 슬라이딩 `window_hours`(v2 96시간) — `window_end = reference_ts = E+1분`(뜻은 `(E-H, E]`), `batch_date` = 스캔 날짜(E의 날짜). 자기 계좌 거래 제외. `entity_id`는 `accounts`.
+- R02 `rule_facts` = `{distinct_senders, amounts_by_currency:[{currency, total_amount, transaction_count, transaction_ids}]}`(받은 쪽 금액, 통화 원문 그대로). `transaction_ids` = 창 안 입금 전부.
+- 룰 행은 Flyway 시드(`V011` = `R02_FAN_IN` 버전 1, 96시간·N = 5). 다른 룰은 구현할 때 같은 방식으로 새 파일에 넣어요. 켜진 룰에 구현이 없으면 500(배치 FAILED).
 - 룰 기준값은 기존 행을 고치지 않고 새 버전 행을 추가해요. DB도 `rules`는 `is_active`·`updated_*`만 바꿀 수 있어요(V005).
 - 이미 성공한 날짜는 다시 스캔하지 않아요(`batch_runs`). 그래서 룰 버전을 올려도 같은 날짜에 같은 룰·계좌·창 경보가 버전별로 또 생기지 않아요. 새 버전은 다음 스캔부터 적용돼요.
 
