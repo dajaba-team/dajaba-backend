@@ -6,8 +6,10 @@ import com.team.aml.cases.application.CloseCase;
 import com.team.aml.cases.application.EscalateCase;
 import com.team.aml.cases.application.GetCaseDetail;
 import com.team.aml.cases.application.GetCaseSummary;
+import com.team.aml.cases.application.ListCaseNoteHistories;
 import com.team.aml.cases.application.ListCases;
 import com.team.aml.cases.application.RefreshCaseSummary;
+import com.team.aml.cases.application.UpdateCaseNotes;
 import com.team.aml.shared.api.PageResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -18,13 +20,15 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 케이스 목록·상세·배정·에스컬레이션·종료·AI 조사 요약 (CASES 명세 API-01·02·03·06·07·12·13, 계약서 C1·C2·C7·A1·A4·A5·A7).
+ * 케이스 목록·상세·배정·메모·에스컬레이션·종료·AI 조사 요약
+ * (CASES 명세 API-01·02·03·05·06·07·12·13·15, 계약서 C1·C2·C7·C8·A1·A3·A4·A5·A7).
  * 조회 3역할 모두 — SecurityConfig 의 /api/** authenticated. 담당자·상태 검사는 유스케이스·엔티티가 한다.
  * 응답은 유스케이스 record 를 화면 모양으로 바꾼 것 — 원본 account_key 는 내보내지 않는다(AccountDisplay).
  */
@@ -40,10 +44,13 @@ public class CaseController {
     private final CloseCase closeCase;
     private final RefreshCaseSummary refreshCaseSummary;
     private final GetCaseSummary getCaseSummary;
+    private final UpdateCaseNotes updateCaseNotes;
+    private final ListCaseNoteHistories listCaseNoteHistories;
 
     public CaseController(ListCases listCases, GetCaseDetail getCaseDetail, AssignCase assignCase,
                           EscalateCase escalateCase, CloseCase closeCase, RefreshCaseSummary refreshCaseSummary,
-                          GetCaseSummary getCaseSummary) {
+                          GetCaseSummary getCaseSummary, UpdateCaseNotes updateCaseNotes,
+                          ListCaseNoteHistories listCaseNoteHistories) {
         this.listCases = listCases;
         this.getCaseDetail = getCaseDetail;
         this.assignCase = assignCase;
@@ -51,6 +58,8 @@ public class CaseController {
         this.closeCase = closeCase;
         this.refreshCaseSummary = refreshCaseSummary;
         this.getCaseSummary = getCaseSummary;
+        this.updateCaseNotes = updateCaseNotes;
+        this.listCaseNoteHistories = listCaseNoteHistories;
     }
 
     @Operation(summary = "케이스 목록",
@@ -106,5 +115,25 @@ public class CaseController {
     @GetMapping("/{caseNo}/summary")
     public GetCaseSummary.Result summary(@PathVariable String caseNo) {
         return getCaseSummary.execute(caseNo);
+    }
+
+    @Operation(summary = "조사 메모 저장",
+            description = "담당만(403 NOT_ASSIGNEE), 편집 가능 상태만(409 INVALID_CASE_TRANSITION·action=UPDATE_NOTES). "
+                    + "0~10,000자, 빈 문자열은 비우기, null·초과는 400. 버전 다르면 내용이 같아도 409 CONCURRENT_UPDATE. "
+                    + "바뀌면 NOTE 이력 + version +1, 같은 내용이면 그대로(version 안 오름)")
+    @PutMapping("/{caseNo}/notes")
+    public CaseChangeResponse updateNotes(@PathVariable String caseNo, @Valid @RequestBody UpdateNotesRequest request) {
+        return CaseChangeResponse.from(
+                updateCaseNotes.execute(caseNo, request.version(), request.investigatorNotes()));
+    }
+
+    @Operation(summary = "메모 이력",
+            description = "조회 3역할. 최신 먼저, before_text 는 바로 앞 메모(첫 기록은 null), 비운 기록은 after_text \"\". "
+                    + "size ≤ 100")
+    @GetMapping("/{caseNo}/note-histories")
+    public PageResponse<ListCaseNoteHistories.NoteHistory> noteHistories(
+            @PathVariable String caseNo, @Valid @ParameterObject @ModelAttribute NoteHistoryQuery query) {
+        return PageResponse.from(
+                listCaseNoteHistories.execute(caseNo, query.pageOrDefault(), query.sizeOrDefault()));
     }
 }

@@ -61,6 +61,10 @@
 **메모** [안건 16 — 일부 미결]
 - 결정표 권장은 `case_history`의 `NOTE` 행(메모 전체를 매번 저장). 지윤 의견은 `case_note_history` 분리. **이름(A/B)이 엇갈려서 최종 확인 필요** — 지윤·진희.
 - 〔초안 — CASES 명세 API-05·15〕 NOTE 행 방식으로 전문 저장, 같은 내용은 no-op, 빈 문자열은 명시적 비우기, `Case.version`도 같이 올림.
+- **구현됨 (SCRUM-176) — NOTE 행 방식.** 지금 메모 = 마지막 NOTE 행의 `comment`(`CaseNotes` 한 곳, 상세 `investigator_notes`도 같은 값). 새 컬럼·마이그레이션 없음.
+  - `UpdateCaseNotes` — A3 `PUT …/notes {investigator_notes, version}` → 200 M. 순서: 404 → version 409(내용이 같아도) → 403 `NOT_ASSIGNEE` → 409 `INVALID_CASE_TRANSITION`(`details.action = UPDATE_NOTES`) → 같은 내용(메모 없을 때 `""` 포함)이면 no-op(version 그대로). 바뀌면 `Case.updateNotes`가 NOTE 이력(상태 그대로) + `bumpVersion`. null·누락·10,001자 이상은 400.
+  - `ListCaseNoteHistories` — C8 `GET …/note-histories?page&size` → `{items:[{before_text, after_text, case_version_before, created_by, created_at}], page, size, total}`, 최신 먼저(id DESC). `before_text`는 바로 앞 NOTE 행(페이지 밖이어도), 첫 기록은 null. 열람 기록은 안 남김(C7과 같음).
+  - 상세 최근 이력 20건에서 NOTE는 뺌(명세 API-11 — 전문은 C8).
 
 **AI 조사 요약** 〔초안 — CASES 명세 API-12·13·§7.2〕 "DB → AI → DB" 패턴. 입력 스냅샷과 `input_sha256`을 저장해 `is_current`를 계산(케이스 version 차이로 계산하지 않음). 실패해도 조사는 계속(요약은 보조). AI 실패를 빈 요약·LOW로 바꾸지 않아요.
 

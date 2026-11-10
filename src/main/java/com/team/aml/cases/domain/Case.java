@@ -112,6 +112,26 @@ public class Case extends BaseEntity {
         return true;
     }
 
+    /**
+     * 조사 메모 저장 (CASES 명세 API-05). 상태는 그대로, NOTE 이력에 메모 전문을 남긴다(안건 16 A안 — NOTE 행).
+     * 메모는 cases 칸이 아니라 NOTE 이력에만 있어 지금 메모(currentNotes)는 application 이 마지막 NOTE 행에서 읽어 넘긴다.
+     * 빈 문자열은 "비우기" 기록. 지금 메모와 같으면(메모가 없을 때 빈 문자열 포함) 이력 없이 false.
+     * cases 행 칸은 바뀌지 않으므로 version 은 application 이 bumpVersion 으로 올린다.
+     *
+     * @return 바뀌었으면 true
+     */
+    public boolean updateNotes(String notes, String currentNotes, Long actorId) {
+        Objects.requireNonNull(notes, "notes");
+        if (!isEditableByAssignee()) {
+            throw InvalidCaseTransitionException.notEditable(status, rejectionReasonCode, CaseAction.UPDATE_NOTES.name());
+        }
+        if (notes.equals(currentNotes == null ? "" : currentNotes)) {
+            return false;
+        }
+        record(CaseHistoryAction.NOTE, status, status, null, notes, actorId);
+        return true;
+    }
+
     /** 상신 REVIEWING → ESCALATED. AI 호출 없음, 초안 생성은 별도 요청. */
     public void escalate(Long actorId, String comment) {
         status.validateTransition(CaseStatus.ESCALATED, rejectionReasonCode);   // 상태 409 가 사유 400 보다 먼저
