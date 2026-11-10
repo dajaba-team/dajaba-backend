@@ -140,7 +140,7 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 
 | 기능 | API | 규칙 |
 |---|---|---|
-| 계정 목록 | `GET /admin/users` | 비활성 포함, 필터 `role`, `is_active` |
+| 계정 목록 | `GET /admin/users` | 필터 `role`·`is_active`(**안 보내면 활성만**), `display_name` 오름차순(같으면 `id`) 고정·`sort` 안 받음, `size` ≤ 100(기본 20). 항목 `{id, login_id, display_name, role, is_active, active_case_count}` — `active_case_count` 는 지금 `null`, SCRUM-135 ②에서 조사역 행만 채우고 **다른 역할 행은 계속 `null`**. SYSTEM 행(비활성)은 `is_active=false` 일 때 보임 |
 | 계정 발급 | `POST /admin/users {login_id, display_name, role, initial_password}` | `login_id` 유일, 역할 3개 중 하나, 서버에서 BCrypt. 응답에 비밀번호 없음 |
 | 역할 변경 | `POST /admin/users/{id}/change-role {role}` | ROLE_CHANGED, 그 사용자 세션 끊김 |
 | 비활성화 / 재활성화 | `POST /admin/users/{id}/deactivate` · `/activate` | 세션 끊김. 담당 케이스가 있으면 응답에 개수 |
