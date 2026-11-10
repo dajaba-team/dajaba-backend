@@ -91,14 +91,14 @@ public class ListStrRevisions {
         return users.findById(userId).map(User::getDisplayName).orElse(null);
     }
 
-    private static Item item(StrRevision r, String revisedByName) {
-        return new Item(r.getRevisionNo(), r.getEditedSections(), revisedByName, r.getCreatedAt(), r.isAiOriginal());
+    private static Item item(StrRevision r, String editedByName) {
+        return new Item(r.getRevisionNo(), r.getEditedSections(), editedByName, r.getCreatedAt(), r.isAiOriginal());
     }
 
-    public record Item(int revisionNo, List<StrSection> changedSections, String revisedBy, Instant revisedAt,
+    public record Item(int revisionNo, List<StrSection> changedSections, String editedBy, Instant editedAt,
                        boolean aiOriginal) {}
 
-    public record Revisions(String draftNo, int currentRevisionNo, List<Item> revisions) {}
+    public record Revisions(String draftNo, int currentRevisionNo, List<Item> items) {}
 
     public record Detail(String draftNo, Item revision, List<NarrativeSection> before, List<NarrativeSection> after) {}
 }

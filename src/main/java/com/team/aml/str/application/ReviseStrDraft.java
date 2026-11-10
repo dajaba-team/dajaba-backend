@@ -4,13 +4,17 @@ import com.team.aml.cases.application.TouchCaseForRevision;
 import com.team.aml.shared.domain.DisplayNumber;
 import com.team.aml.shared.security.CurrentUser;
 import com.team.aml.str.domain.DraftNotFoundException;
+import com.team.aml.str.domain.NarrativeSection;
 import com.team.aml.str.domain.StrDraft;
 import com.team.aml.str.domain.StrDraftRepository;
 import com.team.aml.str.domain.StrRevision;
 import com.team.aml.str.domain.StrSection;
+import com.team.aml.user.domain.User;
+import com.team.aml.user.domain.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -29,11 +33,14 @@ public class ReviseStrDraft {
     private final StrDraftRepository drafts;
     private final TouchCaseForRevision touchCase;
     private final CurrentUser currentUser;
+    private final UserRepository users;
 
-    public ReviseStrDraft(StrDraftRepository drafts, TouchCaseForRevision touchCase, CurrentUser currentUser) {
+    public ReviseStrDraft(StrDraftRepository drafts, TouchCaseForRevision touchCase, CurrentUser currentUser,
+                          UserRepository users) {
         this.drafts = drafts;
         this.touchCase = touchCase;
         this.currentUser = currentUser;
+        this.users = users;
     }
 
     @Transactional
@@ -41,14 +48,21 @@ public class ReviseStrDraft {
         long draftId = DraftNumbers.require(draftNo);
         StrDraft draft = drafts.findById(draftId).orElseThrow(() -> new DraftNotFoundException(draftNo));
         long caseVersion = touchCase.execute(draft.getCaseId(), draftId, expectedCaseVersion);
-        StrRevision revision = draft.revise(editedTexts, currentUser.require().userId());
-        drafts.save(draft);
+        long actorId = currentUser.require().userId();
+        StrRevision revision = draft.revise(editedTexts, actorId);
+        drafts.save(draft);                                   // flush — 수정본 created_at 이 채워진다
         return new Revised(DisplayNumber.draftNo(draftId), revision.getRevisionNo(), revision.getEditedSections(),
+                users.findById(actorId).map(User::getDisplayName).orElse(null), revision.getCreatedAt(),
+                revision.getAfter(),
                 draft.getVersion(), caseVersion);
     }
 
-    /** 저장 결과. 본문을 고쳤으니 예전 검증은 지금 본문과 맞지 않는다 — 화면은 needs_verification 으로 [승인 요청]을 끈다. */
+    /**
+     * 저장 결과. narrative = 저장된 본문 전체(S2 와 같은 모양) — 화면이 S2 를 다시 부르지 않고 저장을 확인한다 (#91 리뷰).
+     * 본문을 고쳤으니 예전 검증은 지금 본문과 맞지 않는다 — 화면은 needs_verification 으로 [승인 요청]을 끈다.
+     */
     public record Revised(String draftNo, int revisionNo, List<StrSection> changedSections,
+                          String editedBy, Instant editedAt, List<NarrativeSection> narrative,
                           long version, long caseVersion) {
         public boolean needsVerification() { return true; }
     }

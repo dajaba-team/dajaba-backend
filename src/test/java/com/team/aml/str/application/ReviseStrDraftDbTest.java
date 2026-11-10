@@ -7,6 +7,7 @@ import com.team.aml.cases.domain.InvalidCaseTransitionException;
 import com.team.aml.cases.domain.NotAssigneeException;
 import com.team.aml.shared.domain.DisplayNumber;
 import com.team.aml.shared.security.AppUserDetails;
+import com.team.aml.str.api.StrRevisionResponses;
 import com.team.aml.str.domain.NarrativeSection;
 import com.team.aml.str.domain.RevisionNotFoundException;
 import com.team.aml.str.domain.StrDraftRequest;
@@ -74,6 +75,7 @@ class ReviseStrDraftDbTest {
     @Autowired StrDraftRequestRepository requests;
     @Autowired JdbcTemplate jdbc;
     @Autowired TransactionTemplate tx;
+    @Autowired ObjectMapper om;
 
     long investigator;
     long otherInvestigator;
@@ -117,6 +119,11 @@ class ReviseStrDraftDbTest {
         assertThat(r.revisionNo()).isEqualTo(2);
         assertThat(r.changedSections()).containsExactly(StrSection.METHOD);
         assertThat(r.needsVerification()).isTrue();
+        assertThat(r.editedBy()).isEqualTo("사용자");
+        assertThat(r.editedAt()).isNotNull();
+        assertThat(r.narrative()).hasSize(StrSection.V2.size())
+                .filteredOn(n -> n.section() == StrSection.METHOD).extracting(NarrativeSection::text)
+                .containsExactly("고친 방법 문장");
         assertThat(r.version()).isEqualTo(draftVersion + 1).isEqualTo(draftVersion(draftId));
         assertThat(r.caseVersion()).isEqualTo(caseVersion + 1).isEqualTo(caseVersion(caseId));
         assertThat(jdbc.queryForObject("select count(*) from ops.str_revisions where draft_id = ?", Long.class, draftId))
@@ -215,11 +222,11 @@ class ReviseStrDraftDbTest {
         ListStrRevisions.Revisions list = revisions.list(DisplayNumber.draftNo(draftId));
 
         assertThat(list.currentRevisionNo()).isEqualTo(2);
-        assertThat(list.revisions()).extracting(ListStrRevisions.Item::revisionNo).containsExactly(1, 2);
-        assertThat(list.revisions().get(0).aiOriginal()).isTrue();
-        assertThat(list.revisions().get(1).changedSections()).containsExactly(StrSection.METHOD);
-        assertThat(list.revisions().get(1).revisedBy()).isEqualTo("사용자");
-        assertThat(list.revisions().get(1).revisedAt()).isNotNull();
+        assertThat(list.items()).extracting(ListStrRevisions.Item::revisionNo).containsExactly(1, 2);
+        assertThat(list.items().get(0).aiOriginal()).isTrue();
+        assertThat(list.items().get(1).changedSections()).containsExactly(StrSection.METHOD);
+        assertThat(list.items().get(1).editedBy()).isEqualTo("사용자");
+        assertThat(list.items().get(1).editedAt()).isNotNull();
         assertThat(strViewCount(draftId)).isEqualTo(viewsBefore + 1);
     }
 
@@ -262,6 +269,34 @@ class ReviseStrDraftDbTest {
 
         assertThatThrownBy(() -> revisions.one(DisplayNumber.draftNo(draftId), 9))
                 .isInstanceOf(RevisionNotFoundException.class);
+    }
+
+    // 11
+    @Test
+    void 정상_응답_JSON_이름이_계약서와_같다_items_edited_by_narrative_before_after() throws Exception {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        login(investigator, "INVESTIGATOR");
+        String draftNo = DisplayNumber.draftNo(draftId);
+
+        JsonNode saved = om.readTree(om.writeValueAsString(StrRevisionResponses.Saved.from(
+                revise.execute(draftNo, caseVersion(caseId), Map.of(StrSection.METHOD, "고친 방법 문장")))));
+        JsonNode list = om.readTree(om.writeValueAsString(StrRevisionResponses.RevisionList.from(revisions.list(draftNo))));
+        JsonNode detail = om.readTree(om.writeValueAsString(
+                StrRevisionResponses.RevisionDetail.from(revisions.one(draftNo, 2))));
+
+        for (String key : new String[] {"edited_by", "edited_at", "narrative", "case_version", "needs_verification"}) {
+            assertThat(saved.has(key)).as("S3 " + key).isTrue();
+        }
+        assertThat(saved.path("narrative").get(4).path("label").asText()).isEqualTo("방법");
+        assertThat(list.path("items").get(1).path("edited_by").asText()).isEqualTo("사용자");
+        assertThat(list.has("revisions")).isFalse();
+        for (String key : new String[] {"revision_no", "changed_sections", "edited_by", "edited_at", "ai_original",
+                "narrative_before", "narrative_after"}) {
+            assertThat(detail.has(key)).as("S4 " + key).isTrue();
+        }
+        assertThat(detail.has("revision")).isFalse();
+        assertThat(detail.path("narrative_after").get(4).path("text").asText()).isEqualTo("고친 방법 문장");
     }
 
     // ---- 도우미 ----

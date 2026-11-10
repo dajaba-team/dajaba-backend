@@ -13,38 +13,47 @@ public final class StrRevisionResponses {
 
     private StrRevisionResponses() {}
 
-    /** S3 — 저장한 수정본 번호와 새 version 둘(초안·케이스). 화면은 다음 수정·승인 요청에 case_version 을 그대로 쓴다. */
-    public record Saved(String draftNo, int revisionNo, List<StrSection> changedSections, boolean needsVerification,
+    /**
+     * S3 (#91 리뷰, 계약서 S3) — edited_by(표시 이름)·edited_at·narrative(저장된 본문 전체, S2 모양).
+     * case_version 은 계약서에 없지만 다음 수정·승인 요청에 필요해 같이 준다(진희 님이 계약서에 추가 예정).
+     */
+    public record Saved(String draftNo, int revisionNo, List<StrSection> changedSections, String editedBy,
+                        Instant editedAt, List<StrDraftDetailResponse.Narrative> narrative, boolean needsVerification,
                         long version, long caseVersion) {
-        static Saved from(ReviseStrDraft.Revised r) {
-            return new Saved(r.draftNo(), r.revisionNo(), r.changedSections(), r.needsVerification(),
-                    r.version(), r.caseVersion());
+        public static Saved from(ReviseStrDraft.Revised r) {
+            return new Saved(r.draftNo(), r.revisionNo(), r.changedSections(), r.editedBy(), r.editedAt(),
+                    narrative(r.narrative()), r.needsVerification(), r.version(), r.caseVersion());
         }
     }
 
-    /** S4 목록의 한 줄. revised_by 는 표시 이름(내부 users.id 는 내보내지 않는다). 1번은 AI 원문(SYSTEM). */
-    public record Item(int revisionNo, List<StrSection> changedSections, String revisedBy, Instant revisedAt,
+    /** S4 목록의 한 줄. edited_by 는 표시 이름(내부 users.id 는 내보내지 않는다). 1번은 AI 원문(SYSTEM). */
+    public record Item(int revisionNo, List<StrSection> changedSections, String editedBy, Instant editedAt,
                        boolean aiOriginal) {
-        static Item from(ListStrRevisions.Item i) {
-            return new Item(i.revisionNo(), i.changedSections(), i.revisedBy(), i.revisedAt(), i.aiOriginal());
+        public static Item from(ListStrRevisions.Item i) {
+            return new Item(i.revisionNo(), i.changedSections(), i.editedBy(), i.editedAt(), i.aiOriginal());
         }
     }
 
-    public record RevisionList(String draftNo, int currentRevisionNo, List<Item> revisions) {
-        static RevisionList from(ListStrRevisions.Revisions r) {
-            return new RevisionList(r.draftNo(), r.currentRevisionNo(), r.revisions().stream().map(Item::from).toList());
+    /** S4 목록 — 프론트·계약서가 읽는 이름은 items. */
+    public record RevisionList(String draftNo, int currentRevisionNo, List<Item> items) {
+        public static RevisionList from(ListStrRevisions.Revisions r) {
+            return new RevisionList(r.draftNo(), r.currentRevisionNo(), r.items().stream().map(Item::from).toList());
         }
     }
 
-    /** S4 ?revision_no= — 그 수정본의 전·후 본문 전체. 1번은 before 가 []. */
-    public record RevisionDetail(String draftNo, Item revision, List<StrDraftDetailResponse.Narrative> before,
-                                 List<StrDraftDetailResponse.Narrative> after) {
-        static RevisionDetail from(ListStrRevisions.Detail d) {
-            return new RevisionDetail(d.draftNo(), Item.from(d.revision()), narrative(d.before()), narrative(d.after()));
+    /** S4 ?revision_no= — 평평한 모양(#91 리뷰). 그 수정본의 전·후 본문 전체, 1번은 narrative_before 가 []. */
+    public record RevisionDetail(String draftNo, int revisionNo, List<StrSection> changedSections, String editedBy,
+                                 Instant editedAt, boolean aiOriginal,
+                                 List<StrDraftDetailResponse.Narrative> narrativeBefore,
+                                 List<StrDraftDetailResponse.Narrative> narrativeAfter) {
+        public static RevisionDetail from(ListStrRevisions.Detail d) {
+            ListStrRevisions.Item i = d.revision();
+            return new RevisionDetail(d.draftNo(), i.revisionNo(), i.changedSections(), i.editedBy(), i.editedAt(),
+                    i.aiOriginal(), narrative(d.before()), narrative(d.after()));
         }
+    }
 
-        private static List<StrDraftDetailResponse.Narrative> narrative(List<NarrativeSection> sections) {
-            return sections.stream().map(StrDraftDetailResponse.Narrative::from).toList();
-        }
+    private static List<StrDraftDetailResponse.Narrative> narrative(List<NarrativeSection> sections) {
+        return sections.stream().map(StrDraftDetailResponse.Narrative::from).toList();
     }
 }
