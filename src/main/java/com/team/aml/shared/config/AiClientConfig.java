@@ -23,7 +23,7 @@ public class AiClientConfig {
     @Bean
     WebClient aiWebClient(AmlProperties props) {
         HttpClient httpClient = HttpClient.create()
-                .disableRetry(true)      // 재시도는 WebClientAiClient 가 전담 — Netty 기본 1회 재시도를 끈다 (codex 지적)
+                .disableRetry(true)      // 재시도는 WebClientAiClient 가 전담 — Netty 기본 1회 재시도를 끈다
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, CONNECT_TIMEOUT_MS);
         ExchangeStrategies strategies = ExchangeStrategies.builder()
                 .codecs(c -> c.defaultCodecs().maxInMemorySize(MAX_IN_MEMORY_BYTES))
