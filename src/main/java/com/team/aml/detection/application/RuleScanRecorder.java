@@ -71,8 +71,14 @@ public class RuleScanRecorder {
         batchRuns.findById(batchRunId).orElseThrow().fail(message);
     }
 
-    /** 룰 스캔은 동기라 앱이 죽으면 같이 끊긴다. 기동 직후 남은 RUNNING 은 FAILED 로 — 그 날짜를 다시 돌릴 수 있게. */
+    /**
+     * 단일 서버 운영 전제. 동기 스캔이므로 앱 재시작 후
+     * 남아 있는 RUNNING을 FAILED로 정리해 재실행을 허용한다.
+     * 다중 서버 운영 시에는 다른 인스턴스의 실행 중 배치도
+     * 실패 처리할 수 있으므로 별도 복구 정책이 필요하다.
+     */
     @EventListener(ApplicationReadyEvent.class)
+
     @Transactional
     public void failAbandonedScans() {
         int cleaned = scans.failRunningScans(ABANDONED_MESSAGE);
