@@ -38,6 +38,26 @@ class CaseChanges {
         return c;
     }
 
+    /**
+     * str 과 함께 케이스를 바꾸는 공개 유스케이스(승인 요청·승인·반려)용 — 케이스를 잠그고(FOR UPDATE) 읽는다.
+     * 없으면 404 CASE_NOT_FOUND, str 이 들고 온 case_version 과 다르면 409 CONCURRENT_UPDATE. AttachDraftToCase 와 같은 순서.
+     */
+    Case lock(long caseId, long expectedVersion) {
+        Case c = cases.findForUpdate(caseId).orElseThrow(() -> new CaseNotFoundException(caseId));
+        if (c.getVersion() != expectedVersion) {
+            throw new OptimisticLockException("케이스가 그 사이 바뀌었습니다: " + c.getCaseNo()
+                    + " (expected " + expectedVersion + ", current " + c.getVersion() + ")");
+        }
+        return c;
+    }
+
+    /** 저장 → 이력 → 새 cases.version. @Version 은 flush 때 오르므로 flush 뒤 값을 돌려준다 (SCRUM-141 과 같음). */
+    long saveAndGetVersion(Case c) {
+        Case saved = cases.saveAndFlush(c);
+        histories.saveAll(saved.takePendingHistories());
+        return saved.getVersion();
+    }
+
     void requireAssignee(Case c, long actorId) {
         if (c.getAssigneeId() == null || c.getAssigneeId() != actorId) {
             throw new NotAssigneeException(c.getCaseNo());
