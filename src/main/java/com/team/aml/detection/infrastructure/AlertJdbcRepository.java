@@ -16,9 +16,6 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
-import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 
@@ -35,15 +32,14 @@ public class AlertJdbcRepository implements AlertRepository {
             where a.batch_date = ? and a.score_status = 'SCORED' and not a.case_opened
             order by a.id""";
 
-    // 규약 §2 경보 JSON. alert_id 는 alert_no, rule_version 은 문자열. 점수가 아직 없으면 reasons 는 [] 로 바꿔 돌려준다.
+    // 규약 §2 경보 JSON(AlertPayloadRows — 점수 요청과 같은 모양). 점수가 아직 없으면 reasons 는 [] 로 바꿔 돌려준다.
     private static final String FIND_FOR_DRAFT = """
-            select a.alert_no, a.account_key, a.entity_id, r.rule_id, r.version, r.typology_hint,
-                   a.window_start, a.window_end, a.reference_ts, a.rule_facts::text as rule_facts, a.created_at,
+            select %s,
                    (s.payload -> 'reasons')::text as reasons
             from ops.alerts a
             join ops.rules r on r.id = a.rule_ref_id
             left join ops.alert_scores s on s.alert_id = a.id
-            where a.id = ?""";
+            where a.id = ?""".formatted(AlertPayloadRows.COLUMNS);
     private static final String TRANSACTION_IDS =
             "select transaction_id from ops.alert_transactions where alert_id = ? order by transaction_id";
     // 같은 법인의 이 경보보다 앞선 경보. 같은 시각·자기 자신은 세지 않는다 (alerts_entity_reference_idx).
@@ -72,8 +68,6 @@ public class AlertJdbcRepository implements AlertRepository {
             rs.getString("to_account_key"), rs.getBigDecimal("amount_paid"), rs.getString("currency_paid"),
             rs.getBigDecimal("amount_received"), rs.getString("currency_received"), rs.getString("payment_format"),
             rs.getBoolean("is_self_transfer"));
-    /** 데이터 시각은 규약 예시처럼 초까지. LocalDateTime.toString 은 초가 0이면 잘라서 쓰지 않는다. */
-    private static final DateTimeFormatter DATA_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper om;
@@ -108,15 +102,8 @@ public class AlertJdbcRepository implements AlertRepository {
         return jdbc.query(FIND_FOR_DRAFT, (rs, rowNum) -> {
             String entityId = rs.getString("entity_id");
             LocalDateTime referenceTs = rs.getObject("reference_ts", LocalDateTime.class);
-            AlertPayload alert = new AlertPayload(rs.getString("alert_no"), rs.getString("account_key"), entityId,
-                    rs.getString("rule_id"), String.valueOf(rs.getInt("version")), rs.getString("typology_hint"),
-                    DATA_TIME.format(rs.getObject("window_start", LocalDateTime.class)),
-                    DATA_TIME.format(rs.getObject("window_end", LocalDateTime.class)),
-                    DATA_TIME.format(referenceTs),
-                    jdbc.queryForList(TRANSACTION_IDS, Long.class, alertId),
-                    json(rs.getString("rule_facts")),
-                    rs.getObject("created_at", OffsetDateTime.class).toInstant()
-                            .truncatedTo(ChronoUnit.SECONDS).toString());
+            AlertPayload alert = AlertPayloadRows.payload(rs, jdbc.queryForList(TRANSACTION_IDS, Long.class, alertId),
+                    json(rs.getString("rule_facts")));
             int prior = entityId == null ? 0
                     : jdbc.queryForObject(PRIOR_ALERT_COUNT, Integer.class, entityId, referenceTs);
             return new AlertForDraft(alert, reasonsOrEmpty(rs.getString("reasons")), prior);

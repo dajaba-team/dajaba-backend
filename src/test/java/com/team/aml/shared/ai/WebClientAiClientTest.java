@@ -595,6 +595,54 @@ class WebClientAiClientTest {
         assertThat(writer.rows.get(0).getAiVersion()).isEqualTo("V1");
     }
 
+    /** verify_response.json 을 한 칸만 바꿔 돌려준다 — 나머지는 계약 예시 그대로(보낸 generation_id·revision_no 와 같음). */
+    private void enqueueVerifyWith(String field, Object value) throws Exception {
+        ObjectNode body = (ObjectNode) om.readTree(example("verify_response.json"));
+        body.set(field, om.valueToTree(value));
+        server.enqueue(json(200, body.toString()));
+    }
+
+    @Test
+    void 실패_검증_응답_status_produced_at_해시_모양이_틀리면_실패_행이고_재시도하지_않는다() throws Exception {   // #95 리뷰
+        VerifyRequest request = om.readValue(example("verify_request.json"), VerifyRequest.class);
+        Object[][] wrong = {
+                {"status", "OK"},
+                {"produced_at", "2026-11-05T23:02:14+09:00"},
+                {"produced_at", "어제"},
+                {"narrative_sha256", "ABC"},
+        };
+        for (Object[] w : wrong) {
+            writer.rows.clear();
+            int before = server.getRequestCount();
+            enqueueVerifyWith((String) w[0], w[1]);
+
+            Throwable e = catchThrowable(() -> client.verify("DRF-000312", request));
+
+            assertBadResponse(e);
+            assertThat(e).hasMessageContaining((String) w[0]);
+            assertThat(server.getRequestCount() - before).isEqualTo(1);
+            assertThat(writer.rows).singleElement().satisfies(row -> {
+                assertThat(row.getStatusCode()).isEqualTo(200);
+                assertThat(row.getErrorCode()).isEqualTo("AI_BAD_RESPONSE");
+            });
+        }
+    }
+
+    @Test
+    void 실패_검증_응답_generation_id나_revision_no가_보낸_값과_다르면_실패_행() throws Exception {   // #95 리뷰
+        VerifyRequest request = om.readValue(example("verify_request.json"), VerifyRequest.class);
+
+        enqueueVerifyWith("generation_id", "g-other");
+        assertOneBadResponseRow(catchThrowable(() -> client.verify("DRF-000312", request)), "/v1/str/verify");
+
+        writer.rows.clear();
+        enqueueVerifyWith("revision_no", 3);
+        Throwable e = catchThrowable(() -> client.verify("DRF-000312", request));
+        assertBadResponse(e);
+        assertThat(e).hasMessageContaining("revision_no");
+        assertThat(writer.rows).singleElement().satisfies(row -> assertThat(row.getErrorCode()).isEqualTo("AI_BAD_RESPONSE"));
+    }
+
     @Test
     void 실패_요약_2xx에_case_no가_없으면_실패_행() {
         server.enqueue(json(200, "{\"summary_lines\":[],\"generation_meta\":{\"prompt_version\":\"summary_v1\"}}"));
