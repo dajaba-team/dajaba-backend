@@ -11,7 +11,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 /**
  * 팀원용 열람 기록 — 조회 유스케이스에서 한 줄로 부른다 (03_shared §9, 레퍼런스 §3.4. AOP 아님).
  *   accessLog.view(TargetType.CASE, caseId);   accessLog.strView(draftId);   accessLog.pdfDownload(draftId);
- *   계정 관리(user)도 같은 틀 — accessLog.userCreated(id). 변경과 같은 트랜잭션.
+ *   계정 관리(user)도 같은 틀 — accessLog.userCreated(id)·roleChanged(id)·userDeactivated(id). 변경과 같은 트랜잭션.
  * 사용자는 CurrentUser(없으면 실패), IP 는 지금 요청(request.getRemoteAddr())에서 꺼낸다 — 호출부는 넘기지 않는다.
  * 바깥 조회 트랜잭션에 참여한다(MANDATORY, 같은 커넥션) — 부르는 유스케이스는 @Transactional(readOnly 아님).
  * 트랜잭션 밖이면 IllegalTransactionStateException, readOnly 안이면 IllegalStateException 으로 바로 실패한다.
@@ -56,6 +56,18 @@ public class AccessLogWriter {
     @Transactional(propagation = Propagation.MANDATORY)
     public void userCreated(long targetUserId) {
         write(AccessLogAction.USER_CREATED, TargetType.USER, targetUserId);
+    }
+
+    /** ROLE_CHANGED — 관리자가 역할을 바꿈. 전·후 역할은 칸이 없어 남기지 않는다. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void roleChanged(long targetUserId) {
+        write(AccessLogAction.ROLE_CHANGED, TargetType.USER, targetUserId);
+    }
+
+    /** USER_DEACTIVATED — 관리자가 비활성화. 재활성화·비밀번호 초기화는 action 값이 없어 남기지 않는다. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void userDeactivated(long targetUserId) {
+        write(AccessLogAction.USER_DEACTIVATED, TargetType.USER, targetUserId);
     }
 
     private void write(AccessLogAction action, TargetType type, long targetId) {

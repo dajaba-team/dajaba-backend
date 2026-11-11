@@ -26,8 +26,12 @@ public class AdminUserTargets {
         this.activeCases = activeCases;
     }
 
+    /**
+     * 대상 행을 잠가서 읽는다(커밋까지). 역할 변경·비활성화·재활성화·초기화 넷 다 여기로 — 동시에 온 다른 변경이
+     * 앞 커밋을 옛 값으로 덮지 않게 (SCRUM-135 ②-b). 잠근 뒤 오래 걸리는 일(BCrypt)은 부르는 쪽이 먼저 끝낸다.
+     */
     User requireChangeable(long id) {
-        User u = users.findById(id).orElseThrow(() -> new UserNotFoundException(id));
+        User u = users.findForUpdate(id).orElseThrow(() -> new UserNotFoundException(id));
         if (u.getId() == User.SYSTEM_ID || u.getRole() == Role.SYSTEM) {
             throw new AccountChangeNotAllowedException(id, Reason.SYSTEM);
         }
@@ -39,5 +43,9 @@ public class AdminUserTargets {
 
     AdminUserView view(User u) {
         return AdminUserView.of(u, u.getRole() == Role.INVESTIGATOR ? activeCases.countActive(u.getId()) : null);
+    }
+
+    long activeCaseCount(User u) {
+        return activeCases.countActive(u.getId());
     }
 }

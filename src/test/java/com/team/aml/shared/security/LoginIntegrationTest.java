@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -21,6 +22,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -40,8 +42,11 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -84,9 +89,24 @@ class LoginIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper om;
     @Autowired UserRepository users;
-    @Autowired PasswordEncoder encoder;
+    @SpyBean PasswordEncoder encoder;
     @Autowired Environment env;
+    @Autowired JdbcTemplate jdbc;
     @Autowired @Qualifier("requestMappingHandlerMapping") RequestMappingHandlerMapping mappings;
+
+    /** 비밀번호 비교(BCrypt)가 끝난 바로 뒤에 한 번 돈다 — "인증은 옛 값으로 끝났는데 그 사이 관리자 변경이 커밋됨"을 재현. */
+    static final AtomicReference<Runnable> AFTER_PASSWORD_CHECK = new AtomicReference<>();
+
+    @BeforeEach
+    void hookAfterPasswordCheck() {
+        AFTER_PASSWORD_CHECK.set(null);
+        doAnswer(inv -> {
+            Object matched = inv.callRealMethod();
+            Runnable hook = AFTER_PASSWORD_CHECK.getAndSet(null);
+            if (hook != null) hook.run();
+            return matched;
+        }).when(encoder).matches(any(), any());
+    }
 
     @BeforeEach
     void inactiveUser() {
@@ -269,6 +289,100 @@ class LoginIntegrationTest {
         assertThat(huge.getResponse().getStatus()).isEqualTo(400);
     }
 
+    // --- 비밀번호 UTF-8 72바이트 (SCRUM-135 ②-b) — BCrypt 는 앞 72바이트만 비교한다. 넘으면 틀린 비밀번호와 같은 401 ---
+
+    static final String PW_72 = "a".repeat(64) + "-pw-1234";   // 72바이트
+    static final String PW_HAN_24 = "가".repeat(24);           // 한글 24자 = 72바이트
+
+    @Test
+    void 정상_72바이트_비밀번호와_한글_24자는_로그인_200() throws Exception {
+        user("pw72-ok", PW_72);
+        user("pwhan-ok", PW_HAN_24);
+
+        assertThat(login("pw72-ok", PW_72).getResponse().getStatus()).isEqualTo(200);
+        assertThat(login("pwhan-ok", PW_HAN_24).getResponse().getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void 실패_72바이트_비밀번호_뒤에_붙이면_401_LOGIN_FAILED_틀린_비밀번호와_같은_응답_LOGIN_FAIL_한_행() throws Exception {
+        user("pw72-tail", PW_72);
+        user("pwhan-tail", PW_HAN_24);
+        byte[] wrong = login("pw72-tail", "wrong-password").getResponse().getContentAsByteArray();
+        long before = loginFails("pw72-tail");
+
+        MvcResult tail = login("pw72-tail", PW_72 + "x");                 // 73바이트 — 지금은 앞 72바이트가 맞아 200
+        MvcResult han = login("pwhan-tail", PW_HAN_24 + "가");            // 한글 25자 = 75바이트
+
+        for (MvcResult r : List.of(tail, han)) {
+            assertThat(r.getResponse().getStatus()).isEqualTo(401);
+            assertThat(code(r)).isEqualTo("LOGIN_FAILED");
+            assertThat(r.getResponse().getContentAsByteArray()).isEqualTo(wrong);   // 사유를 숨긴다
+            assertThat(r.getRequest().getSession(false) == null
+                    || r.getRequest().getSession(false).getAttribute("SPRING_SECURITY_CONTEXT") == null).isTrue();
+        }
+        assertThat(loginFails("pw72-tail")).isEqualTo(before + 1);
+        assertThat(loginFails("pwhan-tail")).isEqualTo(1);
+    }
+
+    // --- 로그인 도중 계정 변경 (SCRUM-135 ②-b) — 비밀번호 비교는 옛 값으로 끝났고, 세션 등록 전에 관리자 변경이 커밋됐다 ---
+
+    @Test
+    void 실패_비교_뒤_비활성화가_커밋되면_401_LOGIN_FAILED_세션_없음_LOGIN_FAIL_한_행() throws Exception {
+        assertRejectedWhenChangedDuringLogin("mid-off", "update ops.users set is_active = false where login_id = ?");
+    }
+
+    @Test
+    void 실패_비교_뒤_역할_변경이_커밋되면_401_LOGIN_FAILED_세션_없음_LOGIN_FAIL_한_행() throws Exception {
+        assertRejectedWhenChangedDuringLogin("mid-role", "update ops.users set role = 'APPROVER' where login_id = ?");
+    }
+
+    @Test
+    void 실패_비교_뒤_비밀번호_초기화가_커밋되면_401_LOGIN_FAILED_세션_없음_LOGIN_FAIL_한_행() throws Exception {
+        String other = encoder.encode("reset-by-admin-5678");
+        assertRejectedWhenChangedDuringLogin("mid-pw", "update ops.users set password_hash = '" + other + "' where login_id = ?");
+    }
+
+    @Test
+    void 정상_비교_뒤_세_칸_말고_이름만_바뀌면_그대로_200() throws Exception {
+        user("mid-name", PASSWORD);
+        AFTER_PASSWORD_CHECK.set(() -> jdbc.update("update ops.users set display_name = '새 이름' where login_id = ?", "mid-name"));
+
+        MvcResult r = login("mid-name", PASSWORD);
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(200);
+        assertThat(mvc.perform(get("/api/v1/auth/me").session(session(r))).andReturn().getResponse().getStatus()).isEqualTo(200);
+        assertThat(loginFails("mid-name")).isZero();
+    }
+
+    private void assertRejectedWhenChangedDuringLogin(String loginId, String changeSql) throws Exception {
+        user(loginId, PASSWORD);
+        byte[] wrong = login("inv01", "wrong-password").getResponse().getContentAsByteArray();
+        AFTER_PASSWORD_CHECK.set(() -> jdbc.update(changeSql, loginId));
+
+        MvcResult r = login(loginId, PASSWORD);
+
+        assertThat(r.getResponse().getStatus()).as(r.getResponse().getContentAsString()).isEqualTo(401);
+        assertThat(code(r)).isEqualTo("LOGIN_FAILED");
+        assertThat(r.getResponse().getContentAsByteArray()).isEqualTo(wrong);
+        assertThat(r.getRequest().getSession(false)).as("옛 값으로 만든 세션이 남음").isNull();
+        assertThat(loginFails(loginId)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                select count(*) from ops.access_logs a join ops.users u on u.id = a.user_id
+                where a.action = 'LOGIN_OK' and u.login_id = ?
+                """, Long.class, loginId)).isZero();
+    }
+
+    @Test
+    void 경계_128자_넘는_비밀번호는_지금처럼_400_INVALID_REQUEST이고_기록하지_않는다() throws Exception {
+        user("pw72-long", PW_72);
+
+        MvcResult r = login("pw72-long", PW_72 + "x".repeat(129 - PW_72.length()));
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(400);
+        assertThat(code(r)).isEqualTo("INVALID_REQUEST");
+        assertThat(loginFails("pw72-long")).isZero();
+    }
+
     @Test
     void 실패_입력한_login_id는_로그에_남지_않는다(CapturedOutput output) throws Exception {
         login("leaky-login-id-zz9", "wrong-password-zz9");
@@ -333,6 +447,16 @@ class LoginIntegrationTest {
     }
 
     // --- 도우미 -------------------------------------------------------------
+
+    private void user(String loginId, String password) {
+        if (users.existsByLoginId(loginId)) return;
+        users.save(User.create(loginId, loginId, Role.INVESTIGATOR, encoder.encode(password)));
+    }
+
+    private long loginFails(String loginIdAttempted) {
+        return jdbc.queryForObject("select count(*) from ops.access_logs where action = 'LOGIN_FAIL' and login_id_attempted = ?",
+                Long.class, loginIdAttempted);
+    }
 
     private MvcResult login(String loginId, String password) throws Exception {
         return mvc.perform(post("/api/v1/auth/login")

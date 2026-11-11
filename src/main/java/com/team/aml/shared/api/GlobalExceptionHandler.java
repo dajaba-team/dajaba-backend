@@ -3,6 +3,7 @@ package com.team.aml.shared.api;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.team.aml.shared.ai.AiClientException;
 import com.team.aml.shared.domain.DomainException;
+import com.team.aml.shared.domain.InvalidRequestException;
 import com.team.aml.shared.domain.ForbiddenException;
 import com.team.aml.shared.domain.NotFoundException;
 import jakarta.persistence.OptimisticLockException;
@@ -36,6 +37,7 @@ import java.util.Set;
  * 예외 → HTTP 변환은 전부 여기 (레퍼런스 8.2). 컨트롤러에 try-catch 는 없다.
  *
  *  @Valid 실패, JSON 파싱 실패, 쿼리 파라미터 오류 → 400 INVALID_REQUEST (details 키는 요청 JSON 이름 snake_case — SCRUM-167)
+ *  InvalidRequestException        → 400 INVALID_REQUEST (지금 값과 비교해야 아는 입력 오류, details 그대로 — SCRUM-135 ②)
  *  *NotFoundException              → 404 <CLASS_NAME>
  *  ForbiddenException 하위         → 403 <CLASS_NAME> (역할·담당자 같은 업무 권한, SCRUM-67)
  *  DomainException 나머지          → 409 <CLASS_NAME>
@@ -87,6 +89,12 @@ public class GlobalExceptionHandler {
         Map<String, Object> details = parameter == null ? Map.of() : Map.of("parameter", parameter);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ErrorResponse.of("INVALID_REQUEST", "요청 파라미터가 올바르지 않습니다", details));
+    }
+
+    @ExceptionHandler(InvalidRequestException.class)
+    public ResponseEntity<ErrorResponse> invalidRequest(InvalidRequestException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ErrorResponse.of("INVALID_REQUEST", "요청 값이 올바르지 않습니다", e.details()));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

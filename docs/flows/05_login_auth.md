@@ -16,11 +16,12 @@ sequenceDiagram
     U->>FE: 아이디·비밀번호
     FE->>SEC: POST /api/v1/auth/login {login_id, password}
     SEC->>DB: users where login_id (is_active=true)
-    alt 없음 / 비밀번호 불일치 / 비활성
+    alt 없음 / 비밀번호 불일치 / 비활성 / 비밀번호 UTF-8 72바이트 초과(계정 조회 전 필터에서)
         SEC->>DB: access_logs LOGIN_FAIL (user_id null 가능)
         SEC-->>FE: 401 {error: {code: LOGIN_FAILED, message, details}}  ⟵ 사유 구분 안 함
     else 일치 (BCrypt 12)
         SEC->>SEC: 기존 세션 있으면 끊음 (maximumSessions 1)
+        SEC->>DB: 세션 등록 뒤 users 다시 읽음 — 활성·역할·해시가 비교 때와 다르면 세션 버리고 401 LOGIN_FAILED · LOGIN_FAIL
         SEC->>DB: access_logs LOGIN_OK
         SEC-->>FE: 200 {id, login_id, display_name, role}<br/>Set-Cookie: SESSION (HttpOnly, SameSite=Lax) · XSRF-TOKEN
     end
@@ -86,7 +87,7 @@ sequenceDiagram
     autonumber
     actor Adm as 관리자
     participant FE as 프론트
-    participant USR as user<br/>CreateUser · ChangeRole · DeactivateUser
+    participant USR as user<br/>CreateUser · ChangeRole · DeactivateUser · ResetUserPassword
     participant DB as PostgreSQL ops
 
     Adm->>FE: 계정 발급 (login_id, 이름, 역할, 초기 비밀번호)
@@ -100,13 +101,20 @@ sequenceDiagram
     Adm->>FE: 역할 변경 (조사역 → 승인자)
     FE->>USR: POST /api/v1/admin/users/{id}/change-role {role}
     USR->>DB: UPDATE users.role, access_logs ROLE_CHANGED (before→after)
-    USR->>USR: 그 사용자의 세션 끊기 (다음 요청부터 새 역할)
+    USR->>USR: 그 사용자의 세션 끊기 — DB 커밋 뒤에만, 관리자 본인 세션 그대로 (다음 요청 401, 다시 로그인하면 새 역할)
     USR-->>FE: 200
 
     Adm->>FE: 비활성화 (퇴사)
     FE->>USR: POST /api/v1/admin/users/{id}/deactivate
     USR->>DB: UPDATE is_active=false, access_logs USER_DEACTIVATED
-    USR->>USR: 세션 끊기
+    USR->>USR: 세션 끊기 — DB 커밋 뒤에만, 관리자 본인 세션 그대로
+    USR-->>FE: 200
+
+    Adm->>FE: 비밀번호 초기화
+    FE->>USR: POST /api/v1/admin/users/{id}/reset-password {new_password}
+    USR->>DB: UPDATE password_hash = BCrypt (기록 없음)
+    USR->>USR: 세션 끊기 — DB 커밋 뒤에만, 관리자 본인 세션 그대로
+    USR-->>FE: 200
     note over USR,DB: 삭제는 없다 — case_history·approvals가 user_id를 가리키므로
 ```
 

@@ -20,6 +20,8 @@ import org.springframework.security.web.access.ExceptionTranslationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.savedrequest.NullRequestCache;
+import org.springframework.security.core.session.SessionRegistry;
+import org.springframework.security.core.session.SessionRegistryImpl;
 import org.springframework.security.web.session.HttpSessionEventPublisher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -78,8 +80,18 @@ public class SecurityConfig {
         return new HttpSessionEventPublisher();
     }
 
+    /**
+     * 로그인 세션 목록. maximumSessions(1) 와 UserSessions(관리자가 남의 세션을 끊을 때)가 같은 것을 쓴다 (SCRUM-135 ②).
+     * bean 이라 HttpSessionEventPublisher 의 만료·무효화 이벤트를 받는다.
+     */
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http, UserDetailsService users, PasswordEncoder encoder) throws Exception {
+    public SessionRegistry sessionRegistry() {
+        return new SessionRegistryImpl();
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http, UserDetailsService users, PasswordEncoder encoder,
+                                           SessionRegistry sessionRegistry) throws Exception {
         CsrfTokenRequestAttributeHandler csrfHandler = new CsrfTokenRequestAttributeHandler();
         csrfHandler.setCsrfRequestAttributeName(null); // 토큰을 매 응답에 쿠키로 내보낸다 (axios 가 읽는다)
         AuthenticationManager login = new ProviderManager(new AppLoginProvider(users, encoder));
@@ -102,6 +114,7 @@ public class SecurityConfig {
                 .anyRequest().denyAll())
             .sessionManagement(s -> s
                 .maximumSessions(1)                              // 같은 계정 두 브라우저면 먼저 것이 끊긴다
+                .sessionRegistry(sessionRegistry)
                 .expiredSessionStrategy(handlers.expiredSession()))
             .exceptionHandling(e -> e
                 .authenticationEntryPoint(handlers.entryPoint())

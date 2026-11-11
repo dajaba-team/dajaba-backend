@@ -9,6 +9,12 @@ import java.util.Optional;
 public interface UserRepository {
     Optional<User> findByLoginId(String loginId);
     Optional<User> findById(Long id);
+
+    /**
+     * 관리자 계정 변경용 — 행을 잠근다(SELECT … FOR UPDATE 계열). 커밋할 때까지 같은 사용자를 바꾸는 다른 요청은 기다린다.
+     * User 는 @Version 이 없고 UPDATE 가 모든 칸을 쓰므로, 잠그지 않으면 뒤 커밋이 앞 커밋의 칸을 옛 값으로 덮는다 (SCRUM-135 ②-b).
+     */
+    Optional<User> findForUpdate(Long id);
     boolean existsByLoginId(String loginId);
     User save(User user);
 

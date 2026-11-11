@@ -11,7 +11,7 @@
 | 언제 | 누가 | 무엇을 | 남는 기록 |
 |---|---|---|---|
 | 입사·배치 | 관리자 | 계정 만들기 (로그인 ID, 이름, 역할 1개, 초기 비밀번호) | `users` 1행, `access_logs` USER_CREATED |
-| 업무 변경 | 관리자 | 역할 바꾸기 | `access_logs` ROLE_CHANGED(전→후), 그 사람 세션 끊김 |
+| 업무 변경 | 관리자 | 역할 바꾸기 | `access_logs` ROLE_CHANGED(전·후 역할은 칸이 없어 안 남음), 그 사람 세션 끊김 |
 | 퇴사·휴직 | 관리자 | 비활성화 (`is_active = false`) | `access_logs` USER_DEACTIVATED. **삭제 없음** |
 | 시연·개발 | 시스템 | 시드 계정 자동 생성 (§6) | — |
 
@@ -28,7 +28,7 @@
   | `LOGIN_OK` | 로그인 성공 | — | `shared/security` |
   | `LOGIN_FAIL` | 로그인 실패(**401만** — 400 형식 오류는 안 남김). **있는 아이디여도 `user_id`는 null**, `login_id_attempted`(입력값 앞 64자)만 | — | `shared/security` |
   | `LOGOUT` | 로그아웃 | — | `shared/security` |
-  | `USER_CREATED`·`ROLE_CHANGED`·`USER_DEACTIVATED` | 사용자 관리 | `USER` / id | W4 사용자 관리 (값만 있음) |
+  | `USER_CREATED`·`ROLE_CHANGED`·`USER_DEACTIVATED` | 사용자 관리 | `USER` / 대상 id | user 계정 관리 → `userCreated`·`roleChanged`·`userDeactivated` [SCRUM-135 ②] |
 
   권한이 없어 403이 난 시도는 **access_logs에 남기지 않고** 앱 경고 로그 한 줄로 남겨요(`access denied code=… method=… uri=…`. request_id가 붙고, 로그인 상태면 user_id도 붙어요 — 미결 30, 11/2 결정). 열람 기록과 성격이 달라서예요. STR을 비담당이 보는 건 403이 아니라 `META_ONLY` + `STR_VIEW` 한 줄이라 누설 감사는 그대로 돼요.
 
@@ -53,7 +53,7 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 | 단계 | 프론트 | 서버 |
 |---|---|---|
 | 로그인 | `POST /api/v1/auth/login` `{login_id, password}` | BCrypt 비교 → `SESSION`(HttpOnly) + `XSRF-TOKEN` 쿠키 + `{id, login_id, display_name, role}`. `access_logs` LOGIN_OK |
-| 실패 | 메시지 한 가지 | 401 `LOGIN_FAILED` — 없는 ID·틀린 비밀번호·비활성 **모두 같은 응답**. `access_logs` LOGIN_FAIL (`login_id_attempted` 기록, 400 형식 오류는 기록 안 함) |
+| 실패 | 메시지 한 가지 | 401 `LOGIN_FAILED` — 없는 ID·틀린 비밀번호·비활성·비밀번호 UTF-8 72바이트 초과(§7) **모두 같은 응답**. `access_logs` LOGIN_FAIL (`login_id_attempted` 기록, 400 형식 오류는 기록 안 함) |
 | 이후 요청 | 쓰기 요청(POST/PUT/PATCH/DELETE)에 `X-XSRF-TOKEN` 헤더 (axios 기본) | 세션 → CSRF → URL 역할 순서로 확인 |
 | 새로고침 | `GET /api/v1/auth/me`로 역할 다시 받기. localStorage에 역할 저장 안 함 | `{id, login_id, display_name, role}` |
 | 만료 | 401이 오면 로그인 화면, 경로 기억 | **30분 무활동** → 401 `UNAUTHENTICATED` |
@@ -142,16 +142,19 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 |---|---|---|
 | 계정 목록 | `GET /admin/users` | 필터 `role`·`is_active`(**안 보내면 활성만**), `display_name` 오름차순(같으면 `id`) 고정·`sort` 안 받음, `size` ≤ 100(기본 20). 항목 `{id, login_id, display_name, role, is_active, active_case_count}` — `active_case_count`는 **조사역 행만** 진행 중 담당 건수(0 포함, 한 페이지에 쿼리 1번), **다른 역할 행은 `null`**. SYSTEM 행(비활성)은 `is_active=false` 일 때 보임 [SCRUM-135 ②] |
 | 계정 발급 | `POST /admin/users {login_id, display_name, role, initial_password}` | **201 + 계정 한 줄**(목록 항목 모양). `login_id` `^[A-Za-z0-9_-]{3,64}$`·유일(중복 409 `LOGIN_ID_TAKEN`, 동시에 두 번 보내 DB unique에 걸려도 같은 409), `display_name` 앞뒤 공백 뺀 1~50자, `role` INVESTIGATOR·APPROVER·ADMIN, `initial_password` 8~128자 **+ UTF-8 72바이트까지**(아래). 서버에서 BCrypt. 응답·로그에 비밀번호 없음. `USER_CREATED` |
-| 역할 변경 | `POST /admin/users/{id}/change-role {role}` | ROLE_CHANGED, 그 사용자 세션 끊김 |
-| 비활성화 | `POST /admin/users/{id}/deactivate` | 세션 끊김. 담당 케이스가 있으면 응답에 개수 |
+| 역할 변경 | `POST /admin/users/{id}/change-role {role}` | **200 + 한 줄**. 조사역 → 승인자, 승인자 → 조사역**만** — 그 밖(관리자로·관리자에서·SYSTEM·지금과 같은 역할)은 400 `INVALID_REQUEST` + `details.role`. 조사역 → 승인자는 진행 중 담당이 있으면 409 `ASSIGNEE_HAS_ACTIVE_CASES` + `details.active_case_count`. `ROLE_CHANGED`, 그 사용자 세션 끊김 |
+| 비활성화 | `POST /admin/users/{id}/deactivate` | **200 + 한 줄**. 담당이 남아도 막지 않음 — 응답 `active_case_count`로 화면이 "N건" 안내(11/7 D5). `USER_DEACTIVATED`, 세션 끊김 |
 | 재활성화 | `POST /admin/users/{id}/activate` | **200 + 한 줄**. 기록 없음, 세션 그대로(비활성일 때 이미 끊김) |
-| 비밀번호 초기화 | `POST /admin/users/{id}/reset-password {new_password}` | 세션 끊김 |
+| 비밀번호 초기화 | `POST /admin/users/{id}/reset-password {new_password}` | **200 + 한 줄**. 8~128자 + 72바이트까지, BCrypt로 바꿔 저장. 기록 없음, 세션 끊김 |
 
-- **막는 대상** — 재활성화의 대상이 **지금 로그인한 관리자 본인**이거나 **SYSTEM**(id 1)이면 409 `ACCOUNT_CHANGE_NOT_ALLOWED` + `details.reason` = `SELF` | `SYSTEM`(`AdminUserTargets`). 역할 변경·비활성화·초기화도 다음 PR에서 같은 규칙을 써요. 화면은 버튼을 숨기지만 swagger로 보낼 수 있어 서버도 막아요. **다른 관리자**는 막지 않아요(화면과 같음, 11/7 D7). 검사 순서: 없는 id 404 `USER_NOT_FOUND` → 막는 대상 409.
-- **이미 그 상태** — 활성 계정 활성화는 **200 + 지금 한 줄**(두 번 눌러도 안전).
-- **비밀번호 72바이트** — BCrypt는 앞 72바이트만 써요(Spring Security 6.3.4는 넘는 부분을 예외 없이 버림 → 앞 72바이트만 같으면 다른 비밀번호로도 로그인됨). 그래서 규칙 8~128자는 그대로 두고 **UTF-8 72바이트를 넘으면 400**(`details.initial_password`, "72바이트(영문 72자, 한글 24자)까지"). 실제 상한은 영문 72자예요. **공백만인 비밀번호도 400**("공백만으로는 쓸 수 없습니다") — 로그인이 `String.isBlank()`면 거절해서 발급해도 못 들어가요. 같은 `isBlank` 기준이라 전각 공백(U+3000)도 걸러요. 값은 자르지 않아요(앞뒤 공백도 비밀번호).
-- 관리자가 안 하는 것: 자기 역할 변경, 자기 비활성화, 계정 삭제(기능 없음).
-- 엔티티는 `User`, `Role` 둘. 검사는 ID 중복·역할 값·비활성 사용자 로그인 거부 세 개. 테스트는 그 세 개 + "역할 바꾸면 세션이 끊긴다".
+- **막는 대상** — 역할 변경·비활성화·재활성화·초기화의 대상이 **지금 로그인한 관리자 본인**이거나 **SYSTEM**(id 1)이면 409 `ACCOUNT_CHANGE_NOT_ALLOWED` + `details.reason` = `SELF` | `SYSTEM`. 화면은 버튼을 숨기지만 swagger로 보낼 수 있어 서버도 막아요. **다른 관리자**의 비활성화·재활성화·초기화는 허용(화면과 같음, 11/7 D7). 검사 순서: 없는 id 404 `USER_NOT_FOUND` → 막는 대상 409 → (조사역 → 승인자일 때) 담당 409 → 역할 쌍 400. **역할 쌍은 `User.changeRole`(엔티티)이 보고**, 유스케이스는 관리자 본인·SYSTEM과 진행 중 건수만 봐요.
+- **이미 그 상태** — 비활성 계정 비활성화, 활성 계정 활성화는 **200 + 지금 한 줄**, 기록·세션 끊기 없음(두 번 눌러도 안전). 역할 변경의 "같은 역할"은 400.
+- **비밀번호 72바이트** — BCrypt는 앞 72바이트만 써요(Spring Security 6.3.4는 넘는 부분을 예외 없이 버림 → 앞 72바이트만 같으면 다른 비밀번호로도 로그인됨). 그래서 규칙 8~128자는 그대로 두고 **UTF-8 72바이트를 넘으면 400**(`details.initial_password`·`details.new_password`, "72바이트(영문 72자, 한글 24자)까지"). 실제 상한은 영문 72자예요. **공백만인 비밀번호도 400**("공백만으로는 쓸 수 없습니다") — 로그인이 `String.isBlank()`면 거절해서 발급해도 못 들어가요. 같은 `isBlank` 기준이라 전각 공백(U+3000)도 걸러요. 값은 자르지 않아요(앞뒤 공백도 비밀번호). **로그인도 72바이트를 넘으면 401 `LOGIN_FAILED`**(틀린 비밀번호와 같은 응답·`LOGIN_FAIL` 기록, 사유 숨김 — 400으로 알려 주면 길이 힌트가 됨). 발급·초기화가 72바이트까지만 받으니 정상 사용자는 영향 없어요. 128자 초과·빈 값은 지금처럼 400(형식 오류). 검사는 `JsonLoginFilter`에서 계정 조회 전에 해서 있는 ID·없는 ID 응답 시간이 같아요. [SCRUM-135 ②-b]
+- **동시 변경** — 역할 변경·비활성화·재활성화·초기화 넷 다 대상 행을 잠가 읽어요(`AdminUserTargets`, `PESSIMISTIC_WRITE`). 같은 사람을 동시에 바꾸면 뒤 요청이 기다렸다가 앞 변경 위에 반영돼요(`User`는 `@Version`이 없고 UPDATE가 모든 칸을 써서, 안 잠그면 뒤 커밋이 앞 변경을 옛 값으로 되돌림). 초기화의 BCrypt는 잠그기 전에 계산해요. [SCRUM-135 ②-b]
+- **세션 끊기** — 역할 변경·비활성화·초기화 셋. `shared/security` `UserSessions.expireAll(userId)`가 `SessionRegistry`에서 그 사람 세션을 만료시켜요. **DB 커밋 뒤**에만 끊어요(커밋 실패면 그대로). 끊긴 세션의 다음 요청은 401 `UNAUTHENTICATED`(`maximumSessions(1)`로 끊긴 것과 같은 흐름). **로그인 도중에 커밋된 경우**도 막아요 — 로그인 성공 핸들러가 세션 등록 뒤 users를 다시 읽어 활성·역할·해시가 비밀번호 비교 때와 다르면 세션을 버리고 401 `LOGIN_FAILED`(틀린 비밀번호와 같은 응답·`LOGIN_FAIL`). Spring은 세션 등록 다음에 성공 핸들러를 불러서, 등록이 먼저면 세션 끊기가, 나중이면 재확인이 잡아요. 비교에 쓴 해시는 그 로그인 요청에만 두고 세션에는 넣지 않아요. [SCRUM-135 ②-b] 서버 메모리 세션이라 서버가 여러 대가 되면 다시 봐야 해요.
+- **기록** — 발급 `USER_CREATED`·역할 변경 `ROLE_CHANGED`·비활성화 `USER_DEACTIVATED` 셋만(target `USER` + 대상 id, 사용자는 관리자). 변경과 같은 트랜잭션. 재활성화·초기화는 CHECK 값이 없어 남기지 않아요(미결 10 범위, Flyway 안 늘림).
+- 관리자가 안 하는 것: 자기 역할 변경, 자기 비활성화, 계정 삭제(기능 없음), 관리자로/관리자에서 역할 변경.
+- 엔티티는 `User`, `Role` 둘. 검사는 위 표와 목록대로(입력 규칙·역할 쌍·막는 대상·담당 건수) + 비활성 사용자 로그인 거부. 테스트는 그것 + "역할 변경·비활성화·초기화하면 세션이 끊긴다".
 - 상태 변경은 `POST /admin/users/{id}/{동사}`만, **PATCH 없음**(레퍼런스 §12, 미결 11, 10/30). 동사 이름은 프론트 API 계약서(SCRUM-21)에서 확정해요.
 
 ## 8. 고도화로 미룬 것 [계정·권한 §9, 레퍼런스 §9.6]
