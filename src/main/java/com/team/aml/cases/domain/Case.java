@@ -197,6 +197,18 @@ public class Case extends BaseEntity {
         this.rejectionReasonCode = null;
     }
 
+    /**
+     * 승인 요청·승인·반려하려는 초안이 이 케이스의 현재 초안인지 본다(아무것도 바꾸지 않음).
+     * str 이 들고 온 초안이 그 사이 재생성으로 바뀌었으면 409 INVALID_CASE_TRANSITION (details.current_draft_id).
+     * SubmitCaseForApproval·ApproveCase·RejectCase 가 케이스를 잠근 뒤, 상태를 바꾸기 전에 부른다.
+     */
+    public void requireCurrentDraft(Long draftId, CaseHistoryAction action) {
+        Objects.requireNonNull(draftId, "draftId");
+        if (!draftId.equals(currentDraftId)) {
+            throw InvalidCaseTransitionException.notCurrentDraft(status, rejectionReasonCode, action, draftId, currentDraftId);
+        }
+    }
+
     /** 승인 요청 DRAFTED → PENDING_APPROVAL. 현재 본문 검증 통과 여부는 str ApprovalGate 가 먼저 본다. */
     public void submitForApproval(Long actorId) {
         moveTo(CaseStatus.PENDING_APPROVAL, CaseHistoryAction.SUBMIT_FOR_APPROVAL, null, null, actorId);

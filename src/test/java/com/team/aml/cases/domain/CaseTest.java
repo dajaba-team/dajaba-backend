@@ -402,6 +402,22 @@ class CaseTest {
                 .isInstanceOf(InvalidCaseTransitionException.class);
     }
 
+    // ── 승인 요청·승인·반려 대상 초안 (SubmitCaseForApproval·ApproveCase·RejectCase) ──────
+
+    @Test
+    void 현재_초안이면_통과하고_다른_초안이거나_초안이_없으면_409에_현재_초안이_실린다() {
+        pending().requireCurrentDraft(DRAFT_ID, CaseHistoryAction.APPROVE);
+
+        assertThatThrownBy(() -> pending().requireCurrentDraft(NEW_DRAFT_ID, CaseHistoryAction.APPROVE))
+                .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> assertThat(e.details())
+                        .containsEntry("action", CaseHistoryAction.APPROVE)
+                        .containsEntry("draft_id", NEW_DRAFT_ID)
+                        .containsEntry("current_draft_id", DRAFT_ID));
+        assertThatThrownBy(() -> escalated().requireCurrentDraft(DRAFT_ID, CaseHistoryAction.SUBMIT_FOR_APPROVAL))
+                .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
+                        e -> assertThat(e.details()).doesNotContainKey("current_draft_id"));
+    }
+
     // ── 수정본 저장 가능 여부 (TouchCaseForRevision, #43 A안) ──────
 
     @Test

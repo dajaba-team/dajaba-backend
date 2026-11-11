@@ -52,6 +52,21 @@ public class InvalidCaseTransitionException extends DomainException {
     }
 
     /**
+     * 승인 요청·승인·반려하려는 초안이 케이스의 현재 초안이 아닐 때 (그 사이 재생성으로 초안이 바뀐 경우 등).
+     * details: from_status, action, draft_id, current_draft_id(있으면), 반려 코드(있으면).
+     */
+    public static InvalidCaseTransitionException notCurrentDraft(CaseStatus status, RejectionReasonCode rejectionCode,
+                                                                 CaseHistoryAction action, Long draftId,
+                                                                 Long currentDraftId) {
+        Map<String, Object> details = new HashMap<>(details(status, null, rejectionCode, action));
+        details.put("draft_id", draftId);
+        if (currentDraftId != null) {
+            details.put("current_draft_id", currentDraftId);
+        }
+        return new InvalidCaseTransitionException("케이스의 현재 초안이 아닙니다: " + draftId, Map.copyOf(details));
+    }
+
+    /**
      * 메모·요약을 고칠 수 없는 상태(Case.isEditableByAssignee 가 false)에서 내용 편집을 했을 때.
      * details: from_status, action(REFRESH_SUMMARY 등 — 이력이 남지 않는 동작이라 CaseHistoryAction 이 아님), 반려 코드(있으면).
      */
