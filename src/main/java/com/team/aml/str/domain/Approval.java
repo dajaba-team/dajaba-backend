@@ -72,7 +72,7 @@ public class Approval extends CreatedOnlyEntity {
     /** 반려 (P3). 코드·사유 둘 다 필수 — api 가 400 으로 먼저 막고, 여기는 안전장치. */
     public static Approval rejected(StrDraft draft, RejectionReasonCode reasonCode, String comment) {
         Objects.requireNonNull(reasonCode, "reasonCode");
-        if (comment == null || comment.isBlank() || comment.length() > MAX_COMMENT_LENGTH) {
+        if (comment == null || comment.isBlank() || comment.codePointCount(0, comment.length()) > MAX_COMMENT_LENGTH) {
             throw new IllegalArgumentException("반려 사유는 1~" + MAX_COMMENT_LENGTH + "자여야 한다");
         }
         Approval a = new Approval(draft, ApprovalDecision.REJECTED);
