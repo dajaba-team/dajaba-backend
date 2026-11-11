@@ -89,7 +89,7 @@ public class StrDraftController {
     @Operation(summary = "STR 검증 (최대 90초, body {})",
             description = "지금 저장된 본문을 AI 로 검증하고 결과를 저장한다. 응답은 AI 검증 결과 그대로"
                     + "(status PASSED·CODE_FAILED·LLM_FAILED·VERIFY_UNAVAILABLE, code_checks, llm_checks). "
-                    + "담당만(403 NOT_ASSIGNEE), DRAFTED·보완 요청 반려에서만(409 INVALID_CASE_TRANSITION), "
+                    + "담당만(403 NOT_ASSIGNEE), DRAFTED 에서만(409 INVALID_CASE_TRANSITION — 보완 요청 반려 뒤엔 저장 먼저), "
                     + "같은 초안 검증 중이면 409 VERIFY_IN_PROGRESS, AI 실패는 502")
     @PostMapping("/str-drafts/{draftNo}/verify")
     public JsonNode verify(@PathVariable String draftNo) {

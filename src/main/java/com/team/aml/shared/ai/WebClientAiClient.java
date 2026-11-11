@@ -19,6 +19,8 @@ import reactor.core.publisher.Mono;
 
 import java.net.ConnectException;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -28,6 +30,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 
 /**
  * 실제 AI 서버 호출 (aml.ai.mock=false, 규약 v0.2 §6). 유스케이스는 AiClient 인터페이스만 본다.
@@ -198,8 +201,46 @@ public class WebClientAiClient implements AiClient {
 
     @Override
     public VerifyResponse verify(String draftId, VerifyRequest request) {
-        return post("/v1/str/verify", request, "DRAFT", draftId,
-                r -> readRecord(r, "verification_id", VerifyResponse.class, "AI 검증 응답 파싱 실패"));
+        return post("/v1/str/verify", request, "DRAFT", draftId, r -> {
+            requireVerifyResponse(request, r);
+            return readRecord(r, "verification_id", VerifyResponse.class, "AI 검증 응답 파싱 실패");
+        });
+    }
+
+    private static final Set<String> VERIFY_STATUSES = Set.of("PASSED", "CODE_FAILED", "LLM_FAILED", "VERIFY_UNAVAILABLE");
+    private static final Pattern SHA256_HEX = Pattern.compile("[0-9a-f]{64}");
+
+    /**
+     * 검증 응답 칸 확인 + 보낸 값 대조 (규약 §5.3, #95 리뷰). 저장(VerificationResult)에 쓰는 칸이 모두 있고 모양이 맞는지,
+     * `generation_id`·`revision_no` 가 보낸 값과 같은지. 틀리면 AI_BAD_RESPONSE 502 — withRetry 안·기록 전에 불려
+     * 실패 행(status 2xx)으로 남는다(점수 `readScoreBatch`·`requireSameBatch` 와 같은 원칙, SCRUM-128). 메시지엔 칸 이름만.
+     */
+    static void requireVerifyResponse(VerifyRequest sent, JsonNode r) {
+        for (String field : List.of("verification_id", "generation_id", "revision_no", "narrative_sha256",
+                "status", "verifier_version", "produced_at")) {
+            require(r, field);
+        }
+        if (!VERIFY_STATUSES.contains(r.get("status").asText())) throw badVerify("status");
+        if (!SHA256_HEX.matcher(r.get("narrative_sha256").asText()).matches()) throw badVerify("narrative_sha256");
+        String producedAt = r.get("produced_at").asText();
+        try {
+            if (!producedAt.endsWith("Z")) throw badVerify("produced_at");   // UTC Z 만 (규약 1.4)
+            Instant.parse(producedAt);
+        } catch (DateTimeParseException e) {
+            throw badVerify("produced_at");
+        }
+        if (!r.get("generation_id").asText().equals(sent.generationId())) {
+            throw new AiClientException("AI_BAD_RESPONSE", "AI 검증 응답 generation_id 가 요청과 다름", Map.of(), 502);
+        }
+        JsonNode revisionNo = r.get("revision_no");
+        if (!revisionNo.isIntegralNumber() || !revisionNo.canConvertToInt()
+                || !Integer.valueOf(revisionNo.intValue()).equals(sent.revisionNo())) {
+            throw new AiClientException("AI_BAD_RESPONSE", "AI 검증 응답 revision_no 가 요청과 다름", Map.of(), 502);
+        }
+    }
+
+    private static AiClientException badVerify(String field) {
+        return new AiClientException("AI_BAD_RESPONSE", "AI 검증 응답 확인 실패: " + field, Map.of(), 502);
     }
 
     /** 필수 칸 확인 + `raw` 넣어 record 로. 실패는 AI_BAD_RESPONSE 502 — withRetry 안에서 불려 실패 행으로 남는다. */

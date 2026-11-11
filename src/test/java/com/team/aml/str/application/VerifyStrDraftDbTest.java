@@ -221,6 +221,22 @@ class VerifyStrDraftDbTest {
         verify(aiClient, never()).verify(anyString(), any());
     }
 
+    // 5-2
+    @Test
+    void 실패_보완_요청_반려_뒤_저장하지_않았으면_409이고_AI를_부르지_않는다() {   // 계약서 4절, #95 리뷰
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        jdbc.update("update ops.cases set status = 'REJECTED', rejection_reason_code = 'NEED_REVISION', "
+                + "version = version + 1 where id = ?", caseId);
+        login(investigator, "INVESTIGATOR");
+
+        assertThatThrownBy(() -> verifyDraft.execute(DisplayNumber.draftNo(draftId)))
+                .isInstanceOf(InvalidCaseTransitionException.class);
+
+        verify(aiClient, never()).verify(anyString(), any());
+        assertThat(resultCount(draftId)).isZero();
+    }
+
     // 6
     @Test
     void 실패_같은_초안을_검증하는_중이면_409_VERIFY_IN_PROGRESS() throws Exception {

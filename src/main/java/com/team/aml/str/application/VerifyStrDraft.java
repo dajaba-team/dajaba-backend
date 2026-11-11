@@ -8,7 +8,6 @@ import com.team.aml.cases.domain.CaseStatus;
 import com.team.aml.cases.domain.InvalidCaseTransitionException;
 import com.team.aml.cases.domain.NotAssigneeException;
 import com.team.aml.shared.ai.AiClient;
-import com.team.aml.shared.ai.AiClientException;
 import com.team.aml.shared.ai.AiDtos;
 import com.team.aml.shared.security.CurrentUser;
 import com.team.aml.str.domain.DraftNotFoundException;
@@ -27,7 +26,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
-import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -39,7 +37,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <ol>
  *   <li>짧은 읽기 트랜잭션: 초안(404) → 케이스(404) → 담당(403) → 사용 중 초안(409 DRAFT_LOCKED)
- *       → DRAFTED·보완 요청 반려(409 INVALID_CASE_TRANSITION). 본문·수정본 번호·generation_id 를 이때 고정한다.</li>
+ *       → DRAFTED 에서만(409 INVALID_CASE_TRANSITION — 보완 요청 반려 뒤엔 본문을 저장해 DRAFTED 가 된 다음, 계약서 4절).
+ *       본문·수정본 번호·generation_id 를 이때 고정한다.</li>
  *   <li>같은 초안 검증 중이면 409 VERIFY_IN_PROGRESS. 트랜잭션 밖에서 aiClient.verify (cites 포함, 규약 v0.4).
  *       보내는 근거는 CurrentNarrative — S2 화면과 같은 값.</li>
  *   <li>새 트랜잭션에 verification_results 한 줄. VERIFY_UNAVAILABLE(AI 200)도 저장 — 자동 재시도 없음.
@@ -100,7 +99,7 @@ public class VerifyStrDraft {
             throw new NotAssigneeException(c.getCaseNo());
         }
         draft.requireActive();
-        if (c.getStatus() != CaseStatus.DRAFTED && !c.isRejectedForRevision()) {
+        if (c.getStatus() != CaseStatus.DRAFTED) {   // 보완 요청 반려 뒤엔 저장해서 DRAFTED 가 된 다음 (계약서 4절, #95 리뷰)
             throw InvalidCaseTransitionException.notEditable(c.getStatus(), c.getRejectionReasonCode(), "VERIFY_DRAFT");
         }
         List<NarrativeSection> body = currentNarrative.of(draft);   // 근거는 같은 해시 최신 검증의 narrative_refs 우선
@@ -122,13 +121,10 @@ public class VerifyStrDraft {
                     s.narrativeSha256().substring(0, 8), r.narrativeSha256() == null ? null
                             : r.narrativeSha256().substring(0, Math.min(8, r.narrativeSha256().length())));
         }
-        try {
-            return VerificationResult.record(draftId, r.verificationId(), s.generationId(), s.revisionNo(),
-                    r.narrativeSha256(), VerificationStatus.valueOf(r.status()), r.verifierVersion(),
-                    Instant.parse(r.producedAt()), r.raw());
-        } catch (IllegalArgumentException | NullPointerException | DateTimeParseException e) {
-            throw new AiClientException("AI_BAD_RESPONSE", "AI 검증 응답 값이 올바르지 않습니다");
-        }
+        // 칸 모양(status·produced_at·해시)과 보낸 generation_id·revision_no 대조는 AiClient 가 이미 했다 (#95 리뷰)
+        return VerificationResult.record(draftId, r.verificationId(), s.generationId(), s.revisionNo(),
+                r.narrativeSha256(), VerificationStatus.valueOf(r.status()), r.verifierVersion(),
+                Instant.parse(r.producedAt()), r.raw());
     }
 
     private record Snapshot(String generationId, int revisionNo, String narrativeSha256,
