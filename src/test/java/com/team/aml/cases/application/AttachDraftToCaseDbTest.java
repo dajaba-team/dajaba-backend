@@ -7,9 +7,11 @@ import com.team.aml.cases.domain.CaseHistoryRepository;
 import com.team.aml.cases.domain.CaseNotFoundException;
 import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.cases.domain.CaseStatus;
+import com.team.aml.cases.domain.CommentRequiredException;
 import com.team.aml.cases.domain.InvalidCaseTransitionException;
 import com.team.aml.cases.domain.NotAssigneeException;
 import com.team.aml.cases.domain.RejectionReasonCode;
+import com.team.aml.cases.domain.SelfApprovalException;
 import com.team.aml.shared.security.AppUserDetails;
 import jakarta.persistence.OptimisticLockException;
 import org.junit.jupiter.api.AfterEach;
@@ -44,7 +46,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * str 에 주는 cases 기능 — AttachDraftToCase(lock·execute), TouchCaseForRevision, CaseRepository.findForUpdate
- * (SCRUM-98) — 실제 PostgreSQL. str SaveStrDraft 대신 TransactionTemplate 으로 바깥 트랜잭션을 연다.
+ * (SCRUM-98), SubmitCaseForApproval·ApproveCase·RejectCase — 실제 PostgreSQL. str SaveStrDraft 대신 TransactionTemplate 으로 바깥 트랜잭션을 연다.
  * 초안은 V008 cases_current_draft_fk 때문에 진짜로 만든다(newDraft).
  */
 @Testcontainers
@@ -77,6 +79,9 @@ class AttachDraftToCaseDbTest {
 
     @Autowired AttachDraftToCase attachDraft;
     @Autowired TouchCaseForRevision touchForRevision;
+    @Autowired SubmitCaseForApproval submitForApproval;
+    @Autowired ApproveCase approveCase;
+    @Autowired RejectCase rejectCase;
     @Autowired CaseRepository cases;
     @Autowired CaseHistoryRepository histories;
     @Autowired JdbcTemplate jdbc;
@@ -525,6 +530,202 @@ class AttachDraftToCaseDbTest {
         long returned = tx().execute(s -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion()));
 
         assertThat(returned).isEqualTo(dbVersion(c.getId())).isEqualTo(c.getVersion() + 1);
+    }
+
+    // ── 승인 요청·승인·반려 (SubmitCaseForApproval·ApproveCase·RejectCase) ──────
+
+    @Test
+    void 정상_승인_요청하면_PENDING_APPROVAL_이력_한_행이고_돌려준_version이_커밋된_값과_같다() {
+        Case c = prepare(CaseStatus.DRAFTED);
+        loginAs(inv);
+
+        long returned = tx().execute(s -> submitForApproval.execute(c.getId(), c.getCurrentDraftId(), c.getVersion()));
+
+        Case after = cases.findById(c.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.PENDING_APPROVAL);
+        assertThat(returned).isEqualTo(after.getVersion()).isEqualTo(c.getVersion() + 1);
+        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId())).last().satisfies(h -> {
+            assertThat(h.getAction()).isEqualTo(CaseHistoryAction.SUBMIT_FOR_APPROVAL);
+            assertThat(h.getFromStatus()).isEqualTo(CaseStatus.DRAFTED);
+            assertThat(h.getToStatus()).isEqualTo(CaseStatus.PENDING_APPROVAL);
+            assertThat(h.getCreatedBy()).isEqualTo(inv);
+            assertThat(h.getCaseVersionBefore()).isEqualTo(c.getVersion());
+        });
+    }
+
+    @Test
+    void 실패_승인_요청은_담당이_아니면_403_version이_다르면_409_없는_케이스는_404() {
+        Case c = prepare(CaseStatus.DRAFTED);
+
+        loginAs(inv2);
+        assertThatThrownBy(() -> inTx(() -> submitForApproval.execute(c.getId(), c.getCurrentDraftId(), c.getVersion())))
+                .isInstanceOf(NotAssigneeException.class);
+        loginAs(inv);
+        assertThatThrownBy(() -> inTx(() -> submitForApproval.execute(c.getId(), c.getCurrentDraftId(), c.getVersion() - 1)))
+                .isInstanceOf(OptimisticLockException.class);
+        assertThatThrownBy(() -> inTx(() -> submitForApproval.execute(999_999_999L, c.getCurrentDraftId(), 0)))
+                .isInstanceOf(CaseNotFoundException.class);
+        assertUnchanged(c);
+    }
+
+    @Test
+    void 실패_승인_요청은_현재_초안이_아니거나_DRAFTED가_아니면_409이고_아무것도_안_바뀐다() {
+        Case c = prepare(CaseStatus.DRAFTED);
+        long old = c.getCurrentDraftId();
+        loginAs(inv);
+        long current = newDraft(c.getId());
+        inTx(() -> attachDraft.execute(c.getId(), current, c.getVersion()));   // 재생성으로 현재 초안이 바뀜
+        long version = dbVersion(c.getId());
+
+        assertThatThrownBy(() -> inTx(() -> submitForApproval.execute(c.getId(), old, version)))
+                .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> assertThat(e.details())
+                        .containsEntry("action", CaseHistoryAction.SUBMIT_FOR_APPROVAL)
+                        .containsEntry("current_draft_id", current));
+        assertThat(dbVersion(c.getId())).isEqualTo(version);
+
+        Case pending = prepare(CaseStatus.PENDING_APPROVAL);   // 이미 승인 대기 — 두 번 요청
+        assertThatThrownBy(() -> inTx(() ->
+                submitForApproval.execute(pending.getId(), pending.getCurrentDraftId(), pending.getVersion())))
+                .isInstanceOf(InvalidCaseTransitionException.class);
+        assertThat(dbVersion(pending.getId())).isEqualTo(pending.getVersion());
+    }
+
+    @Test
+    void 경계_수정본_저장과_승인_요청이_같은_version으로_오면_뒤_요청은_409() {
+        Case c = prepare(CaseStatus.DRAFTED);
+        loginAs(inv);
+        inTx(() -> touchForRevision.execute(c.getId(), c.getCurrentDraftId(), c.getVersion()));
+
+        assertThatThrownBy(() -> inTx(() -> submitForApproval.execute(c.getId(), c.getCurrentDraftId(), c.getVersion())))
+                .isInstanceOf(OptimisticLockException.class);
+        assertThat(cases.findById(c.getId()).orElseThrow().getStatus()).isEqualTo(CaseStatus.DRAFTED);
+    }
+
+    @Test
+    void 정상_승인하면_APPROVED_이력에_승인자가_남고_돌려준_version이_커밋된_값과_같다() {
+        Case c = prepare(CaseStatus.PENDING_APPROVAL);
+        loginAs(apr);
+
+        long returned = tx().execute(s -> approveCase.execute(c.getId(), c.getCurrentDraftId(), c.getVersion()));
+
+        Case after = cases.findById(c.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.APPROVED);
+        assertThat(returned).isEqualTo(after.getVersion()).isEqualTo(c.getVersion() + 1);
+        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId())).last().satisfies(h -> {
+            assertThat(h.getAction()).isEqualTo(CaseHistoryAction.APPROVE);
+            assertThat(h.getToStatus()).isEqualTo(CaseStatus.APPROVED);
+            assertThat(h.getCreatedBy()).isEqualTo(apr);
+        });
+    }
+
+    @Test
+    void 실패_지금_담당이나_예전_담당은_승인도_반려도_409_SELF_APPROVAL() {
+        Case c = prepare(CaseStatus.DRAFTED);
+        tx().executeWithoutResult(s -> {            // inv → inv2 로 넘긴 뒤 inv2 가 승인 요청
+            Case x = cases.findById(c.getId()).orElseThrow();
+            x.reassign(inv2, apr, "담당 변경");
+            x.submitForApproval(inv2);
+            histories.saveAll(cases.saveAndFlush(x).takePendingHistories());
+        });
+        Case pending = cases.findById(c.getId()).orElseThrow();
+
+        for (long who : List.of(inv, inv2)) {       // 예전 담당, 지금 담당
+            loginAs(who);
+            assertThatThrownBy(() -> inTx(() ->
+                    approveCase.execute(pending.getId(), pending.getCurrentDraftId(), pending.getVersion())))
+                    .isInstanceOf(SelfApprovalException.class);
+            assertThatThrownBy(() -> inTx(() -> rejectCase.execute(pending.getId(), pending.getCurrentDraftId(),
+                    pending.getVersion(), RejectionReasonCode.NEED_REVISION, "보완 필요")))
+                    .isInstanceOf(SelfApprovalException.class);
+        }
+        Case after = cases.findById(c.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.PENDING_APPROVAL);
+        assertThat(after.getVersion()).isEqualTo(pending.getVersion());
+    }
+
+    @Test
+    void 실패_승인은_승인_대기가_아니거나_현재_초안이_아니거나_version이_다르면_409() {
+        Case drafted = prepare(CaseStatus.DRAFTED);
+        Case pending = prepare(CaseStatus.PENDING_APPROVAL);
+        long other = newDraft(drafted.getId());     // 다른 케이스의 초안
+        loginAs(apr);
+
+        assertThatThrownBy(() -> inTx(() ->
+                approveCase.execute(drafted.getId(), drafted.getCurrentDraftId(), drafted.getVersion())))
+                .isInstanceOf(InvalidCaseTransitionException.class);
+        assertThatThrownBy(() -> inTx(() -> approveCase.execute(pending.getId(), other, pending.getVersion())))
+                .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> assertThat(e.details())
+                        .containsEntry("current_draft_id", pending.getCurrentDraftId()));
+        assertThatThrownBy(() -> inTx(() ->
+                approveCase.execute(pending.getId(), pending.getCurrentDraftId(), pending.getVersion() - 1)))
+                .isInstanceOf(OptimisticLockException.class);
+        assertThat(cases.findById(pending.getId()).orElseThrow().getStatus()).isEqualTo(CaseStatus.PENDING_APPROVAL);
+        assertThat(dbVersion(pending.getId())).isEqualTo(pending.getVersion());
+    }
+
+    @Test
+    void 정상_반려하면_REJECTED_반려_코드가_케이스와_이력에_남는다() {
+        for (RejectionReasonCode code : RejectionReasonCode.values()) {
+            Case c = prepare(CaseStatus.PENDING_APPROVAL);
+            loginAs(apr);
+
+            long returned = tx().execute(s ->
+                    rejectCase.execute(c.getId(), c.getCurrentDraftId(), c.getVersion(), code, "거래 목적 보완 필요"));
+
+            Case after = cases.findById(c.getId()).orElseThrow();
+            assertThat(after.getStatus()).isEqualTo(CaseStatus.REJECTED);
+            assertThat(after.getRejectionReasonCode()).isEqualTo(code);
+            assertThat(returned).isEqualTo(after.getVersion()).isEqualTo(c.getVersion() + 1);
+            assertThat(histories.findByCaseIdOrderByIdAsc(c.getId())).last().satisfies(h -> {
+                assertThat(h.getAction()).isEqualTo(CaseHistoryAction.REJECT);
+                assertThat(h.getReasonCode()).isEqualTo(code.name());
+                assertThat(h.getComment()).isEqualTo("거래 목적 보완 필요");
+                assertThat(h.getCreatedBy()).isEqualTo(apr);
+            });
+        }
+    }
+
+    @Test
+    void 실패_반려는_사유가_비었거나_승인_대기가_아니면_거부되고_아무것도_안_바뀐다() {
+        Case pending = prepare(CaseStatus.PENDING_APPROVAL);
+        Case drafted = prepare(CaseStatus.DRAFTED);
+        loginAs(apr);
+
+        assertThatThrownBy(() -> inTx(() -> rejectCase.execute(pending.getId(), pending.getCurrentDraftId(),
+                pending.getVersion(), RejectionReasonCode.NEED_REVISION, " ")))
+                .isInstanceOf(CommentRequiredException.class);
+        assertThatThrownBy(() -> inTx(() -> rejectCase.execute(drafted.getId(), drafted.getCurrentDraftId(),
+                drafted.getVersion(), RejectionReasonCode.NOT_REPORTABLE, "보고 대상 아님")))
+                .isInstanceOf(InvalidCaseTransitionException.class);
+        Case after = cases.findById(pending.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.PENDING_APPROVAL);
+        assertThat(after.getRejectionReasonCode()).isNull();
+        assertThat(after.getVersion()).isEqualTo(pending.getVersion());
+    }
+
+    @Test
+    void 실패_승인_요청_승인_반려도_str_트랜잭션_밖에서는_거부되고_바깥이_롤백되면_같이_롤백() {
+        Case drafted = prepare(CaseStatus.DRAFTED);
+        Case pending = prepare(CaseStatus.PENDING_APPROVAL);
+        loginAs(inv);
+        assertThatThrownBy(() -> submitForApproval.execute(drafted.getId(), drafted.getCurrentDraftId(), drafted.getVersion()))
+                .isInstanceOf(IllegalTransactionStateException.class);
+        loginAs(apr);
+        assertThatThrownBy(() -> approveCase.execute(pending.getId(), pending.getCurrentDraftId(), pending.getVersion()))
+                .isInstanceOf(IllegalTransactionStateException.class);
+        assertThatThrownBy(() -> rejectCase.execute(pending.getId(), pending.getCurrentDraftId(), pending.getVersion(),
+                RejectionReasonCode.NEED_REVISION, "보완 필요"))
+                .isInstanceOf(IllegalTransactionStateException.class);
+
+        int historyCount = histories.findByCaseIdOrderByIdAsc(pending.getId()).size();
+        tx().executeWithoutResult(s -> {            // str 쪽(승인 기록 저장 등)이 실패한 경우
+            approveCase.execute(pending.getId(), pending.getCurrentDraftId(), pending.getVersion());
+            s.setRollbackOnly();
+        });
+        Case after = cases.findById(pending.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.PENDING_APPROVAL);
+        assertThat(after.getVersion()).isEqualTo(pending.getVersion());
+        assertThat(histories.findByCaseIdOrderByIdAsc(pending.getId())).hasSize(historyCount);
     }
 
     private long dbVersion(long caseId) {
