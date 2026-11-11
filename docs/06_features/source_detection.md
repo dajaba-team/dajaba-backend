@@ -112,7 +112,7 @@
 
 **점수 요청** [레퍼런스 §11.1, 안건 2·4·14·21, ML 규약 §2·§3·§6]
 
-**점수 배치 — 구현됨 (SCRUM-100)** `POST /api/v1/admin/batches/score?date=` → 200 `{batch_run_id, batch_type, batch_date, status, requested, scored, failed, chunks{total, failed}, model_versions, started_at, finished_at}` (동기)
+**점수 배치 — 구현됨 (SCRUM-100)** `POST /api/v1/admin/batches/score?date=` → 200 `{batch_run_id, batch_type, batch_date, status, requested, scored, failed, retryable, chunks{total, failed}, model_versions, started_at, finished_at}` (동기)
 - 시작 전 거절(행 안 남김): 그 날짜 룰 스캔 성공 없음 409 `RULE_SCAN_NOT_DONE` · 실행 중 409 `BATCH_RUNNING`. **성공한 날도 다시 돌려요**(V012) — 대상이 없으면 AI를 부르지 않고 `requested: 0`으로 SUCCEEDED.
 - 대상을 경보 id 순으로 `aml.ai.max-batch`(500)개씩 잘라 묶음마다 `AiClient.scores()`(트랜잭션 밖) → 저장은 묶음마다 한 트랜잭션.
 - 묶음 호출이 실패하면(재시도 1회 뒤, `AI_BAD_RESPONSE` 포함) 그 묶음만 `FAILED` + 코드 NULL로 커밋하고 다음 묶음으로 가요. 앞 묶음의 `SCORED`는 그대로.
