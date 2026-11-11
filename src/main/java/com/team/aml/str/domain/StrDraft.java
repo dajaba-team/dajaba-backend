@@ -22,6 +22,9 @@ import java.util.Objects;
 public class StrDraft extends AssignedIdEntity {
 
     private static final int MAX_SECTION_LENGTH = 5_000;
+    private static final int MAX_SUSPICION_TYPE_LENGTH = 16;   // V008 suspicion_types varchar(16)[]
+    private static final int MIN_SUSPICION_LEVEL = 1;          // V008 CHECK between 1 and 5
+    private static final int MAX_SUSPICION_LEVEL = 5;
 
     @Column(name = "case_id", nullable = false, updatable = false)
     private Long caseId;                    // 케이스는 객체가 아니라 번호로만
@@ -173,6 +176,42 @@ public class StrDraft extends AssignedIdEntity {
      */
     static int lengthAfterNfc(String text) {
         return Normalizer.normalize(text, Normalizer.Form.NFC).length();
+    }
+
+    /**
+     * 승인 요청(S6) 때 조사역이 고른 의심 유형(서식 VI)·지점용 의심 정도. 편집 중 저장 API 는 없고 이때만 쓴다 (계약서 S6, 11/4).
+     * 유형 1개 이상(중복 없이, 코드 16자 이하 — V008 varchar(16)), 정도 1~5. api 가 400 으로 먼저 막고 여기는 안전장치.
+     * 반려 뒤 다시 열면 지난 값이 S2 로 채워져 온다 — 지우지 않는다.
+     */
+    public void recordBranchSuspicion(List<String> suspicionTypes, int levelBranch) {
+        requireActive();
+        if (suspicionTypes == null || suspicionTypes.isEmpty()) {
+            throw new IllegalArgumentException("의심 유형은 1개 이상이어야 한다");
+        }
+        for (String type : suspicionTypes) {
+            if (type == null || type.isBlank() || type.length() > MAX_SUSPICION_TYPE_LENGTH) {
+                throw new IllegalArgumentException("의심 유형 코드는 1~" + MAX_SUSPICION_TYPE_LENGTH + "자여야 한다");
+            }
+        }
+        if (suspicionTypes.stream().distinct().count() != suspicionTypes.size()) {
+            throw new IllegalArgumentException("의심 유형이 중복됐다");
+        }
+        requireLevel(levelBranch);
+        this.suspicionTypes = suspicionTypes.toArray(String[]::new);
+        this.suspicionLevelBranch = levelBranch;
+    }
+
+    /** 승인(P2) 때 승인자가 고른 본점용 의심 정도 1~5. lock() 보다 먼저 부른다 (계약서 P2). */
+    public void recordHqSuspicion(int levelHq) {
+        requireActive();
+        requireLevel(levelHq);
+        this.suspicionLevelHq = levelHq;
+    }
+
+    private static void requireLevel(int level) {
+        if (level < MIN_SUSPICION_LEVEL || level > MAX_SUSPICION_LEVEL) {
+            throw new IllegalArgumentException("의심 정도는 " + MIN_SUSPICION_LEVEL + "~" + MAX_SUSPICION_LEVEL + "이어야 한다: " + level);
+        }
     }
 
     /** 승인될 때 부른다. 되돌리는 메서드는 없다 */
