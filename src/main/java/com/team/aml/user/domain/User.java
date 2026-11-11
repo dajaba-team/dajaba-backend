@@ -1,6 +1,7 @@
 package com.team.aml.user.domain;
 
 import com.team.aml.shared.domain.BaseEntity;
+import com.team.aml.shared.domain.InvalidRequestException;
 import jakarta.persistence.*;
 
 /**
@@ -12,6 +13,9 @@ import jakarta.persistence.*;
 public class User extends BaseEntity {
 
     public static final long SYSTEM_ID = 1L;
+
+    /** 역할 변경은 조사역 ↔ 승인자만 — 400 details.role 메시지 (SCRUM-135 ②, 04 §7). */
+    public static final String ROLE_SWAP_ONLY = "조사역(INVESTIGATOR)과 승인자(APPROVER) 사이만 바꿀 수 있습니다";
 
     @Column(name = "login_id", nullable = false, unique = true, length = 64)
     private String loginId;
@@ -43,7 +47,17 @@ public class User extends BaseEntity {
 
     public void deactivate() { this.active = false; }
     public void activate() { this.active = true; }
-    public void changeRole(Role role) { this.role = role; }
+    /**
+     * 조사역 ↔ 승인자만. 관리자로·관리자에서·SYSTEM(어느 쪽이든)·같은 역할은 400 INVALID_REQUEST details.role.
+     * 진행 중 담당 건수·관리자 본인 검사는 유스케이스(ChangeUserRole) 몫 — 엔티티는 DB 를 보지 않는다.
+     */
+    public void changeRole(Role to) {
+        boolean swap = (role == Role.INVESTIGATOR && to == Role.APPROVER) || (role == Role.APPROVER && to == Role.INVESTIGATOR);
+        if (!swap) {
+            throw new InvalidRequestException("role", ROLE_SWAP_ONLY);
+        }
+        this.role = to;
+    }
     public void changePasswordHash(String hash) { this.passwordHash = hash; }
 
     public boolean canLogin() { return active && role != Role.SYSTEM && passwordHash != null; }

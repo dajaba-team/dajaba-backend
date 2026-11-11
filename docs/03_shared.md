@@ -50,6 +50,7 @@
 | 예외 | HTTP | `code` |
 |---|---|---|
 | `@Valid` 실패, JSON 파싱 실패, 쿼리·경로 파라미터 오류(`details.parameter`에 틀린 파라미터 이름) | 400 | `INVALID_REQUEST` — `@Valid` 실패(본문·`@ModelAttribute` 쿼리)는 `details`에 **요청 JSON 이름(snake_case)** → 메시지, 중첩은 `items[0].transaction_id`, 한 필드에 위반이 여럿이면 하나만. 클래스 수준 검증(global error)은 지금 없어서 담지 않음. `details.parameter`는 `@RequestParam`·`@PathVariable`에 이름이 있으면 그 이름 [SCRUM-167] |
+| `InvalidRequestException` (`shared/domain`) — `@Valid`로는 못 보고 지금 값과 비교해야 아는 입력 오류 | 400 | `INVALID_REQUEST` — `details`는 던진 쪽이 준 `{요청 JSON 이름: 메시지}` 그대로. 예: `User.changeRole`에서 조사역 ↔ 승인자가 아님(같은 역할·관리자에서 등) → `details.role`. `shared/domain`이라 엔티티도 던질 수 있음 [SCRUM-135 ②] |
 | `NotFoundException` 하위 | 404 | 하위 클래스가 정함 (`CASE_NOT_FOUND`, `DRAFT_NOT_FOUND` …) |
 | `ForbiddenException` 하위 | **403** | 클래스 이름 UPPER_SNAKE (`NOT_APPROVER`, `NOT_ASSIGNEE` …) [SCRUM-67] |
 | `DomainException` 하위 전부 (위 둘 제외) | **409** | 클래스 이름 UPPER_SNAKE (`INVALID_CASE_TRANSITION`, `SELF_APPROVAL` …) |
@@ -75,7 +76,7 @@
 | HTTP | code | 어디서 | 상태 |
 |---|---|---|---|
 | 400 | `INVALID_REQUEST` | 공통 (반려 코드·사유 누락 포함) | 확정 |
-| 401 | `UNAUTHENTICATED`, `LOGIN_FAILED` | 인증 | 확정 [계정·권한 §3] |
+| 401 | `UNAUTHENTICATED`, `LOGIN_FAILED` | 인증 — `LOGIN_FAILED`는 없는 ID·틀린 비밀번호·비활성·비밀번호 UTF-8 72바이트 초과 모두 같은 응답(04 §3·§7). `UNAUTHENTICATED`는 관리자가 역할 변경·비활성화·초기화로 끊은 세션의 다음 요청도(`UserSessions`) | 확정 [계정·권한 §3, SCRUM-135 ②-b] |
 | 403 | `FORBIDDEN`, `CSRF_INVALID`, `NOT_ASSIGNEE`, `NOT_APPROVER` | 권한 (`NOT_ASSIGNEE`·`NOT_APPROVER`는 `ForbiddenException` 하위) | 확정 [계정·권한 §5, SCRUM-67] |
 | 404 | `NOT_FOUND` | 공통 — 없는 경로(`NotFoundException` 하위가 아님) | 확정 [SCRUM-157] |
 | 405 | `METHOD_NOT_ALLOWED` | 공통 — 안 되는 메서드, `Allow` 헤더 | 확정 [SCRUM-157] |
@@ -92,7 +93,7 @@
 | 400·409 | `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
 | 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |
 | 409 | `CASE_ALREADY_OPENED` | detection `MarkCaseOpened` — 이미 케이스가 생긴 경보. 케이스 생성 트랜잭션째 롤백 | 확정 [SCRUM-108] |
-| 409 | `LOGIN_ID_TAKEN`, `ACCOUNT_CHANGE_NOT_ALLOWED` (`details.reason` = `SELF`·`SYSTEM`) | user 계정 관리 — 아이디 중복(DB unique 위반도 같은 409) · 관리자 본인·SYSTEM 계정 변경 | 확정 [SCRUM-135 ②-a, 11/10 진희] |
+| 409 | `LOGIN_ID_TAKEN`, `ASSIGNEE_HAS_ACTIVE_CASES` (`details.active_case_count`), `ACCOUNT_CHANGE_NOT_ALLOWED` (`details.reason` = `SELF`·`SYSTEM`) | user 계정 관리 — 아이디 중복(DB unique 위반도 같은 409) · 진행 중 담당이 남은 조사역을 승인자로 · 관리자 본인·SYSTEM 계정 변경 | 확정 [SCRUM-135 ②, 11/10 진희] |
 | 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 거부), `AI_TIMEOUT`, `AI_BAD_RESPONSE`, `AI_DRAFT_NOT_FOUND`·`AI_INVALID_REQUEST`·`AI_UNAUTHENTICATED`(AI 404·400·401 이름 바꿈, SCRUM-128), `SUMMARY_CODE_CHECK_FAILED` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정. 〔제안〕 `SUMMARY_CODE_CHECK_FAILED` — 요약 응답은 200인데 `code_checks` 중 `match=false`가 있어 저장하지 않음(`details.failed_checks`), 기존 요약 유지 [규약 v0.4 §6.1, RefreshCaseSummary] |
 | 500 | `INTERNAL_ERROR` | 공통 | 확정 |
 
@@ -231,6 +232,8 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | 확정본 PDF | str PDF 다운로드 | `accessLog.pdfDownload(draftId)` |
 | ADMIN 내보내기 | 내보내기 유스케이스 | `accessLog.export(type, id)` |
 | 계정 발급 | user `CreateUser` | `accessLog.userCreated(targetUserId)` — target `USER`, 사용자는 관리자. 변경과 같은 트랜잭션 [SCRUM-135 ②] |
+| 역할 변경 | user `ChangeUserRole` | `accessLog.roleChanged(targetUserId)` [SCRUM-135 ②] |
+| 비활성화 | user `DeactivateUser` | `accessLog.userDeactivated(targetUserId)` — 재활성화·비밀번호 초기화는 기록 없음 [SCRUM-135 ②] |
 
 - `AccessLogWriter`(`shared/audit`)를 주입받아 부르기만 해요. **사용자는 `CurrentUser`, IP는 지금 요청**에서 Writer가 꺼내요 — 호출부는 넘기지 않아요. action 문자열을 밖에서 넣는 메서드는 없어요.
 - 기록은 **바깥 조회 트랜잭션에 참여**해요(`MANDATORY`, 같은 커넥션). 그래서 **열람 기록을 부르는 조회 유스케이스는 `@Transactional`(readOnly 아님)**이에요. 커넥션은 조회 하나에 하나, 기록과 조회는 **같이 성공·같이 실패**해요 — 기록 뒤에 조회가 실패하면 기록도 롤백되어 **본문을 실제로 돌려준 열람만** 남아요. [11/3, SCRUM-93]
@@ -239,7 +242,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 - **사용자** — 로그인 사용자가 없으면 기록하지 않고 실패해요(`CurrentUser.require()`, `user_id` 없는 열람 행 금지). 배치·SYSTEM은 열람 기록을 부르지 않아요.
 - **자주 하는 실수** — ① `readOnly = true` 안에서 부르면 바로 `IllegalStateException`. ② 트랜잭션 밖(컨트롤러 등, `open-in-view: false`)에서 부르면 바로 `IllegalTransactionStateException`.
 - **열람 기록 저장이 실패하면 예외를 그대로 올려서 조회도 실패해요(기록 없는 열람 금지).** 반대로 로그인·로그아웃 기록은 실패해도 응답은 그대로이고 경고 로그만 남겨요. [11/2 진희]
-- 로그인·로그아웃 기록(`LOGIN_OK`·`LOGIN_FAIL`·`LOGOUT`)은 `shared/security`만 쓰는 `LoginAccessLogWriter`가 남겨요(ArchUnit으로 막음). 팀원 코드는 부를 일이 없어요.
+- 로그인·로그아웃 기록(`LOGIN_OK`·`LOGIN_FAIL`·`LOGOUT`)은 `shared/security`만 쓰는 `LoginAccessLogWriter`가 남겨요(ArchUnit으로 막음). `LOGIN_FAIL`은 401만 — 비밀번호 72바이트 초과도 401이라 한 행 남고, 400 형식 오류(빈 값·128자 초과)는 안 남겨요 [SCRUM-135 ②-b]. 팀원 코드는 부를 일이 없어요.
 - 추가만 — `app_backend`는 UPDATE·DELETE 권한이 없어요. 비밀번호는 어디에도 저장·로그하지 않아요.
 - action 10개와 로그인 기록 규칙은 `04_auth_user.md` §1·§3. 권한이 없어 403이 난 시도는 access_logs에 남기지 않고 앱 경고 로그 한 줄만 남겨요(미결 30, 11/2 결정) — 자세히는 §8 로그.
 

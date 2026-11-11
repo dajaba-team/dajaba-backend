@@ -32,8 +32,16 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.team.aml.shared.security.AppUserDetails;
+import com.team.aml.user.application.DeactivateUser;
+import com.team.aml.user.application.ResetUserPassword;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+
+import java.util.concurrent.Callable;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -41,7 +49,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 /**
- * 계정 관리 쓰기 API (SCRUM-135 ②-a) — 발급·재활성화 + 관리자 본인·SYSTEM 막기.
+ * 계정 관리 쓰기 API (SCRUM-135 ②) — 발급·역할 변경·비활성화·재활성화·비밀번호 초기화.
  * 실제 PostgreSQL + 필터 체인 전체(세션·CSRF·maximumSessions). 사용자 흐름 기준으로 본다.
  * 이 테스트가 만드는 계정은 login_id 앞에 테스트마다 다른 접두어를 붙인다. 개발용 시드(admin 등)는 바꾸지 않는다.
  */
@@ -75,6 +83,9 @@ class AdminUserCommandApiTest {
     @Autowired ObjectMapper om;
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactionManager;
+    @Autowired ResetUserPassword resetUserPassword;
+    @Autowired DeactivateUser deactivateUser;
+    @Autowired PasswordEncoder encoder;
 
     // --- 발급 -------------------------------------------------------------------
 
@@ -99,7 +110,7 @@ class AdminUserCommandApiTest {
         JsonNode list = json(mvc.perform(get(URL + "?role=INVESTIGATOR&size=100").session(admin)).andReturn());
         assertThat(list.path("items").findValuesAsText("login_id")).contains(loginId);
         assertThat(login(loginId, PW).getResponse().getStatus()).isEqualTo(200);
-        assertThat(logs(id)).containsExactly(List.of("USER_CREATED", adminId()));   // target USER·대상 id·관리자 user_id
+        assertThat(logs(id)).containsExactly(List.of("USER_CREATED", adminId()));
     }
 
     @Test
@@ -222,6 +233,82 @@ class AdminUserCommandApiTest {
         assertThat(count("select count(*) from ops.users where login_id = ?", loginId)).isEqualTo(1);
     }
 
+    // --- 동시 변경 (SCRUM-135 ②-b) — 대상 행을 잠가서 뒤 요청이 앞 요청의 변경을 옛 값으로 덮어쓰지 않는다 ---
+
+    @Test
+    void 경계_초기화가_대상을_읽은_뒤_비활성화가_오면_기다렸다가_둘_다_반영() throws Exception {
+        MockHttpSession admin = admin();
+        Issued inv = issue(admin, "INVESTIGATOR");
+
+        MvcResult second = whileHoldingTarget(() -> resetUserPassword.execute(inv.id, "second-pass-5678"),
+                () -> command(admin, inv.id, "deactivate", null));
+
+        assertThat(second.getResponse().getStatus()).as(second.getResponse().getContentAsString()).isEqualTo(200);
+        assertThat(activeOf(inv.id)).as("초기화가 옛 is_active=true 로 덮어씀").isFalse();
+        assertThat(encoder.matches("second-pass-5678", hashOf(inv.id))).isTrue();
+    }
+
+    @Test
+    void 경계_비활성화가_대상을_읽은_뒤_초기화가_오면_기다렸다가_둘_다_반영() throws Exception {
+        MockHttpSession admin = admin();
+        Issued inv = issue(admin, "INVESTIGATOR");
+
+        MvcResult second = whileHoldingTarget(() -> deactivateUser.execute(inv.id),
+                () -> command(admin, inv.id, "reset-password", Map.of("new_password", "second-pass-5678")));
+
+        assertThat(second.getResponse().getStatus()).as(second.getResponse().getContentAsString()).isEqualTo(200);
+        assertThat(activeOf(inv.id)).isFalse();
+        assertThat(encoder.matches("second-pass-5678", hashOf(inv.id))).as("비활성화가 옛 해시로 덮어씀").isTrue();
+    }
+
+    /**
+     * 관리자로 트랜잭션을 열어 first 를 부르고(대상 읽기 + 변경, 아직 커밋 전), 그 사이 다른 스레드가 second 요청을 보낸다.
+     * second 가 잠금에서 기다리거나 끝나면 first 를 커밋하고, second 결과를 돌려준다.
+     */
+    private MvcResult whileHoldingTarget(Runnable first, Callable<MvcResult> second) throws Exception {
+        AtomicReference<MvcResult> result = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread other = new Thread(() -> {
+            try {
+                result.set(second.call());
+            } catch (Throwable t) {
+                failure.set(t);
+            }
+        });
+        AppUserDetails me = new AppUserDetails(adminId(), "admin", "관리자", "ADMIN");
+        SecurityContextHolder.getContext().setAuthentication(
+                UsernamePasswordAuthenticationToken.authenticated(me, null, me.getAuthorities()));
+        try {
+            new TransactionTemplate(transactionManager).executeWithoutResult(s -> {
+                first.run();
+                other.start();
+                waitUntilLockedOrDone(other);
+            });
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+        other.join(10_000);
+        assertThat(failure.get()).isNull();
+        return result.get();
+    }
+
+    private void waitUntilLockedOrDone(Thread other) {
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (System.currentTimeMillis() < deadline && other.isAlive()) {
+            jdbc.queryForObject("select pg_stat_clear_snapshot()", Object.class);
+            Long blocked = jdbc.queryForObject("""
+                    select count(*) from pg_stat_activity
+                    where wait_event_type = 'Lock' and query ilike '%ops.users%'
+                    """, Long.class);
+            if (blocked != null && blocked > 0) return;
+            try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+        }
+    }
+
+    private String hashOf(long id) {
+        return jdbc.queryForObject("select password_hash from ops.users where id = ?", String.class, id);
+    }
+
     private void waitUntilInsertIsBlocked() {
         long deadline = System.currentTimeMillis() + 10_000;
         while (System.currentTimeMillis() < deadline) {
@@ -236,49 +323,166 @@ class AdminUserCommandApiTest {
         throw new AssertionError("발급 INSERT 가 잠금에서 기다리지 않았어요");
     }
 
-    // --- 재활성화 -----------------------------------------------------------------
+    // --- 역할 변경 ----------------------------------------------------------------
+
+    @Test
+    void 정상_조사역을_승인자로_바꾸면_200_ROLE_CHANGED_그_사람_세션은_401_관리자_세션은_그대로() throws Exception {
+        MockHttpSession admin = admin();
+        Issued inv = issue(admin, "INVESTIGATOR");
+        MockHttpSession target = session(login(inv.loginId, PW));
+        assertThat(status(target, ME)).isEqualTo(200);
+
+        MvcResult r = command(admin, inv.id, "change-role", Map.of("role", "APPROVER"));
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(200);
+        assertThat(json(r).path("role").asText()).isEqualTo("APPROVER");
+        assertThat(json(r).get("active_case_count").isNull()).isTrue();
+        assertThat(logs(inv.id)).contains(List.of("ROLE_CHANGED", adminId()));
+        assertThat(status(target, ME)).isEqualTo(401);
+        assertThat(code(mvc.perform(get(ME).session(target)).andReturn())).isEqualTo("UNAUTHENTICATED");
+        assertThat(status(admin, ME)).isEqualTo(200);
+        assertThat(json(login(inv.loginId, PW)).path("role").asText()).isEqualTo("APPROVER");
+    }
+
+    @Test
+    void 정상_승인자를_조사역으로_바꾸면_200이고_active_case_count는_숫자() throws Exception {
+        MockHttpSession admin = admin();
+        Issued apr = issue(admin, "APPROVER");
+
+        MvcResult r = command(admin, apr.id, "change-role", Map.of("role", "INVESTIGATOR"));
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(200);
+        assertThat(json(r).path("role").asText()).isEqualTo("INVESTIGATOR");
+        assertThat(json(r).path("active_case_count").isNumber()).isTrue();
+    }
+
+    @Test
+    void 실패_진행_중_담당이_남은_조사역을_승인자로는_409_ASSIGNEE_HAS_ACTIVE_CASES와_건수() throws Exception {
+        MockHttpSession admin = admin();
+        Issued inv = issue(admin, "INVESTIGATOR");
+        activeCase(inv.id);
+        activeCase(inv.id);
+        MockHttpSession target = session(login(inv.loginId, PW));
+
+        MvcResult r = command(admin, inv.id, "change-role", Map.of("role", "APPROVER"));
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(409);
+        assertThat(code(r)).isEqualTo("ASSIGNEE_HAS_ACTIVE_CASES");
+        assertThat(json(r).path("error").path("details").path("active_case_count").asLong()).isEqualTo(2);
+        assertThat(roleOf(inv.id)).isEqualTo("INVESTIGATOR");
+        assertThat(logs(inv.id)).containsExactly(List.of("USER_CREATED", adminId()));
+        assertThat(status(target, ME)).isEqualTo(200);
+    }
+
+    @Test
+    void 실패_조사역_승인자_사이가_아니면_400_details_role() throws Exception {
+        MockHttpSession admin = admin();
+        Issued inv = issue(admin, "INVESTIGATOR");
+        Issued otherAdmin = issue(admin, "ADMIN");
+
+        assertInvalid(command(admin, inv.id, "change-role", Map.of("role", "ADMIN")), "role");
+        assertInvalid(command(admin, inv.id, "change-role", Map.of("role", "SYSTEM")), "role");
+        assertInvalid(command(admin, inv.id, "change-role", Map.of("role", "INVESTIGATOR")), "role");   // 같은 역할
+        assertInvalid(command(admin, otherAdmin.id, "change-role", Map.of("role", "APPROVER")), "role"); // 관리자에서
+        assertInvalid(command(admin, inv.id, "change-role", Map.of()), "role");
+        assertThat(roleOf(inv.id)).isEqualTo("INVESTIGATOR");
+        assertThat(roleOf(otherAdmin.id)).isEqualTo("ADMIN");
+    }
+
+    // --- 비활성화·재활성화 ------------------------------------------------------------
+
+    @Test
+    void 정상_비활성화는_담당이_남아도_200과_건수_USER_DEACTIVATED_세션_401_로그인_401() throws Exception {
+        MockHttpSession admin = admin();
+        Issued inv = issue(admin, "INVESTIGATOR");
+        activeCase(inv.id);
+        MockHttpSession target = session(login(inv.loginId, PW));
+
+        MvcResult r = command(admin, inv.id, "deactivate", null);
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(200);
+        assertThat(json(r).path("is_active").asBoolean()).isFalse();
+        assertThat(json(r).path("active_case_count").asLong()).isEqualTo(1);
+        assertThat(logs(inv.id)).contains(List.of("USER_DEACTIVATED", adminId()));
+        assertThat(status(target, ME)).isEqualTo(401);
+        assertThat(login(inv.loginId, PW).getResponse().getStatus()).isEqualTo(401);
+        assertThat(status(admin, ME)).isEqualTo(200);
+    }
 
     @Test
     void 정상_재활성화는_200이고_다시_로그인되며_기록은_없다() throws Exception {
         MockHttpSession admin = admin();
         Issued apr = issue(admin, "APPROVER");
-        jdbc.update("update ops.users set is_active = false where id = ?", apr.id);   // 비활성화 API 는 다음 PR
-        assertThat(login(apr.loginId, PW).getResponse().getStatus()).isEqualTo(401);
+        command(admin, apr.id, "deactivate", null);
+        int before = logs(apr.id).size();
 
         MvcResult r = command(admin, apr.id, "activate", null);
 
         assertThat(r.getResponse().getStatus()).isEqualTo(200);
-        assertThat(json(r).path("id").asLong()).isEqualTo(apr.id);
         assertThat(json(r).path("is_active").asBoolean()).isTrue();
-        assertThat(activeOf(apr.id)).isTrue();
+        assertThat(logs(apr.id)).hasSize(before);
         assertThat(login(apr.loginId, PW).getResponse().getStatus()).isEqualTo(200);
-        assertThat(logs(apr.id)).containsExactly(List.of("USER_CREATED", adminId()));   // 재활성화는 기록 없음
     }
 
     @Test
-    void 경계_이미_활성을_활성화하면_200_지금_한_줄() throws Exception {
+    void 경계_이미_비활성을_다시_비활성화_이미_활성을_활성화하면_200이고_기록이_늘지_않는다() throws Exception {
         MockHttpSession admin = admin();
-        Issued inv = issue(admin, "INVESTIGATOR");
-        activeCase(inv.id);
+        Issued apr = issue(admin, "APPROVER");
+        MvcResult active = command(admin, apr.id, "activate", null);
+        assertThat(active.getResponse().getStatus()).isEqualTo(200);
+        assertThat(json(active).path("is_active").asBoolean()).isTrue();
 
-        MvcResult r = command(admin, inv.id, "activate", null);
+        command(admin, apr.id, "deactivate", null);
+        int before = logs(apr.id).size();
+        MvcResult again = command(admin, apr.id, "deactivate", null);
 
-        assertThat(r.getResponse().getStatus()).isEqualTo(200);
-        assertThat(json(r).path("is_active").asBoolean()).isTrue();
-        assertThat(json(r).path("active_case_count").asLong()).isEqualTo(1);
-        assertThat(logs(inv.id)).containsExactly(List.of("USER_CREATED", adminId()));
+        assertThat(again.getResponse().getStatus()).isEqualTo(200);
+        assertThat(json(again).path("is_active").asBoolean()).isFalse();
+        assertThat(logs(apr.id)).hasSize(before);
     }
 
     @Test
-    void 경계_다른_관리자는_막지_않는다() throws Exception {
+    void 경계_다른_관리자의_비활성화와_비밀번호_초기화는_된다() throws Exception {
         MockHttpSession admin = admin();
         Issued other = issue(admin, "ADMIN");
-        jdbc.update("update ops.users set is_active = false where id = ?", other.id);
 
-        MvcResult r = command(admin, other.id, "activate", null);
-
+        assertThat(command(admin, other.id, "reset-password", Map.of("new_password", "other-admin-2")).getResponse().getStatus())
+                .isEqualTo(200);
+        MvcResult r = command(admin, other.id, "deactivate", null);
         assertThat(r.getResponse().getStatus()).isEqualTo(200);
         assertThat(json(r).get("active_case_count").isNull()).isTrue();
+    }
+
+    // --- 비밀번호 초기화 -------------------------------------------------------------
+
+    @Test
+    void 정상_비밀번호_초기화는_200_새_비밀번호로_로그인_옛_비밀번호는_401_세션_끊김_기록은_없다() throws Exception {
+        MockHttpSession admin = admin();
+        Issued inv = issue(admin, "INVESTIGATOR");
+        MockHttpSession target = session(login(inv.loginId, PW));
+        int before = logs(inv.id).size();
+
+        MvcResult r = command(admin, inv.id, "reset-password", Map.of("new_password", "second-pass-5678"));
+
+        assertThat(r.getResponse().getStatus()).isEqualTo(200);
+        assertThat(json(r).path("id").asLong()).isEqualTo(inv.id);
+        assertThat(status(target, ME)).isEqualTo(401);
+        assertThat(login(inv.loginId, PW).getResponse().getStatus()).isEqualTo(401);
+        assertThat(login(inv.loginId, "second-pass-5678").getResponse().getStatus()).isEqualTo(200);
+        assertThat(logs(inv.id)).hasSize(before);
+        assertThat(status(admin, ME)).isEqualTo(200);
+    }
+
+    @Test
+    void 실패_초기화_비밀번호_길이가_틀리면_400_details_new_password() throws Exception {
+        MockHttpSession admin = admin();
+        Issued inv = issue(admin, "INVESTIGATOR");
+
+        for (String pw : List.of("1234567", "a".repeat(73), "가".repeat(25), "a".repeat(129))) {
+            assertInvalid(command(admin, inv.id, "reset-password", Map.of("new_password", pw)), "new_password");
+        }
+        assertInvalid(command(admin, inv.id, "reset-password", Map.of()), "new_password");
+        assertThat(login(inv.loginId, PW).getResponse().getStatus()).isEqualTo(200);
     }
 
     // --- 막는 대상 · 없는 대상 ---------------------------------------------------------
@@ -287,22 +491,40 @@ class AdminUserCommandApiTest {
     void 실패_관리자_본인과_SYSTEM은_409_ACCOUNT_CHANGE_NOT_ALLOWED와_reason() throws Exception {
         MockHttpSession admin = admin();
         long me = adminId();
-        for (Map.Entry<Long, String> target : Map.of(me, "SELF", SYSTEM_ID, "SYSTEM").entrySet()) {
-            MvcResult r = command(admin, target.getKey(), "activate", null);
-            assertThat(r.getResponse().getStatus()).as(target.getValue()).isEqualTo(409);
-            assertThat(code(r)).as(target.getValue()).isEqualTo("ACCOUNT_CHANGE_NOT_ALLOWED");
-            assertThat(json(r).path("error").path("details").path("reason").asText()).isEqualTo(target.getValue());
+        Map<String, Map<String, Object>> verbs = new LinkedHashMap<>();
+        verbs.put("change-role", Map.of("role", "APPROVER"));
+        verbs.put("deactivate", Map.of());
+        verbs.put("activate", Map.of());
+        verbs.put("reset-password", Map.of("new_password", "never-applied-1"));
+
+        for (Map.Entry<String, Map<String, Object>> v : verbs.entrySet()) {
+            for (Map.Entry<Long, String> target : Map.of(me, "SELF", SYSTEM_ID, "SYSTEM").entrySet()) {
+                MvcResult r = command(admin, target.getKey(), v.getKey(), v.getValue());
+                String what = v.getKey() + " " + target.getValue();
+                assertThat(r.getResponse().getStatus()).as(what).isEqualTo(409);
+                assertThat(code(r)).as(what).isEqualTo("ACCOUNT_CHANGE_NOT_ALLOWED");
+                assertThat(json(r).path("error").path("details").path("reason").asText()).as(what).isEqualTo(target.getValue());
+            }
         }
-        assertThat(activeOf(SYSTEM_ID)).isFalse();   // SYSTEM 은 비활성 그대로
         assertThat(status(admin, ME)).isEqualTo(200);
+        assertThat(roleOf(me)).isEqualTo("ADMIN");
+        assertThat(login("admin", SEED_PASSWORD).getResponse().getStatus()).isEqualTo(200);
     }
 
     @Test
     void 실패_없는_id는_404_USER_NOT_FOUND() throws Exception {
-        MvcResult r = command(admin(), 987_654_321L, "activate", null);
-
-        assertThat(r.getResponse().getStatus()).isEqualTo(404);
-        assertThat(code(r)).isEqualTo("USER_NOT_FOUND");
+        MockHttpSession admin = admin();
+        long missing = 987_654_321L;
+        for (String verb : List.of("change-role", "deactivate", "activate", "reset-password")) {
+            Map<String, Object> b = switch (verb) {
+                case "change-role" -> Map.of("role", "APPROVER");
+                case "reset-password" -> Map.of("new_password", "whatever-123");
+                default -> Map.of();
+            };
+            MvcResult r = command(admin, missing, verb, b);
+            assertThat(r.getResponse().getStatus()).as(verb).isEqualTo(404);
+            assertThat(code(r)).as(verb).isEqualTo("USER_NOT_FOUND");
+        }
     }
 
     // --- 권한 · CSRF ------------------------------------------------------------
@@ -311,42 +533,47 @@ class AdminUserCommandApiTest {
     void 실패_조사역과_승인자는_403_비로그인은_401_CSRF_없으면_403() throws Exception {
         MockHttpSession admin = admin();
         Issued apr = issue(admin, "APPROVER");
-        jdbc.update("update ops.users set is_active = false where id = ?", apr.id);
         for (String loginId : List.of("inv01", "apr01")) {
             MockHttpSession s = session(login(loginId, SEED_PASSWORD));
             assertThat(create(s, body(prefix() + "x", "이름", "APPROVER", PW)).getResponse().getStatus()).as(loginId).isEqualTo(403);
-            assertThat(command(s, apr.id, "activate", null).getResponse().getStatus()).as(loginId).isEqualTo(403);
+            assertThat(command(s, apr.id, "deactivate", null).getResponse().getStatus()).as(loginId).isEqualTo(403);
         }
 
-        MvcResult anonymous = mvc.perform(post(URL + "/" + apr.id + "/activate").with(csrf())).andReturn();
+        MvcResult anonymous = mvc.perform(post(URL + "/" + apr.id + "/deactivate").with(csrf())).andReturn();
         assertThat(anonymous.getResponse().getStatus()).isEqualTo(401);
 
-        MvcResult noCsrf = mvc.perform(post(URL + "/" + apr.id + "/activate").session(admin)).andReturn();
+        MvcResult noCsrf = mvc.perform(post(URL + "/" + apr.id + "/deactivate").session(admin)).andReturn();
         assertThat(noCsrf.getResponse().getStatus()).isEqualTo(403);
-        assertThat(activeOf(apr.id)).isFalse();
+        assertThat(activeOf(apr.id)).isTrue();
     }
 
     // --- 비밀번호 노출 ------------------------------------------------------------
 
     @Test
-    void 보안_발급의_응답과_로그_어디에도_비밀번호가_없다(CapturedOutput output) throws Exception {
+    void 보안_발급과_초기화의_응답과_로그_어디에도_비밀번호가_없다(CapturedOutput output) throws Exception {
         MockHttpSession admin = admin();
-        String first = ("secret-first-" + UUID.randomUUID()).substring(0, 40);
-        String tooLong = ("secret-long-" + UUID.randomUUID()).substring(0, 40) + "x".repeat(40);
+        String first = "secret-first-" + UUID.randomUUID();
+        String second = "secret-second-" + UUID.randomUUID();
+        first = first.substring(0, 40);
+        second = second.substring(0, 40);
         String loginId = prefix() + "sec";
 
         MvcResult created = create(admin, body(loginId, "비밀", "INVESTIGATOR", first));
         assertThat(created.getResponse().getStatus()).isEqualTo(201);   // 빈 응답으로 통과하지 않게
+        long id = json(created).path("id").asLong();
+        MvcResult reset = command(admin, id, "reset-password", Map.of("new_password", second));
         MvcResult dup = create(admin, body(loginId, "비밀", "INVESTIGATOR", first));
-        MvcResult invalid = create(admin, body(prefix() + "sec2", "비밀", "INVESTIGATOR", tooLong));
-        assertThat(List.of(dup, invalid)).extracting(x -> x.getResponse().getStatus()).containsExactly(409, 400);
+        MvcResult tooLong = command(admin, id, "reset-password", Map.of("new_password", second + "x".repeat(40)));
+        assertThat(List.of(reset, dup, tooLong)).extracting(x -> x.getResponse().getStatus()).containsExactly(200, 409, 400);
 
-        assertThat(created.getResponse().getContentAsString(StandardCharsets.UTF_8).toLowerCase()).doesNotContain("password");
-        for (MvcResult r : List.of(created, dup, invalid)) {   // 오류의 details 키(initial_password)는 되지만 값은 안 된다
-            assertThat(r.getResponse().getContentAsString(StandardCharsets.UTF_8))
-                    .doesNotContain(first).doesNotContain(tooLong).doesNotContain("$2a$");
+        for (MvcResult r : List.of(created, reset)) {   // 성공 한 줄에는 password 글자 자체가 없다
+            assertThat(r.getResponse().getContentAsString(StandardCharsets.UTF_8).toLowerCase()).doesNotContain("password");
         }
-        assertThat(output.getAll()).doesNotContain(first).doesNotContain(tooLong);
+        for (MvcResult r : List.of(created, reset, dup, tooLong)) {   // 오류의 details 키(new_password)는 되지만 값은 안 된다
+            String raw = r.getResponse().getContentAsString(StandardCharsets.UTF_8);
+            assertThat(raw).doesNotContain(first).doesNotContain(second).doesNotContain("$2a$");
+        }
+        assertThat(output.getAll()).doesNotContain(first).doesNotContain(second);
     }
 
     // --- 목록 active_case_count -----------------------------------------------------
@@ -436,6 +663,10 @@ class AdminUserCommandApiTest {
 
     private long adminId() {
         return jdbc.queryForObject("select id from ops.users where login_id = 'admin'", Long.class);
+    }
+
+    private String roleOf(long id) {
+        return jdbc.queryForObject("select role from ops.users where id = ?", String.class, id);
     }
 
     private boolean activeOf(long id) {

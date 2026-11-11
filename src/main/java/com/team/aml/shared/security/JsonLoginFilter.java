@@ -5,12 +5,15 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.InvalidMediaTypeException;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.AbstractAuthenticationToken;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 /**
  * POST /api/v1/auth/login {login_id, password} — 폼 대신 JSON 본문을 읽는 것만 다르다.
@@ -20,6 +23,8 @@ import java.io.IOException;
 class JsonLoginFilter extends UsernamePasswordAuthenticationFilter {
 
     static final String LOGIN_ID_ATTEMPTED = JsonLoginFilter.class.getName() + ".loginIdAttempted";
+    /** 비밀번호 비교에 쓴 LoginCandidate — 성공 핸들러가 세션 등록 뒤 DB 를 다시 읽어 비교한다 (SCRUM-135 ②-b). */
+    static final String AUTHENTICATED_AS = JsonLoginFilter.class.getName() + ".authenticatedAs";
 
     record LoginRequest(String loginId, String password) {}
 
@@ -31,6 +36,7 @@ class JsonLoginFilter extends UsernamePasswordAuthenticationFilter {
     private static final int MAX_BODY_BYTES = 4096;      // login_id 64 + password 128 이면 충분. BCrypt 앞에서 큰 본문을 끊는다
     private static final int MAX_LOGIN_ID = 64;          // users.login_id varchar(64)
     private static final int MAX_PASSWORD = 128;
+    private static final int MAX_PASSWORD_BYTES = 72;    // BCrypt 가 비교하는 길이 — 넘으면 400 이 아니라 401 (길이 힌트를 주지 않는다)
 
     private final ObjectMapper om;
 
@@ -57,9 +63,21 @@ class JsonLoginFilter extends UsernamePasswordAuthenticationFilter {
                 || body.loginId().length() > MAX_LOGIN_ID || body.password().length() > MAX_PASSWORD) {
             throw new InvalidLoginRequest();
         }
+        // BCrypt 는 앞 72바이트만 비교해서, 넘는 비밀번호는 앞 72바이트만 맞아도 통과한다. 발급·초기화도 72바이트까지만 받으니
+        // 넘으면 틀린 비밀번호로 본다 — 실패 핸들러가 LOGIN_FAIL 기록 + 401 LOGIN_FAILED 같은 문구(사유를 숨긴다).
+        // 계정 조회 전이라 있는 ID·없는 ID 응답 시간이 같다 (SCRUM-135 ②-b)
+        if (body.password().getBytes(StandardCharsets.UTF_8).length > MAX_PASSWORD_BYTES) {
+            throw new BadCredentialsException("Bad credentials");
+        }
         UsernamePasswordAuthenticationToken token = UsernamePasswordAuthenticationToken.unauthenticated(body.loginId(), body.password());
         setDetails(req, token);
-        return getAuthenticationManager().authenticate(token);
+        Authentication result = getAuthenticationManager().authenticate(token);
+        // 비교에 쓴 users 값은 이 요청에만 — 세션에 저장될 인증 객체에는 원래 details 를 돌려 놓는다 (해시가 세션에 남지 않게)
+        if (result instanceof AbstractAuthenticationToken t && t.getDetails() instanceof AuthenticatedAs seen) {
+            t.setDetails(seen.details());
+            req.setAttribute(AUTHENTICATED_AS, seen.candidate());
+        }
+        return result;
     }
 
     private static boolean isBlank(String s) {
