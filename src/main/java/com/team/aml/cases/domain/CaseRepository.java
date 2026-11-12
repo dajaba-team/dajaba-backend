@@ -58,4 +58,11 @@ public interface CaseRepository {
      * 시퀀스라 롤백돼도 번호는 되돌아가지 않는다(빈 번호가 생길 수 있음 — 레퍼런스 8.7, MAX+1 금지).
      */
     long nextCaseNoSeq();
+
+    /**
+     * 승인 대기(PENDING_APPROVAL) 케이스 한 페이지 — str 승인함 P1 (SCRUM-222).
+     * submittedAt 은 마지막 SUBMIT_FOR_APPROVAL 이력 시각(보완 뒤 다시 요청하면 새 시각).
+     * 정렬은 쿼리에 고정 — submittedAt 오름차순, 같으면 id 오름차순. pageable 은 page·size 만 쓴다(Sort 를 넣지 않는다).
+     */
+    Page<PendingApprovalRow> findPendingApproval(Pageable pageable);
 }
