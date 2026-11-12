@@ -86,8 +86,9 @@ public class ListPendingApprovals {
      *
      * @param caseVersion      지금 cases.version — 승인·반려 요청의 case_version 으로 쓴다
      * @param submittedAt      마지막 승인 요청 시각 (DB 값 그대로 — 초 자르기는 api)
-     * @param verification     현재 초안의 최신 검증. 없으면 null (정상 흐름엔 없음)
-     * @param lastRejection    현재 초안의 최신 반려. 처음 요청이면 null
+     * @param verification     현재 초안의 최신 검증 (VerificationResultRepository.findLatest — 늦게 저장된 검증 예외는 그 주석). 없으면 null
+     * @param lastRejection    <b>현재 초안</b>의 최신 반려. 처음 요청이면 null. 재생성으로 새 초안이 되면 예전 초안의 반려는 안 본다
+     *                         — S2 last_rejection·NARRATIVE_UNCHANGED 판단과 같은 초안 기준 (#103 리뷰 2번, str.md P1)
      * @param wasAssignee      내가 지금·예전에 담당한 케이스 — 화면은 "직접 담당했던 케이스"로 표시 (W4 계획 채영 11/11)
      * @param availableActions 승인자이고 담당한 적 없으면 [APPROVE, REJECT], 그 밖(관리자·예전 담당)은 []
      */
