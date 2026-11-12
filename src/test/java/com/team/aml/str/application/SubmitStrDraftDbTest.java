@@ -35,8 +35,16 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -252,6 +260,108 @@ class SubmitStrDraftDbTest {
                 Integer.class, draftId)).isEqualTo(3);   // 두 번째 요청 값은 안 남는다
     }
 
+    // ── 재생성으로 대체된 옛 초안 (#105 리뷰 1번) ─────────────
+
+    // 9
+    @Test
+    void 확인_재생성으로_대체된_옛_초안으로_요청하면_지금은_409_INVALID_CASE_TRANSITION에_DB_숫자_id가_나간다() {
+        // 계약서 3절은 409 DRAFT_SUPERSEDED + details.current_draft_no(화면 번호)인데, 케이스를 먼저 잠그는 순서라
+        // cases 의 "현재 초안 아님"이 먼저 나간다. 맞추는 건 후속(지윤 님과 cases 예외 details 를 draft_no 로 바꿀지) — 그때 이 테스트를 고친다.
+        long caseId = escalatedCase();
+        long oldDraftId = savedDraft(caseId);
+        String verificationId = verification(oldDraftId, "PASSED", "2026-11-12T01:00:00Z");
+        long newDraftId = savedDraft(caseId);                 // 재생성 — 옛 초안 SUPERSEDED, 케이스 현재 초안 = 새 초안
+        long before = caseVersion(caseId);
+        login(investigator, "INVESTIGATOR");
+
+        assertThatThrownBy(() -> submitDraft.execute(DisplayNumber.draftNo(oldDraftId), before, verificationId,
+                List.of("VI-1"), 3))
+                .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> assertThat(e.details())
+                        .containsEntry("draft_id", oldDraftId)            // DB 숫자 (DRF- 번호 아님)
+                        .containsEntry("current_draft_id", newDraftId)
+                        .doesNotContainKey("current_draft_no"));
+
+        assertThat(caseStatus(caseId)).isEqualTo("DRAFTED");
+        assertThat(caseVersion(caseId)).isEqualTo(before);
+        assertThat(jdbc.queryForObject("select status from ops.str_drafts where id = ?", String.class, oldDraftId))
+                .isEqualTo("SUPERSEDED");
+    }
+
+    // ── 본문 수정(S3)과 승인 요청(S6)이 겹칠 때 (미결 20, #105 리뷰 2번) ──
+
+    // 10
+    @Test
+    void 동시_본문_수정이_먼저_커밋되면_같은_버전으로_온_승인_요청은_409_CONCURRENT_UPDATE() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        String verificationId = verification(draftId, "PASSED", "2026-11-12T01:00:00Z");
+        long seen = caseVersion(caseId);                      // 두 화면이 같은 버전을 읽었다
+        login(investigator, "INVESTIGATOR");
+
+        reviseDraft.execute(DisplayNumber.draftNo(draftId), seen, Map.of(StrSection.METHOD, "먼저 고친 문장"));
+
+        assertThatThrownBy(() -> submitDraft.execute(DisplayNumber.draftNo(draftId), seen, verificationId,
+                List.of("VI-1"), 3)).isInstanceOf(OptimisticLockException.class);
+        assertThat(caseStatus(caseId)).isEqualTo("DRAFTED");
+        assertThat(revisionCount(draftId)).isEqualTo(2);      // 수정은 남고, 고친 본문은 검증 전이라 요청은 안 됨
+    }
+
+    // 11
+    @Test
+    void 동시_승인_요청이_먼저_커밋되면_같은_버전으로_온_본문_수정은_409_CONCURRENT_UPDATE() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        String verificationId = verification(draftId, "PASSED", "2026-11-12T01:00:00Z");
+        long seen = caseVersion(caseId);
+        login(investigator, "INVESTIGATOR");
+
+        submitDraft.execute(DisplayNumber.draftNo(draftId), seen, verificationId, List.of("VI-1"), 3);
+
+        assertThatThrownBy(() -> reviseDraft.execute(DisplayNumber.draftNo(draftId), seen,
+                Map.of(StrSection.METHOD, "늦게 고친 문장"))).isInstanceOf(OptimisticLockException.class);
+        assertThat(caseStatus(caseId)).isEqualTo("PENDING_APPROVAL");
+        assertThat(revisionCount(draftId)).isEqualTo(1);      // 승인 대기 본문은 검증한 그대로
+    }
+
+    // 12
+    @Test
+    void 동시_두_요청을_실제로_겹쳐_보내면_하나만_성공하고_다른_하나는_409_CONCURRENT_UPDATE() throws Exception {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        String verificationId = verification(draftId, "PASSED", "2026-11-12T01:00:00Z");
+        long seen = caseVersion(caseId);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<Object>> results = new ArrayList<>();
+            results.add(pool.submit(asInvestigator(start, () -> reviseDraft.execute(DisplayNumber.draftNo(draftId),
+                    seen, Map.of(StrSection.METHOD, "동시에 고친 문장")))));
+            results.add(pool.submit(asInvestigator(start, () -> submitDraft.execute(DisplayNumber.draftNo(draftId),
+                    seen, verificationId, List.of("VI-1"), 3))));
+            start.countDown();                                // 둘을 한꺼번에 출발
+
+            int succeeded = 0;
+            int conflicted = 0;
+            for (Future<Object> f : results) {
+                try {
+                    f.get(30, TimeUnit.SECONDS);
+                    succeeded++;
+                } catch (ExecutionException e) {
+                    assertThat(e.getCause()).isInstanceOf(OptimisticLockException.class);
+                    conflicted++;
+                }
+            }
+            assertThat(succeeded).isEqualTo(1);
+            assertThat(conflicted).isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(caseVersion(caseId)).isEqualTo(seen + 1);  // 이긴 쪽 한 번만 올랐다
+        // 어느 쪽이 이겼든 "승인 대기인데 본문이 바뀐" 상태는 없다
+        boolean pending = caseStatus(caseId).equals("PENDING_APPROVAL");
+        assertThat(revisionCount(draftId)).isEqualTo(pending ? 1 : 2);
+    }
+
     // ---- 도우미 ----
 
     private void assertNothingChanged(long caseId, long draftId, long caseVersionBefore) {
@@ -261,6 +371,23 @@ class SubmitStrDraftDbTest {
                 + "and action = 'SUBMIT_FOR_APPROVAL'", Long.class, caseId)).isZero();
         assertThat(jdbc.queryForObject("select cardinality(suspicion_types) from ops.str_drafts where id = ?",
                 Integer.class, draftId)).isZero();
+    }
+
+    /** 다른 스레드에서 담당 조사역으로 로그인해 출발 신호를 기다렸다가 실행 (SecurityContext 는 스레드마다 따로). */
+    private Callable<Object> asInvestigator(CountDownLatch start, Callable<Object> work) {
+        return () -> {
+            login(investigator, "INVESTIGATOR");
+            try {
+                start.await();
+                return work.call();
+            } finally {
+                SecurityContextHolder.clearContext();
+            }
+        };
+    }
+
+    private long revisionCount(long draftId) {
+        return jdbc.queryForObject("select count(*) from ops.str_revisions where draft_id = ?", Long.class, draftId);
     }
 
     /** 지금 본문 해시로 검증 결과 한 줄 (AI 대신). 돌려주는 값 = verification_id. */

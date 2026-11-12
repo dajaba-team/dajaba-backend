@@ -23,6 +23,8 @@ import java.util.Objects;
 public record SubmitStrDraftRequest(
         @NotNull @PositiveOrZero Long caseVersion,
         @NotBlank @Size(max = 64) String verificationId,
+        // TODO(rules.md 미결 4): 지금은 16자 이하만 보고 값 목록은 안 본다 — 아무 문자열이나 저장돼 PDF VI부까지 간다.
+        //  서식 VI부 유형 목록이 정해지면 여기서 400 으로 막는다.
         @NotEmpty List<@NotBlank @Size(max = 16) String> suspicionTypes,
         @NotNull @Min(1) @Max(5) Integer suspicionLevelBranch) {
 
