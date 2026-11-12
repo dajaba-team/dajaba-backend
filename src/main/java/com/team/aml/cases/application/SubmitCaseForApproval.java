@@ -12,7 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
  * str 승인 요청 유스케이스와 같은 트랜잭션에서만 부른다(MANDATORY — 혼자 부르면 IllegalTransactionStateException).
  *
  * <p>검사 순서: 케이스 잠금 조회(404 CASE_NOT_FOUND) → version(409 CONCURRENT_UPDATE) → 담당자(403 NOT_ASSIGNEE)
- * → 현재 초안이 draftId(409 INVALID_CASE_TRANSITION, details.current_draft_id) → 상태(409 INVALID_CASE_TRANSITION).
+ * → 현재 초안이 draftId(다른 초안이면 409 DRAFT_SUPERSEDED details.current_draft_no, 현재 초안이 없으면
+ * 409 INVALID_CASE_TRANSITION details.draft_no — SCRUM-223) → 상태(409 INVALID_CASE_TRANSITION).
  * 현재 본문이 검증을 통과했는지·보완 반려 뒤 본문이 바뀌었는지는 str ApprovalGate 몫이다(cases 는 본문을 모른다).
  *
  * <p><b>부르는 순서</b> — str 이 approvals 같은 케이스 FK 행을 넣기 <b>전에</b> 부른다(AttachDraftToCase 와 같은 이유:

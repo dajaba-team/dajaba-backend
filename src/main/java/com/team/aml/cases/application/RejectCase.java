@@ -13,7 +13,8 @@ import org.springframework.transaction.annotation.Transactional;
  * str RejectStr 와 같은 트랜잭션에서만 부른다(MANDATORY) — 반려 코드는 approvals(이력)와 cases(상태 규칙) 두 곳에 같이 남는다.
  *
  * <p>검사 순서: 케이스 잠금 조회(404 CASE_NOT_FOUND) → version(409 CONCURRENT_UPDATE)
- * → 현재 초안이 draftId(409 INVALID_CASE_TRANSITION, details.current_draft_id) → 상태(409 INVALID_CASE_TRANSITION)
+ * → 현재 초안이 draftId(다른 초안이면 409 DRAFT_SUPERSEDED details.current_draft_no, 현재 초안이 없으면
+ * 409 INVALID_CASE_TRANSITION details.draft_no — SCRUM-223) → 상태(409 INVALID_CASE_TRANSITION)
  * → 승인자가 지금·예전 담당(409 SELF_APPROVAL) → 사유(CommentRequiredException). ApproveCase 와 같고 사유 검사만 더 있다.
  * 반려 뒤 갈 수 있는 곳은 코드가 정한다 — NEED_REVISION 은 수정본·새 초안, NOT_REPORTABLE 은 종결만.
  *

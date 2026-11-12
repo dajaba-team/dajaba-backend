@@ -12,7 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
  * str ApproveStr 와 같은 트랜잭션에서만 부른다(MANDATORY) — 승인 기록·초안 LOCKED·케이스 APPROVED·이력이 함께 성공하거나 롤백된다.
  *
  * <p>검사 순서: 케이스 잠금 조회(404 CASE_NOT_FOUND) → version(409 CONCURRENT_UPDATE)
- * → 현재 초안이 draftId(409 INVALID_CASE_TRANSITION, details.current_draft_id) → 상태(409 INVALID_CASE_TRANSITION)
+ * → 현재 초안이 draftId(다른 초안이면 409 DRAFT_SUPERSEDED details.current_draft_no, 현재 초안이 없으면
+ * 409 INVALID_CASE_TRANSITION details.draft_no — SCRUM-223) → 상태(409 INVALID_CASE_TRANSITION)
  * → 승인자가 지금·예전 담당(409 SELF_APPROVAL, 미결 32 — 여기서 WasCaseAssignee 로 이력을 본다).
  * 승인자 역할(APPROVER)은 SecurityConfig 의 /approvals/** 와 str ApprovalGate.requireApprover 가 본다.
  *
