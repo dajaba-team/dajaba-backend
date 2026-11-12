@@ -4,6 +4,7 @@ import com.team.aml.str.application.GetStrDraft;
 import com.team.aml.str.application.ListStrRevisions;
 import com.team.aml.str.application.RequestStrDraft;
 import com.team.aml.str.application.ReviseStrDraft;
+import com.team.aml.str.application.SubmitStrDraft;
 import com.team.aml.str.application.VerifyStrDraft;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.swagger.v3.oas.annotations.Operation;
@@ -25,15 +26,17 @@ public class StrDraftController {
     private final ReviseStrDraft reviseStrDraft;
     private final ListStrRevisions listStrRevisions;
     private final VerifyStrDraft verifyStrDraft;
+    private final SubmitStrDraft submitStrDraft;
 
     public StrDraftController(RequestStrDraft requestStrDraft, GetStrDraft getStrDraft,
                               ReviseStrDraft reviseStrDraft, ListStrRevisions listStrRevisions,
-                              VerifyStrDraft verifyStrDraft) {
+                              VerifyStrDraft verifyStrDraft, SubmitStrDraft submitStrDraft) {
         this.requestStrDraft = requestStrDraft;
         this.getStrDraft = getStrDraft;
         this.reviseStrDraft = reviseStrDraft;
         this.listStrRevisions = listStrRevisions;
         this.verifyStrDraft = verifyStrDraft;
+        this.submitStrDraft = submitStrDraft;
     }
 
     @Operation(summary = "STR 초안 생성·재생성 (최대 90초)",
@@ -94,5 +97,17 @@ public class StrDraftController {
     @PostMapping("/str-drafts/{draftNo}/verify")
     public JsonNode verify(@PathVariable String draftNo) {
         return verifyStrDraft.execute(draftNo);
+    }
+
+    @Operation(summary = "STR 승인 요청",
+            description = "담당만(403 NOT_ASSIGNEE), 케이스 DRAFTED 에서만(409 INVALID_CASE_TRANSITION — 보완 요청 반려 뒤엔 본문 저장 먼저). "
+                    + "지금 본문의 최신 검증이 PASSED 이고 verification_id 가 그 검증이어야 한다(아니면 409 DRAFT_NOT_VERIFIED). "
+                    + "보완 요청 반려 뒤 본문이 그때와 같으면 409 NARRATIVE_UNCHANGED, case_version 다르면 409 CONCURRENT_UPDATE. "
+                    + "의심 유형 1개 이상·지점 의심 정도 1~5 필수(400). 응답은 케이스 공통 변경 응답")
+    @PostMapping("/str-drafts/{draftNo}/submit")
+    public StrCaseChangeResponse submit(@PathVariable String draftNo,
+                                        @Valid @RequestBody SubmitStrDraftRequest request) {
+        return StrCaseChangeResponse.from(submitStrDraft.execute(draftNo, request.caseVersion(),
+                request.verificationId(), request.suspicionTypes(), request.suspicionLevelBranch()));
     }
 }
