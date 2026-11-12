@@ -45,4 +45,6 @@ tasks.withType<Test> {
     useJUnitPlatform()
     // CI는 UTC라 시간대 버그가 드러나지 않는다. KST로 돌려 ts가 9시간 밀리는 회귀를 잡는다.
     systemProperty("user.timezone", "Asia/Seoul")
+    // 기본 512m에선 @SpringBootTest 컨텍스트가 여러 벌 캐시돼 CI에서 OutOfMemoryError가 난다(11/12, 08_decisions).
+    maxHeapSize = "1536m"
 }
