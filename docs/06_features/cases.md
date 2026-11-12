@@ -142,6 +142,10 @@
 - **대체된 옛 초안 (SCRUM-223)** — S3·S6·P2·P3 모두 str이 케이스를 먼저 잠그는 순서라 cases가 먼저 봐요. 케이스에 현재 초안이 있고 요청 초안과 다르면 409 `DRAFT_SUPERSEDED` + `details.current_draft_no`(`DisplayNumber.draftNo`, 계약서 3절) — 화면은 그 번호로 초안을 다시 불러요. 예외는 shared `DraftSupersededException`(cases → str 참조가 안 돼서). 남는 `INVALID_CASE_TRANSITION` details도 숫자 id 대신 `draft_no`(계약서 2.2).
 - 승인자·담당자는 `CurrentUser`에서 꺼내요(인자로 안 받음). 동시에 온 수정본 저장(`TouchCaseForRevision`)과는 version으로 부딪혀 뒤 요청이 409.
 
+- **str 호출 순서: `lock` → 초안 insert → `execute`** (수정본은 `TouchCaseForRevision`을 트랜잭션 맨 앞에서). `str_drafts` insert는 FK 때문에 `cases` 행에 KEY SHARE를 잡고, `findForUpdate`의 `FOR UPDATE`는 그것과 충돌해요. 초안을 먼저 넣고 잠그면 같은 케이스에 동시에 온 두 저장이 서로를 기다리다 교착(40P01)이 돼요. 맨 앞에서 잠그면 뒤 요청은 `lock`에서 기다렸다가 version 검사에서 409가 돼요. [#43 리뷰 1번]
+- `draftId`는 같은 케이스의 초안이어야 해요(V008 `cases_current_draft_fk`). 이전 초안 SUPERSEDED는 str 몫이에요(`str_drafts_one_active_uq`).
+- str은 `cases.domain`·`cases.infrastructure`가 아니라 이 유스케이스만 불러요. 담당자·상태 확인도 잠근 뒤 여기서 해요(str은 볼 방법이 없음). [#43 리뷰 2번]
+
 **str에 주는 공개 조회 — 예전 담당 (V010, 미결 32)** 트랜잭션 전파는 기본(`REQUIRED`, 읽기 전용) — 승인 트랜잭션 안에서도, 초안 조회에서도 불러요.
 
 | 유스케이스 | 하는 일 | 오류 |
@@ -151,9 +155,15 @@
 - **이력 칸 (V010)**: `ASSIGN`은 받은 사람(`to_assignee_id`)만, `REASSIGN`은 넘긴 사람(`from_assignee_id`)·받은 사람 둘 다. 그 밖의 행동은 둘 다 빈칸(CHECK). 필수 CHECK는 V010 전 이력 때문에 `NOT VALID` — 그래서 지금 담당은 `cases.assignee_id`로 따로 봐요.
 - 승인함처럼 여러 건을 한 번에 볼 일이 많아지면 묶음 조회를 추가해요(지금은 건마다 한 번).
 
-- **str 호출 순서: `lock` → 초안 insert → `execute`** (수정본은 `TouchCaseForRevision`을 트랜잭션 맨 앞에서). `str_drafts` insert는 FK 때문에 `cases` 행에 KEY SHARE를 잡고, `findForUpdate`의 `FOR UPDATE`는 그것과 충돌해요. 초안을 먼저 넣고 잠그면 같은 케이스에 동시에 온 두 저장이 서로를 기다리다 교착(40P01)이 돼요. 맨 앞에서 잠그면 뒤 요청은 `lock`에서 기다렸다가 version 검사에서 409가 돼요. [#43 리뷰 1번]
-- `draftId`는 같은 케이스의 초안이어야 해요(V008 `cases_current_draft_fk`). 이전 초안 SUPERSEDED는 str 몫이에요(`str_drafts_one_active_uq`).
-- str은 `cases.domain`·`cases.infrastructure`가 아니라 이 유스케이스만 불러요. 담당자·상태 확인도 잠근 뒤 여기서 해요(str은 볼 방법이 없음). [#43 리뷰 2번]
+**str에 주는 공개 조회 — 승인 대기 목록 (승인함 P1, SCRUM-222)** 트랜잭션 전파는 기본(`REQUIRED`, 읽기 전용). str 조회 유스케이스가 `REPEATABLE READ`로 감싸 부르면 같은 스냅샷을 읽어요(08_decisions 10/30 조합 방식). `CaseRepository.search`는 이력 시각으로 정렬할 수 없고 생성일 기간이 필수라 따로 둬요.
+
+| 유스케이스 | 하는 일 | 오류 |
+|---|---|---|
+| `ListCasesPendingApproval.execute(page, size)` → `Page<PendingCase>` | `status = PENDING_APPROVAL`만. `PendingCase(caseId, caseNo, version, currentDraftId, assignee, submittedAt)` — `submittedAt`은 그 케이스의 **마지막** `SUBMIT_FOR_APPROVAL` 이력 시각(보완 뒤 다시 요청하면 새 시각). 정렬은 `submittedAt` 오름차순, 같으면 case id 오름차순(계약서 P1 "기본 요청 오래된 순") — 고정이라 정렬 인자 없음 | page 음수·size 1~100 밖이면 `IllegalArgumentException`(형식 검사는 str 컨트롤러 몫, 계약서 2.3) |
+
+- 검증·반려 정보(str 테이블)와 "직접 담당했던 케이스" 표시(`WasCaseAssignee`)는 str이 붙여요.
+- 이력은 `case_history_case_action_idx (case_id, action, created_at desc)`로 찾아요. 승인 대기인데 `SUBMIT_FOR_APPROVAL` 이력이 없는 케이스(정상 흐름엔 없음)는 목록·건수 둘 다에서 빠져요.
+- `submittedAt`은 DB 값 그대로(초 자르기 안 함) — 응답 형식은 str 몫.
 
 **저장 매핑 (SCRUM-98)**
 - `Case`는 이력을 컬렉션으로 들고 있지 않아요. 업무 메서드가 만든 이력은 `getPendingHistories()`에 쌓이고, 유스케이스가 `caseRepository.save(c)` 뒤 `caseHistoryRepository.saveAll(c.takePendingHistories())`로 같은 트랜잭션에서 넣어요.

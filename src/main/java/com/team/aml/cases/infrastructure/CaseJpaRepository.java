@@ -4,6 +4,7 @@ import com.team.aml.cases.domain.AssigneeCaseCount;
 import com.team.aml.cases.domain.Case;
 import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.cases.domain.CaseStatus;
+import com.team.aml.cases.domain.PendingApprovalRow;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -52,4 +53,28 @@ public interface CaseJpaRepository extends Repository<Case, Long>, CaseRepositor
     @Override
     @Query(value = "select nextval('ops.case_no_seq')", nativeQuery = true)
     long nextCaseNoSeq();
+
+    /**
+     * 이력은 case_history_case_action_idx (case_id, action, created_at desc) 로 찾는다.
+     * 승인 대기인데 SUBMIT_FOR_APPROVAL 이력이 없는 케이스는 (정상 흐름에선 없지만) 목록·건수 둘 다에서 뺀다 — 둘이 어긋나지 않게.
+     */
+    @Override
+    @Query(value = """
+            select new com.team.aml.cases.domain.PendingApprovalRow(
+                       c.id, c.caseNo, c.version, c.currentDraftId, c.assigneeId, max(h.createdAt))
+            from InvestigationCase c
+            join CaseHistory h on h.caseId = c.id
+                and h.action = com.team.aml.cases.domain.CaseHistoryAction.SUBMIT_FOR_APPROVAL
+            where c.status = com.team.aml.cases.domain.CaseStatus.PENDING_APPROVAL
+            group by c.id, c.caseNo, c.version, c.currentDraftId, c.assigneeId
+            order by max(h.createdAt) asc, c.id asc
+            """,
+            countQuery = """
+            select count(c) from InvestigationCase c
+            where c.status = com.team.aml.cases.domain.CaseStatus.PENDING_APPROVAL
+              and exists (select 1 from CaseHistory h
+                          where h.caseId = c.id
+                            and h.action = com.team.aml.cases.domain.CaseHistoryAction.SUBMIT_FOR_APPROVAL)
+            """)
+    Page<PendingApprovalRow> findPendingApproval(Pageable pageable);
 }
