@@ -342,6 +342,29 @@ class GetStrDraftDbTest {
         assertThat(body.path("generator_version").asText()).isEqualTo("narrative_v2");
     }
 
+    // 11
+    @Test
+    void 정상_의심_유형과_정도가_저장된_초안도_관리자와_비담당_조사역에게는_null이다() throws Exception {   // #109 리뷰
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        jdbc.update("update ops.str_drafts set suspicion_types = '{VI-1,VI-4}', suspicion_level_branch = 3, "
+                + "suspicion_level_hq = 4 where id = ?", draftId);   // S6·P2 가 남긴 값 — 담당·승인자에게는 보인다(10번)
+
+        for (long who : new long[] {admin, otherInvestigator}) {
+            login(who, who == admin ? "ADMIN" : "INVESTIGATOR");
+
+            GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+            assertMetaOnly(r, draftId, caseId);
+
+            JsonNode body = om.readTree(om.writeValueAsString(StrDraftDetailResponse.from(r)));
+            for (String key : new String[] {"suspicion_types", "suspicion_level_branch", "suspicion_level_hq",
+                    "suspicion_types_recommended", "generation_id", "generator_version"}) {
+                assertThat(body.has(key)).as(key).isTrue();                      // 키는 있고
+                assertThat(body.get(key).isNull()).as(key).isTrue();             // 값은 null — 저장된 값이 새지 않는다
+            }
+        }
+    }
+
     // ---- 도우미 ----
 
     private void assertMetaOnly(GetStrDraft.Result r, long draftId, long caseId) {
@@ -361,6 +384,8 @@ class GetStrDraftDbTest {
         assertThat(r.suspicionTypes()).isNull();
         assertThat(r.suspicionTypesRecommended()).isNull();
         assertThat(r.suspicionLevelBranch()).isNull();
+        assertThat(r.suspicionLevelHq()).isNull();
+        assertThat(r.generatorVersion()).isNull();
         assertThat(r.references()).isNull();
     }
 
