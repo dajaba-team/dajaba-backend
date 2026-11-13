@@ -148,7 +148,7 @@ class GetStrDraftDbTest {
 
         GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
 
-        assertMetaOnly(r, draftId);
+        assertMetaOnly(r, draftId, caseId);
         assertThat(strViewCount(draftId)).isEqualTo(1);
     }
 
@@ -161,7 +161,7 @@ class GetStrDraftDbTest {
 
         GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
 
-        assertMetaOnly(r, draftId);
+        assertMetaOnly(r, draftId, caseId);
         assertThat(strViewCount(draftId)).isEqualTo(1);
     }
 
@@ -198,8 +198,11 @@ class GetStrDraftDbTest {
                 StrDraftDetailResponse.from(getDraft.execute(DisplayNumber.draftNo(draftId)))));
 
         assertThat(body.path("access").asText()).isEqualTo("META_ONLY");
-        for (String key : new String[] {"case_no", "case_status", "version", "case_version", "facts", "narrative",
-                "current_revision_no", "latest_verification"}) {
+        assertThat(body.path("case_no").asText()).isEqualTo(caseNo(caseId));
+        assertThat(body.path("case_status").asText()).isEqualTo("DRAFTED");
+        for (String key : new String[] {"version", "case_version", "facts", "narrative",
+                "current_revision_no", "latest_verification", "generation_id", "generator_version", "suspicion_types",
+                "suspicion_types_recommended", "suspicion_level_branch", "suspicion_level_hq", "references"}) {
             assertThat(body.has(key)).as(key).isTrue();
             assertThat(body.get(key).isNull()).as(key).isTrue();
         }
@@ -300,9 +303,71 @@ class GetStrDraftDbTest {
                 Long.class, investigator)).isZero();
     }
 
+    // 9
+    @Test
+    void 정상_FULL에는_생성_정보와_의심_유형과_정도가_오고_승인_요청_전이면_빈_값() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        login(investigator, "INVESTIGATOR");
+
+        GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+
+        assertThat(r.generationId()).isEqualTo("g-" + draftId);
+        assertThat(r.generatorVersion()).isEqualTo("narrative_v2");          // generation_meta.prompt_version
+        assertThat(r.suspicionTypes()).isEmpty();                            // S6 전 — null 아니라 []
+        assertThat(r.suspicionLevelBranch()).isNull();
+        assertThat(r.suspicionLevelHq()).isNull();
+        assertThat(r.suspicionTypesRecommended()).isEmpty();                 // 룰 → 유형 표 전까지 항상 [] (rules.md 미결 4)
+        assertThat(r.references()).isEmpty();                                // RAG 응답 칸 확인 전까지 항상 []
+    }
+
+    // 10
+    @Test
+    void 정상_승인_요청과_승인_뒤_다시_열면_지난_의심_유형과_정도가_채워져_오고_JSON_키는_snake_case() throws Exception {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        jdbc.update("update ops.str_drafts set suspicion_types = '{VI-1,VI-4}', suspicion_level_branch = 3, "
+                + "suspicion_level_hq = 4 where id = ?", draftId);   // S6·P2 가 남긴 값 (저장 경로는 각 유스케이스 테스트가 본다)
+        login(approver, "APPROVER");
+
+        JsonNode body = om.readTree(om.writeValueAsString(
+                StrDraftDetailResponse.from(getDraft.execute(DisplayNumber.draftNo(draftId)))));
+
+        assertThat(body.path("suspicion_types").toString()).isEqualTo("[\"VI-1\",\"VI-4\"]");
+        assertThat(body.path("suspicion_level_branch").asInt()).isEqualTo(3);
+        assertThat(body.path("suspicion_level_hq").asInt()).isEqualTo(4);
+        assertThat(body.path("suspicion_types_recommended").isArray()).isTrue();
+        assertThat(body.path("references").isArray()).isTrue();
+        assertThat(body.path("generation_id").asText()).isEqualTo("g-" + draftId);
+        assertThat(body.path("generator_version").asText()).isEqualTo("narrative_v2");
+    }
+
+    // 11
+    @Test
+    void 정상_의심_유형과_정도가_저장된_초안도_관리자와_비담당_조사역에게는_null이다() throws Exception {   // #109 리뷰
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        jdbc.update("update ops.str_drafts set suspicion_types = '{VI-1,VI-4}', suspicion_level_branch = 3, "
+                + "suspicion_level_hq = 4 where id = ?", draftId);   // S6·P2 가 남긴 값 — 담당·승인자에게는 보인다(10번)
+
+        for (long who : new long[] {admin, otherInvestigator}) {
+            login(who, who == admin ? "ADMIN" : "INVESTIGATOR");
+
+            GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+            assertMetaOnly(r, draftId, caseId);
+
+            JsonNode body = om.readTree(om.writeValueAsString(StrDraftDetailResponse.from(r)));
+            for (String key : new String[] {"suspicion_types", "suspicion_level_branch", "suspicion_level_hq",
+                    "suspicion_types_recommended", "generation_id", "generator_version"}) {
+                assertThat(body.has(key)).as(key).isTrue();                      // 키는 있고
+                assertThat(body.get(key).isNull()).as(key).isTrue();             // 값은 null — 저장된 값이 새지 않는다
+            }
+        }
+    }
+
     // ---- 도우미 ----
 
-    private static void assertMetaOnly(GetStrDraft.Result r, long draftId) {
+    private void assertMetaOnly(GetStrDraft.Result r, long draftId, long caseId) {
         assertThat(r.access()).isEqualTo(Access.META_ONLY);
         assertThat(r.draftNo()).isEqualTo(DisplayNumber.draftNo(draftId));
         assertThat(r.status()).isNotNull();
@@ -310,11 +375,18 @@ class GetStrDraftDbTest {
         assertThat(r.facts()).isNull();
         assertThat(r.narrative()).isNull();
         assertThat(r.latestVerification()).isNull();
-        assertThat(r.caseNo()).isNull();
-        assertThat(r.caseStatus()).isNull();
+        assertThat(r.caseNo()).isEqualTo(caseNo(caseId));          // 상태·날짜는 준다 (계약서 S2 제한 응답)
+        assertThat(r.caseStatus()).isEqualTo("DRAFTED");
         assertThat(r.version()).isNull();
         assertThat(r.caseVersion()).isNull();
         assertThat(r.currentRevisionNo()).isNull();
+        assertThat(r.generationId()).isNull();
+        assertThat(r.suspicionTypes()).isNull();
+        assertThat(r.suspicionTypesRecommended()).isNull();
+        assertThat(r.suspicionLevelBranch()).isNull();
+        assertThat(r.suspicionLevelHq()).isNull();
+        assertThat(r.generatorVersion()).isNull();
+        assertThat(r.references()).isNull();
     }
 
     private long strViewCount(long draftId) {
