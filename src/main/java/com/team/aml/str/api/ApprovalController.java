@@ -3,6 +3,7 @@ package com.team.aml.str.api;
 import com.team.aml.shared.api.PageResponse;
 import com.team.aml.str.application.ApproveStrDraft;
 import com.team.aml.str.application.ListPendingApprovals;
+import com.team.aml.str.application.RejectStrDraft;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -26,10 +27,13 @@ public class ApprovalController {
 
     private final ListPendingApprovals listPendingApprovals;
     private final ApproveStrDraft approveStrDraft;
+    private final RejectStrDraft rejectStrDraft;
 
-    public ApprovalController(ListPendingApprovals listPendingApprovals, ApproveStrDraft approveStrDraft) {
+    public ApprovalController(ListPendingApprovals listPendingApprovals, ApproveStrDraft approveStrDraft,
+                              RejectStrDraft rejectStrDraft) {
         this.listPendingApprovals = listPendingApprovals;
         this.approveStrDraft = approveStrDraft;
+        this.rejectStrDraft = rejectStrDraft;
     }
 
     @Operation(summary = "승인 대기 목록",
@@ -51,5 +55,17 @@ public class ApprovalController {
                                          @Valid @RequestBody ApproveStrDraftRequest request) {
         return StrCaseChangeResponse.from(
                 approveStrDraft.execute(draftNo, request.caseVersion(), request.suspicionLevelHq()));
+    }
+
+    @Operation(summary = "STR 반려 (보완 요청·보고 안 함)",
+            description = "승인자만(그 밖 403). reason_code NEED_REVISION(보완 요청) 또는 NOT_REPORTABLE(보고 안 함), "
+                    + "comment 1~2,000자 둘 다 필수(400). 케이스 PENDING_APPROVAL·현재 초안이어야 한다(409 INVALID_CASE_TRANSITION). "
+                    + "지금 담당이거나 예전에 담당했던 사람이면 409 SELF_APPROVAL, case_version 다르면 409 CONCURRENT_UPDATE. "
+                    + "초안은 ACTIVE 그대로. 응답은 케이스 공통 변경 응답(rejection_reason_code 포함)")
+    @PostMapping("/{draftNo}/reject")
+    public StrCaseChangeResponse reject(@PathVariable String draftNo,
+                                        @Valid @RequestBody RejectStrDraftRequest request) {
+        return StrCaseChangeResponse.from(rejectStrDraft.execute(draftNo, request.caseVersion(),
+                request.reasonCode(), request.comment()));
     }
 }
