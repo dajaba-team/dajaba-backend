@@ -7,6 +7,7 @@ import com.team.aml.cases.domain.InvalidCaseTransitionException;
 import com.team.aml.cases.domain.NotAssigneeException;
 import com.team.aml.cases.domain.RejectionReasonCode;
 import com.team.aml.shared.domain.DisplayNumber;
+import com.team.aml.shared.domain.DraftSupersededException;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.str.domain.Approval;
 import com.team.aml.str.domain.ApprovalRepository;
@@ -264,9 +265,9 @@ class SubmitStrDraftDbTest {
 
     // 9
     @Test
-    void 확인_재생성으로_대체된_옛_초안으로_요청하면_지금은_409_INVALID_CASE_TRANSITION에_DB_숫자_id가_나간다() {
-        // 계약서 3절은 409 DRAFT_SUPERSEDED + details.current_draft_no(화면 번호)인데, 케이스를 먼저 잠그는 순서라
-        // cases 의 "현재 초안 아님"이 먼저 나간다. 맞추는 건 후속(지윤 님과 cases 예외 details 를 draft_no 로 바꿀지) — 그때 이 테스트를 고친다.
+    void 실패_재생성으로_대체된_옛_초안으로_요청하면_409_DRAFT_SUPERSEDED에_현재_초안_번호가_나간다() {
+        // 계약서 3절 — 409 DRAFT_SUPERSEDED + details.current_draft_no(화면 번호). 케이스를 먼저 잠그는 순서라 cases 가
+        // shared DraftSupersededException 을 던진다. DB 숫자 id 는 안 나간다(계약서 2.2) — SCRUM-223.
         long caseId = escalatedCase();
         long oldDraftId = savedDraft(caseId);
         String verificationId = verification(oldDraftId, "PASSED", "2026-11-12T01:00:00Z");
@@ -276,10 +277,13 @@ class SubmitStrDraftDbTest {
 
         assertThatThrownBy(() -> submitDraft.execute(DisplayNumber.draftNo(oldDraftId), before, verificationId,
                 List.of("VI-1"), 3))
-                .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> assertThat(e.details())
-                        .containsEntry("draft_id", oldDraftId)            // DB 숫자 (DRF- 번호 아님)
-                        .containsEntry("current_draft_id", newDraftId)
-                        .doesNotContainKey("current_draft_no"));
+                .isInstanceOfSatisfying(DraftSupersededException.class, e -> {
+                    assertThat(e.code()).isEqualTo("DRAFT_SUPERSEDED");
+                    assertThat(e.details())
+                            .containsEntry("draft_no", DisplayNumber.draftNo(oldDraftId))
+                            .containsEntry("current_draft_no", DisplayNumber.draftNo(newDraftId))
+                            .doesNotContainKeys("draft_id", "current_draft_id");   // DB 숫자 id 는 안 나간다
+                });
 
         assertThat(caseStatus(caseId)).isEqualTo("DRAFTED");
         assertThat(caseVersion(caseId)).isEqualTo(before);

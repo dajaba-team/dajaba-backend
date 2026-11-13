@@ -12,6 +12,8 @@ import com.team.aml.cases.domain.InvalidCaseTransitionException;
 import com.team.aml.cases.domain.NotAssigneeException;
 import com.team.aml.cases.domain.RejectionReasonCode;
 import com.team.aml.cases.domain.SelfApprovalException;
+import com.team.aml.shared.domain.DisplayNumber;
+import com.team.aml.shared.domain.DraftSupersededException;
 import com.team.aml.shared.security.AppUserDetails;
 import jakarta.persistence.OptimisticLockException;
 import org.junit.jupiter.api.AfterEach;
@@ -444,14 +446,14 @@ class AttachDraftToCaseDbTest {
     }
 
     @Test
-    void 실패_보완_반려라도_현재_초안이_아니면_409이고_반려_상태_그대로() {
+    void 실패_보완_반려라도_현재_초안이_아니면_409_DRAFT_SUPERSEDED이고_반려_상태_그대로() {
         Case c = prepare(CaseStatus.REJECTED);   // NEED_REVISION
         long other = newDraft(c.getId());        // 같은 케이스의 다른 초안(현재 초안 아님)
         loginAs(inv);
 
         assertThatThrownBy(() -> inTx(() -> touchForRevision.execute(c.getId(), other, c.getVersion())))
-                .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
-                        e -> assertThat(e.details()).containsEntry("current_draft_id", c.getCurrentDraftId()));
+                .isInstanceOfSatisfying(DraftSupersededException.class, e -> assertThat(e.details())
+                        .containsEntry("current_draft_no", DisplayNumber.draftNo(c.getCurrentDraftId())));
         Case after = cases.findById(c.getId()).orElseThrow();
         assertThat(after.getStatus()).isEqualTo(CaseStatus.REJECTED);
         assertThat(after.getRejectionReasonCode()).isEqualTo(RejectionReasonCode.NEED_REVISION);
@@ -459,7 +461,7 @@ class AttachDraftToCaseDbTest {
     }
 
     @Test
-    void 실패_현재_초안이_아니면_409() {
+    void 실패_재생성으로_대체된_옛_초안이면_409_DRAFT_SUPERSEDED() {
         Case c = prepare(CaseStatus.DRAFTED);
         long old = c.getCurrentDraftId();
         loginAs(inv);
@@ -468,8 +470,9 @@ class AttachDraftToCaseDbTest {
         long version = cases.findById(c.getId()).orElseThrow().getVersion();
 
         assertThatThrownBy(() -> inTx(() -> touchForRevision.execute(c.getId(), old, version)))
-                .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
-                        e -> assertThat(e.details()).containsEntry("current_draft_id", current));
+                .isInstanceOfSatisfying(DraftSupersededException.class, e -> assertThat(e.details())
+                        .containsEntry("draft_no", DisplayNumber.draftNo(old))
+                        .containsEntry("current_draft_no", DisplayNumber.draftNo(current)));
         assertThat(cases.findById(c.getId()).orElseThrow().getVersion()).isEqualTo(version);
     }
 
@@ -578,9 +581,9 @@ class AttachDraftToCaseDbTest {
         long version = dbVersion(c.getId());
 
         assertThatThrownBy(() -> inTx(() -> submitForApproval.execute(c.getId(), old, version)))
-                .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> assertThat(e.details())
-                        .containsEntry("action", CaseHistoryAction.SUBMIT_FOR_APPROVAL)
-                        .containsEntry("current_draft_id", current));
+                .isInstanceOfSatisfying(DraftSupersededException.class, e -> assertThat(e.details())
+                        .containsEntry("draft_no", DisplayNumber.draftNo(old))
+                        .containsEntry("current_draft_no", DisplayNumber.draftNo(current)));
         assertThat(dbVersion(c.getId())).isEqualTo(version);
 
         Case pending = prepare(CaseStatus.PENDING_APPROVAL);   // 이미 승인 대기 — 두 번 요청
@@ -654,8 +657,8 @@ class AttachDraftToCaseDbTest {
                 approveCase.execute(drafted.getId(), drafted.getCurrentDraftId(), drafted.getVersion())))
                 .isInstanceOf(InvalidCaseTransitionException.class);
         assertThatThrownBy(() -> inTx(() -> approveCase.execute(pending.getId(), other, pending.getVersion())))
-                .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> assertThat(e.details())
-                        .containsEntry("current_draft_id", pending.getCurrentDraftId()));
+                .isInstanceOfSatisfying(DraftSupersededException.class, e -> assertThat(e.details())
+                        .containsEntry("current_draft_no", DisplayNumber.draftNo(pending.getCurrentDraftId())));
         assertThatThrownBy(() -> inTx(() ->
                 approveCase.execute(pending.getId(), pending.getCurrentDraftId(), pending.getVersion() - 1)))
                 .isInstanceOf(OptimisticLockException.class);
@@ -697,6 +700,11 @@ class AttachDraftToCaseDbTest {
         assertThatThrownBy(() -> inTx(() -> rejectCase.execute(drafted.getId(), drafted.getCurrentDraftId(),
                 drafted.getVersion(), RejectionReasonCode.NOT_REPORTABLE, "보고 대상 아님")))
                 .isInstanceOf(InvalidCaseTransitionException.class);
+        long other = newDraft(drafted.getId());   // 현재 초안이 아닌 초안 → 사유 확인 전에 DRAFT_SUPERSEDED
+        assertThatThrownBy(() -> inTx(() -> rejectCase.execute(pending.getId(), other,
+                pending.getVersion(), RejectionReasonCode.NEED_REVISION, "거래 목적 보완 필요")))
+                .isInstanceOfSatisfying(DraftSupersededException.class, e -> assertThat(e.details())
+                        .containsEntry("current_draft_no", DisplayNumber.draftNo(pending.getCurrentDraftId())));
         Case after = cases.findById(pending.getId()).orElseThrow();
         assertThat(after.getStatus()).isEqualTo(CaseStatus.PENDING_APPROVAL);
         assertThat(after.getRejectionReasonCode()).isNull();

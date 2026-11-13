@@ -18,7 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>str 은 cases 의 담당자·상태를 볼 방법이 없으므로, 수정본 저장 때는 상태와 상관없이 <b>이것 하나만</b> 부른다
  * (#43 리뷰 2번, 채영 확인 A안 — ReopenCaseDraft 를 따로 두지 않는다). 잠근 뒤 여기서 확인한다(str.md "잠근 뒤 재확인"):
  * 케이스 잠금 조회(404) → version(409 CONCURRENT_UPDATE) → 담당자(403 NOT_ASSIGNEE)
- * → DRAFTED 또는 보완 반려(REJECTED+NEED_REVISION)이고 현재 초안이 draftId(409 INVALID_CASE_TRANSITION, details.action=REVISE_DRAFT).
+ * → 현재 초안이 있는데 draftId 가 아니면 409 DRAFT_SUPERSEDED(details.current_draft_no, SCRUM-223)
+ * → DRAFTED 또는 보완 반려(REJECTED+NEED_REVISION)이고 현재 초안이 있음(409 INVALID_CASE_TRANSITION, details.action=REVISE_DRAFT·draft_no).
  *
  * <ul>
  *   <li>DRAFTED — version 만 +1. 상태·칸·이력은 그대로.</li>

@@ -1,6 +1,7 @@
 package com.team.aml.cases.domain;
 
 import com.team.aml.shared.domain.BaseEntity;
+import com.team.aml.shared.domain.DraftSupersededException;
 import jakarta.persistence.*;
 
 import java.util.ArrayList;
@@ -164,8 +165,9 @@ public class Case extends BaseEntity {
      * 보완 반려 상태면 부르는 쪽(TouchCaseForRevision)이 이어서 reopenDraft 로 DRAFTED 로 되돌린다 (#43, 채영 확인 A안).
      */
     public void requireRevisable(Long draftId) {
-        if (!isRevisableStatus() || !Objects.equals(currentDraftId, draftId)) {
-            throw InvalidCaseTransitionException.revisionNotAllowed(status, rejectionReasonCode, draftId, currentDraftId);
+        requireNotSuperseded(draftId);
+        if (!isRevisableStatus() || !Objects.equals(currentDraftId, draftId)) {   // 여기선 현재 초안 없음(또는 draftId 없음)만 남는다
+            throw InvalidCaseTransitionException.revisionNotAllowed(status, rejectionReasonCode, draftId);
         }
     }
 
@@ -199,13 +201,25 @@ public class Case extends BaseEntity {
 
     /**
      * 승인 요청·승인·반려하려는 초안이 이 케이스의 현재 초안인지 본다(아무것도 바꾸지 않음).
-     * str 이 들고 온 초안이 그 사이 재생성으로 바뀌었으면 409 INVALID_CASE_TRANSITION (details.current_draft_id).
+     * str 이 들고 온 초안이 그 사이 재생성으로 바뀌었으면 409 DRAFT_SUPERSEDED (details.current_draft_no),
+     * 케이스에 현재 초안이 없으면(종결 등) 409 INVALID_CASE_TRANSITION (details.draft_no) — SCRUM-223.
      * SubmitCaseForApproval·ApproveCase·RejectCase 가 케이스를 잠근 뒤, 상태를 바꾸기 전에 부른다.
      */
     public void requireCurrentDraft(Long draftId, CaseHistoryAction action) {
         Objects.requireNonNull(draftId, "draftId");
-        if (!draftId.equals(currentDraftId)) {
-            throw InvalidCaseTransitionException.notCurrentDraft(status, rejectionReasonCode, action, draftId, currentDraftId);
+        requireNotSuperseded(draftId);
+        if (currentDraftId == null) {
+            throw InvalidCaseTransitionException.noCurrentDraft(status, rejectionReasonCode, action, draftId);
+        }
+    }
+
+    /**
+     * 현재 초안이 있는데 요청 초안과 다르면 409 DRAFT_SUPERSEDED — 상태 검사보다 먼저 (계약서 3절, SCRUM-223).
+     * 현재 초안이 없는 경우는 부르는 쪽이 INVALID_CASE_TRANSITION 으로 막는다.
+     */
+    private void requireNotSuperseded(Long draftId) {
+        if (currentDraftId != null && draftId != null && !currentDraftId.equals(draftId)) {
+            throw new DraftSupersededException(draftId, currentDraftId);
         }
     }
 

@@ -1,5 +1,7 @@
 package com.team.aml.cases.domain;
 
+import com.team.aml.shared.domain.DisplayNumber;
+import com.team.aml.shared.domain.DraftSupersededException;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -405,17 +407,29 @@ class CaseTest {
     // ── 승인 요청·승인·반려 대상 초안 (SubmitCaseForApproval·ApproveCase·RejectCase) ──────
 
     @Test
-    void 현재_초안이면_통과하고_다른_초안이거나_초안이_없으면_409에_현재_초안이_실린다() {
+    void 현재_초안이면_통과하고_다른_초안이면_409_DRAFT_SUPERSEDED에_현재_초안_번호가_실린다() {
         pending().requireCurrentDraft(DRAFT_ID, CaseHistoryAction.APPROVE);
 
         assertThatThrownBy(() -> pending().requireCurrentDraft(NEW_DRAFT_ID, CaseHistoryAction.APPROVE))
-                .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> assertThat(e.details())
-                        .containsEntry("action", CaseHistoryAction.APPROVE)
-                        .containsEntry("draft_id", NEW_DRAFT_ID)
-                        .containsEntry("current_draft_id", DRAFT_ID));
+                .isInstanceOfSatisfying(DraftSupersededException.class, e -> {
+                    assertThat(e.code()).isEqualTo("DRAFT_SUPERSEDED");
+                    assertThat(e.details())
+                            .containsEntry("draft_no", DisplayNumber.draftNo(NEW_DRAFT_ID))
+                            .containsEntry("current_draft_no", DisplayNumber.draftNo(DRAFT_ID))
+                            .doesNotContainKeys("draft_id", "current_draft_id");
+                });
+        // 상태가 맞지 않아도 대체된 초안이면 DRAFT_SUPERSEDED 가 먼저 (현재 초안 → 상태 순서)
+        assertThatThrownBy(() -> drafted().requireCurrentDraft(NEW_DRAFT_ID, CaseHistoryAction.APPROVE))
+                .isInstanceOf(DraftSupersededException.class);
+    }
+
+    @Test
+    void 현재_초안이_없으면_409_INVALID_CASE_TRANSITION에_요청_초안_번호만_실린다() {
         assertThatThrownBy(() -> escalated().requireCurrentDraft(DRAFT_ID, CaseHistoryAction.SUBMIT_FOR_APPROVAL))
-                .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
-                        e -> assertThat(e.details()).doesNotContainKey("current_draft_id"));
+                .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> assertThat(e.details())
+                        .containsEntry("action", CaseHistoryAction.SUBMIT_FOR_APPROVAL)
+                        .containsEntry("draft_no", DisplayNumber.draftNo(DRAFT_ID))
+                        .doesNotContainKeys("draft_id", "current_draft_id", "current_draft_no"));
     }
 
     // ── 수정본 저장 가능 여부 (TouchCaseForRevision, #43 A안) ──────
@@ -432,15 +446,24 @@ class CaseTest {
     }
 
     @Test
-    void 보고_대상_아님_반려_승인_대기_다른_초안이면_수정본_저장은_409_REVISE_DRAFT() {
+    void 보고_대상_아님_반려_승인_대기_현재_초안_없음이면_수정본_저장은_409_REVISE_DRAFT() {
         for (Case c : List.of(rejected(NOT_REPORTABLE), pending(), escalated())) {
             assertThatThrownBy(() -> c.requireRevisable(DRAFT_ID))
-                    .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
-                            e -> assertThat(e.details()).containsEntry("action", "REVISE_DRAFT"));
+                    .isInstanceOfSatisfying(InvalidCaseTransitionException.class, e -> assertThat(e.details())
+                            .containsEntry("action", "REVISE_DRAFT")
+                            .containsEntry("draft_no", DisplayNumber.draftNo(DRAFT_ID))
+                            .doesNotContainKeys("draft_id", "current_draft_id"));
         }
-        assertThatThrownBy(() -> rejected(NEED_REVISION).requireRevisable(NEW_DRAFT_ID))
-                .isInstanceOfSatisfying(InvalidCaseTransitionException.class,
-                        e -> assertThat(e.details()).containsEntry("current_draft_id", DRAFT_ID));
+    }
+
+    @Test
+    void 대체된_옛_초안의_수정본_저장은_상태와_상관없이_409_DRAFT_SUPERSEDED() {
+        for (Case c : List.of(drafted(), rejected(NEED_REVISION), pending())) {
+            assertThatThrownBy(() -> c.requireRevisable(NEW_DRAFT_ID))
+                    .isInstanceOfSatisfying(DraftSupersededException.class, e -> assertThat(e.details())
+                            .containsEntry("draft_no", DisplayNumber.draftNo(NEW_DRAFT_ID))
+                            .containsEntry("current_draft_no", DisplayNumber.draftNo(DRAFT_ID)));
+        }
     }
 
     @Test
