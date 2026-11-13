@@ -7,6 +7,7 @@ import com.team.aml.cases.domain.CaseHistoryRepository;
 import com.team.aml.cases.domain.CaseNotFoundException;
 import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.cases.domain.CaseStatus;
+import com.team.aml.cases.domain.CloseReason;
 import com.team.aml.cases.domain.CommentRequiredException;
 import com.team.aml.cases.domain.InvalidCaseTransitionException;
 import com.team.aml.cases.domain.NotAssigneeException;
@@ -80,6 +81,7 @@ class AttachDraftToCaseDbTest {
     }
 
     @Autowired AttachDraftToCase attachDraft;
+    @Autowired CloseCaseWithDraft closeWithDraft;   // SCRUM-235
     @Autowired TouchCaseForRevision touchForRevision;
     @Autowired SubmitCaseForApproval submitForApproval;
     @Autowired ApproveCase approveCase;
@@ -709,6 +711,124 @@ class AttachDraftToCaseDbTest {
         assertThat(after.getStatus()).isEqualTo(CaseStatus.PENDING_APPROVAL);
         assertThat(after.getRejectionReasonCode()).isNull();
         assertThat(after.getVersion()).isEqualTo(pending.getVersion());
+    }
+
+    // ── 초안 있는 종결 (CloseCaseWithDraft, SCRUM-235) ─────────
+
+    @Test
+    void 정상_DRAFTED를_종결하면_CLOSED_종결_사유와_CLOSE_이력이_남고_초안_참조는_그대로() {
+        Case c = prepare(CaseStatus.DRAFTED);
+        loginAs(inv);
+
+        long returned = tx().execute(s -> closeWithDraft.execute(c.getId(), c.getCurrentDraftId(), c.getVersion(),
+                CloseReason.NO_ACTION, "추가 조치 불필요"));
+
+        Case after = cases.findById(c.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.CLOSED);
+        assertThat(after.getCloseReason()).isEqualTo(CloseReason.NO_ACTION);
+        assertThat(after.getCurrentDraftId()).isEqualTo(c.getCurrentDraftId());
+        assertThat(returned).isEqualTo(after.getVersion()).isEqualTo(c.getVersion() + 1);
+        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId())).last().satisfies(h -> {
+            assertThat(h.getAction()).isEqualTo(CaseHistoryAction.CLOSE);
+            assertThat(h.getFromStatus()).isEqualTo(CaseStatus.DRAFTED);
+            assertThat(h.getReasonCode()).isEqualTo("NO_ACTION");
+            assertThat(h.getComment()).isEqualTo("추가 조치 불필요");
+            assertThat(h.getCreatedBy()).isEqualTo(inv);
+        });
+    }
+
+    @Test
+    void 정상_보고_안_함_반려를_종결하면_반려_코드를_지우고_과거_REJECT_이력은_남는다() {
+        Case c = prepare(CaseStatus.REJECTED, RejectionReasonCode.NOT_REPORTABLE);
+        loginAs(inv);
+
+        tx().executeWithoutResult(s -> closeWithDraft.execute(c.getId(), c.getCurrentDraftId(), c.getVersion(),
+                CloseReason.FALSE_POSITIVE, "보고 대상 아님 반려에 따라 종결"));
+
+        Case after = cases.findById(c.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.CLOSED);
+        assertThat(after.getRejectionReasonCode()).isNull();
+        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId()))
+                .filteredOn(h -> h.getAction() == CaseHistoryAction.REJECT)
+                .singleElement().satisfies(h -> assertThat(h.getReasonCode()).isEqualTo("NOT_REPORTABLE"));
+    }
+
+    @Test
+    void 실패_보완_반려나_승인_대기_승인_완료는_종결할_수_없고_아무것도_안_바뀐다() {
+        Case needRevision = prepare(CaseStatus.REJECTED, RejectionReasonCode.NEED_REVISION);
+        Case pending = prepare(CaseStatus.PENDING_APPROVAL);
+        Case approved = prepare(CaseStatus.PENDING_APPROVAL);
+        tx().executeWithoutResult(s -> {
+            Case x = cases.findById(approved.getId()).orElseThrow();
+            x.approve(apr, false);
+            histories.saveAll(cases.saveAndFlush(x).takePendingHistories());
+        });
+        loginAs(inv);
+
+        for (Case c : List.of(needRevision, pending, cases.findById(approved.getId()).orElseThrow())) {
+            assertThatThrownBy(() -> inTx(() -> closeWithDraft.execute(c.getId(), c.getCurrentDraftId(),
+                    c.getVersion(), CloseReason.NO_ACTION, "종결")))
+                    .isInstanceOf(InvalidCaseTransitionException.class);
+            assertUnchanged(c);
+        }
+    }
+
+    @Test
+    void 실패_초안이_없는_상신_건은_409_INVALID_CASE_TRANSITION_화면용_close로_가야_한다() {
+        Case escalated = prepare(CaseStatus.ESCALATED);
+        long otherDraft = prepare(CaseStatus.DRAFTED).getCurrentDraftId();
+        loginAs(inv);
+
+        assertThatThrownBy(() -> inTx(() -> closeWithDraft.execute(escalated.getId(), otherDraft,
+                escalated.getVersion(), CloseReason.NO_ACTION, "종결")))
+                .isInstanceOf(InvalidCaseTransitionException.class);
+        assertUnchanged(escalated);
+    }
+
+    @Test
+    void 실패_담당_아님_403_대체된_초안_409_version_409_없는_케이스_404_사유_없음은_거부되고_아무것도_안_바뀐다() {
+        Case c = prepare(CaseStatus.DRAFTED);
+        long other = prepare(CaseStatus.DRAFTED).getCurrentDraftId();
+
+        loginAs(inv2);
+        assertThatThrownBy(() -> inTx(() -> closeWithDraft.execute(c.getId(), c.getCurrentDraftId(), c.getVersion(),
+                CloseReason.NO_ACTION, "종결")))
+                .isInstanceOf(NotAssigneeException.class);
+
+        loginAs(inv);
+        assertThatThrownBy(() -> inTx(() -> closeWithDraft.execute(c.getId(), other, c.getVersion(),
+                CloseReason.NO_ACTION, "종결")))
+                .isInstanceOfSatisfying(DraftSupersededException.class, e -> assertThat(e.details())
+                        .containsEntry("current_draft_no", DisplayNumber.draftNo(c.getCurrentDraftId())));
+        assertThatThrownBy(() -> inTx(() -> closeWithDraft.execute(c.getId(), c.getCurrentDraftId(),
+                c.getVersion() - 1, CloseReason.NO_ACTION, "종결")))
+                .isInstanceOf(OptimisticLockException.class);
+        assertThatThrownBy(() -> inTx(() -> closeWithDraft.execute(Long.MAX_VALUE, c.getCurrentDraftId(), 0L,
+                CloseReason.NO_ACTION, "종결")))
+                .isInstanceOf(CaseNotFoundException.class);
+        assertThatThrownBy(() -> inTx(() -> closeWithDraft.execute(c.getId(), c.getCurrentDraftId(), c.getVersion(),
+                CloseReason.NO_ACTION, "  ")))
+                .isInstanceOf(CommentRequiredException.class);
+        assertUnchanged(c);
+    }
+
+    @Test
+    void 실패_초안_있는_종결도_str_트랜잭션_밖에서는_거부되고_바깥이_롤백되면_같이_롤백() {
+        Case c = prepare(CaseStatus.DRAFTED);
+        loginAs(inv);
+
+        assertThatThrownBy(() -> closeWithDraft.execute(c.getId(), c.getCurrentDraftId(), c.getVersion(),
+                CloseReason.NO_ACTION, "종결"))
+                .isInstanceOf(IllegalTransactionStateException.class);
+
+        int historyCount = histories.findByCaseIdOrderByIdAsc(c.getId()).size();
+        tx().executeWithoutResult(s -> {            // str 쪽(초안 SUPERSEDED 등)이 실패한 경우
+            closeWithDraft.execute(c.getId(), c.getCurrentDraftId(), c.getVersion(), CloseReason.NO_ACTION, "종결");
+            s.setRollbackOnly();
+        });
+        assertUnchanged(c);
+        assertThat(cases.findById(c.getId()).orElseThrow().getCloseReason()).isNull();
+        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId())).hasSize(historyCount);
     }
 
     @Test
