@@ -10,7 +10,7 @@
 
 **상태 9개 + 반려 코드** [가이드 §4, 안건 11·24]
 
-`OPEN · REVIEWING · ESCALATED · DRAFTED · PENDING_APPROVAL · APPROVED · REPORTED · REJECTED · CLOSED` (`REPORTED`·`CLOSED`는 끝). `APPROVED`는 내부 승인 완료이고, 모의 제출(API 12-2)을 거쳐 `REPORTED`가 돼요 — 엔티티는 `Case.report()`, 이력 action은 `REPORT`(V010, SCRUM-174). 모의 제출 API·권한(APPROVER)은 str 몫이에요. 반려 이유는 상태를 늘리지 않고 **별도 값** `rejection_reason_code`(`NEED_REVISION`·`NOT_REPORTABLE`)로 둬요. 〔초안: REJECTED일 때 필수, 다른 상태에선 null — CASES 명세 §2.1, 지우는 시점은 STR과 공유 필요〕
+`OPEN · REVIEWING · ESCALATED · DRAFTED · PENDING_APPROVAL · APPROVED · REPORTED · REJECTED · CLOSED` (`REPORTED`·`CLOSED`는 끝). `APPROVED`는 내부 승인 완료이고, 모의 제출(API 12-2)을 거쳐 `REPORTED`가 돼요 — 엔티티는 `Case.report()`, 이력 action은 `REPORT`(V010, SCRUM-174), str이 부르는 공개 기능은 `ReportCase`(SCRUM-234). 모의 제출 API·권한(APPROVER)은 str 몫이에요(SCRUM-240). 반려 이유는 상태를 늘리지 않고 **별도 값** `rejection_reason_code`(`NEED_REVISION`·`NOT_REPORTABLE`)로 둬요. 〔초안: REJECTED일 때 필수, 다른 상태에선 null — CASES 명세 §2.1, 지우는 시점은 STR과 공유 필요〕
 
 **전이 표** (확정) [가이드 §4, 레퍼런스 §5.1, 안건 11·24]
 | 현재 → 결과 | 메서드 | 누가 | 조건 |
@@ -131,13 +131,14 @@
 | `AttachDraftToCase.execute(caseId, draftId, expectedVersion)` → 새 `cases.version` | 초안 insert **뒤에** 연결 → DRAFTED, 반려 코드 지움, `ATTACH_DRAFT` 이력. 돌려준 값을 str이 생성 응답 `case_version`에 실어요 [SCRUM-141] | `lock`과 같은 검사를 한 번 더 |
 | `TouchCaseForRevision.execute(caseId, draftId, expectedVersion)` → 새 `cases.version` | 수정본 저장 전에 잠그고 확인한 뒤 케이스 version +1. **DRAFTED**면 version만 +1(상태·이력 그대로), **보완 반려(REJECTED+NEED_REVISION)**면 DRAFTED로 되돌리고 반려 코드 지움 + `REOPEN_DRAFT` 이력 (version은 상태 변경으로 +1, 두 번 안 올림). 돌려준 값을 str이 수정 응답 `case_version`에 실어요 [SCRUM-141] | 404 → version 409 → 담당자 403 → 현재 초안이 있는데 `draftId`가 아니면 409 `DRAFT_SUPERSEDED`(`details.draft_no`·`current_draft_no`, 상태보다 먼저) → DRAFTED 또는 REJECTED+NEED_REVISION이고 현재 초안이 있음(아니면 409 `INVALID_CASE_TRANSITION`, `details.action = REVISE_DRAFT`·`draft_no`) [SCRUM-223]. 동시 승인 요청과 version으로 부딪히게 해요(NFR-APR-02, 미결 20). str은 상태를 볼 수 없어서 수정본 저장 때는 상태와 상관없이 이것 하나만 불러요 [#43 리뷰 2번, 11/5 채영 확인 A안] |
 
-**str에 주는 공개 기능 — 승인 요청·승인·반려** 셋 다 `Propagation.MANDATORY`, 새 `cases.version`을 돌려줘요(str이 응답 `case_version`에 실음). str이 `approvals` 같은 케이스 FK 행을 넣기 **전에** 불러요(아래 "str 호출 순서"와 같은 이유 — FK insert의 KEY SHARE와 `FOR UPDATE`가 부딪혀 교착).
+**str에 주는 공개 기능 — 승인 요청·승인·반려·모의 제출** 넷 다 `Propagation.MANDATORY`, 새 `cases.version`을 돌려줘요(str이 응답 `case_version`에 실음). str이 `approvals` 같은 케이스 FK 행을 넣기 **전에** 불러요(아래 "str 호출 순서"와 같은 이유 — FK insert의 KEY SHARE와 `FOR UPDATE`가 부딪혀 교착).
 
 | 유스케이스 | 하는 일 | 검사 순서·오류 |
 |---|---|---|
 | `SubmitCaseForApproval.execute(caseId, draftId, expectedVersion)` | DRAFTED → PENDING_APPROVAL, `SUBMIT_FOR_APPROVAL` 이력 (S6) | 케이스 잠금 조회 404 `CASE_NOT_FOUND` → version 409 `CONCURRENT_UPDATE` → 담당자 403 `NOT_ASSIGNEE` → 현재 초안이 `draftId`(다른 초안이면 409 `DRAFT_SUPERSEDED` `details.draft_no`·`current_draft_no`, 현재 초안이 없으면(종결 등) 409 `INVALID_CASE_TRANSITION` `details.draft_no`) → 상태 409 `INVALID_CASE_TRANSITION`. 본문 검증 통과·`NARRATIVE_UNCHANGED`는 str `ApprovalGate` 몫 |
 | `ApproveCase.execute(caseId, draftId, expectedVersion)` | PENDING_APPROVAL → APPROVED, `APPROVE` 이력 (P2) | 404 → version 409 → 현재 초안 409 → 상태 409 → 승인자가 지금·예전 담당이면 409 `SELF_APPROVAL`(안에서 `WasCaseAssignee`를 불러요 — str이 따로 넘기지 않음). 역할(APPROVER)은 `SecurityConfig`·str `ApprovalGate.requireApprover` |
 | `RejectCase.execute(caseId, draftId, expectedVersion, code, comment)` | PENDING_APPROVAL → REJECTED, 반려 코드 저장, `REJECT` 이력(`reason_code`·사유) (P3) | `ApproveCase`와 같고 마지막에 사유 필수(`CommentRequiredException`) |
+| `ReportCase.execute(caseId, draftId, expectedVersion)` | APPROVED → REPORTED(끝 상태), `REPORT` 이력에 제출자 (P4 모의 제출, 실제 전송 없음) [SCRUM-234] | 404 → version 409 → 현재 초안 409(`DRAFT_SUPERSEDED`·`INVALID_CASE_TRANSITION`) → 상태 409 `INVALID_CASE_TRANSITION`(APPROVED만 — 두 번 제출하면 두 번째는 409). 역할(APPROVER)은 `SecurityConfig` POST `/approvals/**`·str. 지금·예전 담당 검사는 안 해요(내용 판단은 승인에서 끝남) 〔확인 필요: 제출자를 승인자로 한정할지 — SCRUM-240〕 |
 
 - **대체된 옛 초안 (SCRUM-223)** — S3·S6·P2·P3 모두 str이 케이스를 먼저 잠그는 순서라 cases가 먼저 봐요. 케이스에 현재 초안이 있고 요청 초안과 다르면 409 `DRAFT_SUPERSEDED` + `details.current_draft_no`(`DisplayNumber.draftNo`, 계약서 3절) — 화면은 그 번호로 초안을 다시 불러요. 예외는 shared `DraftSupersededException`(cases → str 참조가 안 돼서). 남는 `INVALID_CASE_TRANSITION` details도 숫자 id 대신 `draft_no`(계약서 2.2).
 - 승인자·담당자는 `CurrentUser`에서 꺼내요(인자로 안 받음). 동시에 온 수정본 저장(`TouchCaseForRevision`)과는 version으로 부딪혀 뒤 요청이 409.
