@@ -13,6 +13,7 @@ import java.util.List;
 
 /**
  * S2 응답. 키는 META_ONLY 여도 모두 나간다(값만 null) — @JsonInclude 를 쓰지 않는다.
+ * suspicion_*·generation_id·generator_version·references 는 계약서 S2 토글 (11/13 추가, generation_id·generator_version 은 계약서에 한 줄 추가 필요).
  * facts 의 *account_key 는 원문 대신 *account_no(가린 값)·*account_ref 로 바꾼다 (계약서 2.4, 미결 19).
  */
 public record StrDraftDetailResponse(
@@ -27,7 +28,14 @@ public record StrDraftDetailResponse(
         JsonNode facts,
         List<Narrative> narrative,
         Integer currentRevisionNo,
-        JsonNode latestVerification
+        JsonNode latestVerification,
+        String generationId,
+        String generatorVersion,
+        List<String> suspicionTypes,
+        List<String> suspicionTypesRecommended,
+        Integer suspicionLevelBranch,
+        Integer suspicionLevelHq,
+        List<JsonNode> references
 ) {
 
     private static final String ACCOUNT_KEY = "account_key";
@@ -45,7 +53,14 @@ public record StrDraftDetailResponse(
                 r.facts() == null ? null : maskAccountKeys(r.facts()),
                 r.narrative() == null ? null : r.narrative().stream().map(Narrative::from).toList(),
                 r.currentRevisionNo(),
-                r.latestVerification());
+                r.latestVerification(),
+                r.generationId(),
+                r.generatorVersion(),
+                r.suspicionTypes(),
+                r.suspicionTypesRecommended(),
+                r.suspicionLevelBranch(),
+                r.suspicionLevelHq(),
+                r.references());
     }
 
     /** 원본은 두고 복사본을 고친다. */

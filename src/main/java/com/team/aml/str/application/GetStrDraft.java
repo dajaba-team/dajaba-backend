@@ -62,7 +62,7 @@ public class GetStrDraft {
         StrDraft draft = drafts.findById(draftId).orElseThrow(() -> new DraftNotFoundException(draftNo));
         Case c = cases.findById(draft.getCaseId()).orElseThrow(() -> new CaseNotFoundException(draft.getCaseId()));
         accessLog.strView(draftId);
-        if (!canReadBody(Role.valueOf(me.role()), c, me.userId())) return Result.metaOnly(draft);
+        if (!canReadBody(Role.valueOf(me.role()), c, me.userId())) return Result.metaOnly(draft, c);
         JsonNode verification = verifications.findLatestByDraftId(draftId).orElse(null);
         return Result.full(draft, c, verification, currentNarrative.of(draft));
     }
@@ -87,7 +87,16 @@ public class GetStrDraft {
 
     public enum Access { FULL, META_ONLY }
 
-    /** 조회 결과. META_ONLY 면 draftNo·access·status·producedAt 만 채우고 나머지는 null. */
+    /**
+     * 조회 결과. META_ONLY 면 draftNo·access·caseNo·caseStatus·status·producedAt 만 채우고 나머지는 null
+     * (계약서 S2 제한 응답 — "상태·날짜만". 케이스 번호·상태는 C1 목록에서 세 역할 모두 보는 값).
+     *
+     * @param suspicionTypes            조사역이 승인 요청(S6) 때 고른 의심 유형. 요청 전이면 [] — 반려 뒤 다시 열면 지난 값
+     * @param suspicionTypesRecommended 룰이 추천한 유형. 룰 → 서식 VI 유형 표가 아직 없어 지금은 항상 [] (rules.md 미결 4)
+     * @param suspicionLevelBranch      지점용 의심 정도 1~5 (S6). 요청 전이면 null
+     * @param suspicionLevelHq          본점용 의심 정도 1~5 (P2). 승인 전이면 null
+     * @param references                참고 사례(RAG) 0~3건. AI 초안 응답에 아직 없어 지금은 항상 [] (규약 5.2·SCRUM-125 확인 뒤)
+     */
     public record Result(
             String draftNo,
             Access access,
@@ -100,7 +109,14 @@ public class GetStrDraft {
             JsonNode facts,
             List<NarrativeSection> narrative,
             Integer currentRevisionNo,
-            JsonNode latestVerification
+            JsonNode latestVerification,
+            String generationId,
+            String generatorVersion,
+            List<String> suspicionTypes,
+            List<String> suspicionTypesRecommended,
+            Integer suspicionLevelBranch,
+            Integer suspicionLevelHq,
+            List<JsonNode> references
     ) {
 
         /** narrative = CurrentNarrative — 문장은 지금 수정본, 근거는 같은 해시 최신 검증의 narrative_refs 우선. */
@@ -108,7 +124,10 @@ public class GetStrDraft {
             int currentRevisionNo = draft.getCurrentRevision().getRevisionNo();
             return new Result(DisplayNumber.draftNo(draft.getId()), Access.FULL, c.getCaseNo(), c.getStatus().name(),
                     draft.getStatus(), draft.getVersion(), c.getVersion(), draft.getProducedAt(), draft.getFacts(),
-                    narrative, currentRevisionNo, withIsCurrent(latestVerification, NarrativeHash.of(draft.currentBody())));
+                    narrative, currentRevisionNo, withIsCurrent(latestVerification, NarrativeHash.of(draft.currentBody())),
+                    draft.getGenerationId(), draft.getGeneratorVersion(),
+                    draft.getSuspicionTypes(), List.of(), draft.getSuspicionLevelBranch(), draft.getSuspicionLevelHq(),
+                    List.of());
         }
 
         /**
@@ -124,9 +143,10 @@ public class GetStrDraft {
             return v;
         }
 
-        static Result metaOnly(StrDraft draft) {
-            return new Result(DisplayNumber.draftNo(draft.getId()), Access.META_ONLY, null, null, draft.getStatus(),
-                    null, null, draft.getProducedAt(), null, null, null, null);
+        static Result metaOnly(StrDraft draft, Case c) {
+            return new Result(DisplayNumber.draftNo(draft.getId()), Access.META_ONLY, c.getCaseNo(), c.getStatus().name(),
+                    draft.getStatus(), null, null, draft.getProducedAt(), null, null, null, null,
+                    null, null, null, null, null, null, null);
         }
     }
 }
