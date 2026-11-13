@@ -7,6 +7,7 @@ import com.team.aml.cases.domain.InvalidCaseTransitionException;
 import com.team.aml.cases.domain.SelfApprovalException;
 import com.team.aml.shared.domain.DisplayNumber;
 import com.team.aml.shared.security.AppUserDetails;
+import com.team.aml.str.domain.DraftNotVerifiedException;
 import com.team.aml.str.domain.NarrativeHash;
 import com.team.aml.str.domain.NotApproverException;
 import com.team.aml.str.domain.StrDraftRepository;
@@ -213,6 +214,31 @@ class ApproveStrDraftDbTest {
 
         assertThat(approvalCount(draftId)).isZero();
         assertThat(draftStatus(draftId)).isEqualTo("ACTIVE");
+    }
+
+    // 7
+    @Test
+    void 실패_지금_본문의_최신_검증이_통과가_아니면_409_DRAFT_NOT_VERIFIED이고_케이스_APPROVED도_되돌아간다() {
+        // 순서 고정 (#106 리뷰 1번): ApproveCase 가 먼저 케이스를 APPROVED·version+1 로 바꾸고 flush 한 뒤 게이트가 막는다.
+        // ApproveCase 는 Propagation.MANDATORY 라 같은 트랜잭션 — 게이트 예외로 그 변경까지 전부 롤백돼야 한다.
+        // 순서를 바꾸거나 cases 쪽 전파 설정이 바뀌어 "케이스만 APPROVED" 가 남으면 이 테스트가 깨진다.
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        submit(caseId, draftId);                              // 요청 때는 PASSED
+        jdbc.update("insert into ops.verification_results(verification_id, draft_id, generation_id, revision_no, "
+                        + "narrative_sha256, status, verifier_version, produced_at, payload, created_by) "
+                        + "values (?, ?, ?, 1, ?, 'VERIFY_UNAVAILABLE', 'verify_v1', clock_timestamp(), '{}'::jsonb, ?)",
+                "v-late-" + draftId, draftId, "g-" + draftId, currentHash(draftId), investigator);
+                                                              // 같은 본문의 더 최근 검증이 통과 아님 (정상 화면 흐름엔 없지만 게이트는 막아야 함)
+        long before = caseVersion(caseId);
+        login(approver, "APPROVER");
+
+        assertThatThrownBy(() -> approveDraft.execute(DisplayNumber.draftNo(draftId), before, 4))
+                .isInstanceOf(DraftNotVerifiedException.class);
+
+        assertNothingApproved(caseId, draftId, before);       // PENDING_APPROVAL·version 그대로 = ApproveCase 변경도 롤백
+        assertThat(jdbc.queryForObject("select count(*) from ops.case_history where case_id = ? and action = 'APPROVE'",
+                Long.class, caseId)).isZero();
     }
 
     // ---- 도우미 ----
