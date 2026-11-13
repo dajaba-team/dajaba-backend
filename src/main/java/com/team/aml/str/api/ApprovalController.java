@@ -60,6 +60,7 @@ public class ApprovalController {
     @Operation(summary = "STR 반려 (보완 요청·보고 안 함)",
             description = "승인자만(그 밖 403). reason_code NEED_REVISION(보완 요청) 또는 NOT_REPORTABLE(보고 안 함), "
                     + "comment 1~2,000자 둘 다 필수(400). 케이스 PENDING_APPROVAL·현재 초안이어야 한다(409 INVALID_CASE_TRANSITION). "
+                    + "재생성으로 대체된 옛 초안이면 409 DRAFT_SUPERSEDED(details.current_draft_no). "
                     + "지금 담당이거나 예전에 담당했던 사람이면 409 SELF_APPROVAL, case_version 다르면 409 CONCURRENT_UPDATE. "
                     + "초안은 ACTIVE 그대로. 응답은 케이스 공통 변경 응답(rejection_reason_code 포함)")
     @PostMapping("/{draftNo}/reject")

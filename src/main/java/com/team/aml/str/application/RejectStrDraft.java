@@ -23,8 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>승인자 역할 — 아니면 403 NOT_APPROVER (ApproveStrDraft 와 같음)</li>
  *   <li>초안 읽기 — 없으면 404 DRAFT_NOT_FOUND</li>
  *   <li>cases.RejectCase — 케이스 잠금 → version 409 → 현재 초안·PENDING_APPROVAL 409 → 지금·예전 담당이면 409 SELF_APPROVAL
- *       → 사유 필수. 재생성으로 대체된 옛 초안도
- *       여기서 409 로 막힌다 (cases 의 "현재 초안" 검사 — 응답 코드는 #104 SCRUM-223 이 정한다, S6·P2 와 같음). approvals INSERT <b>전에</b> 부른다 (RejectCase 주석 "부르는 순서")</li>
+ *       → 사유 필수. 재생성으로 대체된 옛 초안도 여기서 409 DRAFT_SUPERSEDED 로 막힌다
+ *       (cases 의 "현재 초안" 검사, SCRUM-223 — S6·P2 와 같음). approvals INSERT <b>전에</b> 부른다 (RejectCase 주석 "부르는 순서")</li>
  *   <li>초안이 사용 중인지(409 DRAFT_LOCKED) → approvals 반려 한 줄. 초안은 ACTIVE 그대로 — 보완 요청이면 조사역이 고쳐 쓰고,
  *       보고 안 함이면 초안 있는 종료(A6)가 SUPERSEDED 로 바꾼다</li>
  * </ol>
