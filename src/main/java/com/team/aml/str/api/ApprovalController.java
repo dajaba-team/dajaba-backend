@@ -1,6 +1,7 @@
 package com.team.aml.str.api;
 
 import com.team.aml.shared.api.PageResponse;
+import com.team.aml.str.application.ApproveStrDraft;
 import com.team.aml.str.application.ListPendingApprovals;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -8,6 +9,9 @@ import jakarta.validation.Valid;
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -21,9 +25,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class ApprovalController {
 
     private final ListPendingApprovals listPendingApprovals;
+    private final ApproveStrDraft approveStrDraft;
 
-    public ApprovalController(ListPendingApprovals listPendingApprovals) {
+    public ApprovalController(ListPendingApprovals listPendingApprovals, ApproveStrDraft approveStrDraft) {
         this.listPendingApprovals = listPendingApprovals;
+        this.approveStrDraft = approveStrDraft;
     }
 
     @Operation(summary = "승인 대기 목록",
@@ -33,5 +39,17 @@ public class ApprovalController {
     public PageResponse<PendingApprovalResponse> list(@Valid @ParameterObject @ModelAttribute ApprovalListQuery query) {
         return PageResponse.from(listPendingApprovals.execute(query.pageOrDefault(), query.sizeOrDefault())
                 .map(PendingApprovalResponse::from));
+    }
+
+    @Operation(summary = "STR 승인",
+            description = "승인자만(그 밖 403). 케이스 PENDING_APPROVAL·현재 초안이어야 한다(409 INVALID_CASE_TRANSITION). "
+                    + "지금 담당이거나 예전에 담당했던 사람이면 409 SELF_APPROVAL, case_version 다르면 409 CONCURRENT_UPDATE, "
+                    + "지금 본문의 최신 검증이 PASSED 가 아니면 409 DRAFT_NOT_VERIFIED. 본점 의심 정도 1~5 필수(400). "
+                    + "승인 기록·초안 LOCKED·케이스 APPROVED 가 한 번에. 응답은 케이스 공통 변경 응답")
+    @PostMapping("/{draftNo}/approve")
+    public StrCaseChangeResponse approve(@PathVariable String draftNo,
+                                         @Valid @RequestBody ApproveStrDraftRequest request) {
+        return StrCaseChangeResponse.from(
+                approveStrDraft.execute(draftNo, request.caseVersion(), request.suspicionLevelHq()));
     }
 }
