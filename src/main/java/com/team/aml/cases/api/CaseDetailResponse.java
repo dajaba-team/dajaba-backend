@@ -7,6 +7,7 @@ import com.team.aml.cases.application.UserRef;
 import com.team.aml.cases.domain.CaseAction;
 import com.team.aml.cases.domain.CaseStatus;
 import com.team.aml.cases.domain.CloseReason;
+import com.team.aml.cases.domain.OpenedScore;
 import com.team.aml.cases.domain.RejectionReasonCode;
 import com.team.aml.cases.domain.ScoreBand;
 
@@ -18,7 +19,8 @@ import java.util.List;
  * 통합 상세 (계약서 C2, CASES 명세 API-02). 키는 계약서 모양 그대로 두고, 아직 채울 수 없는 칸은 null·[] 로 보낸다.
  * <ul>
  *   <li>alert·latest_score — detection GetAlertSummary 로 채운다 (SCRUM-152)</li>
- *   <li>score·score_band·policy_version — 계약서 Q2 MVP: latest_score 와 같은 값 (생성 때 스냅샷은 후속)</li>
+ *   <li>score·score_band·policy_version — 계약서 Q2 MVP: latest_score 와 같은 값</li>
+ *   <li>opened_score — 케이스 생성 당시 점수·모델·정책 스냅샷 (V013, SCRUM-237). 없으면 null. 계약서 C2 에 추가 필요</li>
  *   <li>latest_summary — API-13 과 같은 값 (요약 없으면 null, SCRUM-175)</li>
  *   <li>investigator_notes — 마지막 NOTE 행 (메모를 쓴 적이 없으면 null, SCRUM-176)</li>
  *   <li>aggregates — 근거 거래 전체로 통화별 유입·유출, 경유·자기계좌 거래 제외 (SCRUM-179)</li>
@@ -32,6 +34,7 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
                                  String policyVersion, RejectionReasonCode rejectionReasonCode, long version,
                                  Instant createdAt, Instant updatedAt, GetCaseDetail.Alert alert, Object customer,
                                  String investigatorNotes, CloseReason closeReason, GetCaseDetail.LatestScore latestScore,
+                                 OpenedScoreResponse openedScore,
                                  CaseAggregates aggregates, CaseSummaryResult.Summary latestSummary, String currentDraftNo, Object currentDraft,
                                  List<Object> priorAlerts, List<GetCaseDetail.History> history,
                                  List<CaseAction> availableActions) {
@@ -42,12 +45,26 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
         availableActions = availableActions == null ? List.of() : List.copyOf(availableActions);
     }
 
+    /**
+     * 생성 당시 스냅샷 (C2 opened_score). 내부 점수 행 id(opened_score_id)는 내보내지 않는다.
+     * V013 전에 만든 케이스는 점수·모델만 있고 정책 세 칸은 null.
+     */
+    public record OpenedScoreResponse(BigDecimal score, String modelVersion, String featureVersion,
+                                      String policyVersion, BigDecimal lowToMedium, BigDecimal mediumToHigh) {
+
+        static OpenedScoreResponse from(OpenedScore s) {
+            return s == null ? null : new OpenedScoreResponse(s.score(), s.modelVersion(), s.featureVersion(),
+                    s.policyVersion(), s.lowToMedium(), s.mediumToHigh());
+        }
+    }
+
     static CaseDetailResponse from(GetCaseDetail.Result r) {
         return new CaseDetailResponse(r.caseNo(), r.status(), AccountDisplay.ref(r.accountKey()),
                 AccountDisplay.maskedNo(r.accountKey()), r.entityId(), r.assignee(), r.latestScore().score(),
                 r.latestScore().scoreBand(), r.policyVersion(),
                 r.rejectionReasonCode(), r.version(), r.createdAt(), r.updatedAt(), r.alert(), null, r.investigatorNotes(),
-                r.closeReason(), r.latestScore(), r.aggregates(), r.latestSummary(),
+                r.closeReason(), r.latestScore(), OpenedScoreResponse.from(r.openedScore()), r.aggregates(),
+                r.latestSummary(),
                 CaseChangeResponse.draftNo(r.currentDraftId()), null, List.of(), r.history(), r.availableActions());
     }
 }

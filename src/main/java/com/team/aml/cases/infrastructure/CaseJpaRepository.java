@@ -41,6 +41,46 @@ public interface CaseJpaRepository extends Repository<Case, Long>, CaseRepositor
                       Pageable pageable);
 
     @Override
+    default Page<Case> searchByScore(Collection<CaseStatus> statuses, Long assigneeId, Instant createdFrom,
+                                     Instant createdTo, boolean ascending, Pageable pageable) {
+        return ascending ? searchByScoreAsc(statuses, assigneeId, createdFrom, createdTo, pageable)
+                : searchByScoreDesc(statuses, assigneeId, createdFrom, createdTo, pageable);
+    }
+
+    // 점수 순 — 없는 점수는 맨 뒤(nulls last), 동률은 created_at DESC, id DESC. 내림차순은 cases_opened_score_idx (V013)
+    @Query(value = """
+            select c from InvestigationCase c
+            where c.status in :statuses
+              and (:assigneeId is null or c.assigneeId = :assigneeId)
+              and c.createdAt >= :createdFrom and c.createdAt < :createdTo
+            order by c.openedScore.score desc nulls last, c.createdAt desc, c.id desc
+            """, countQuery = """
+            select count(c) from InvestigationCase c
+            where c.status in :statuses
+              and (:assigneeId is null or c.assigneeId = :assigneeId)
+              and c.createdAt >= :createdFrom and c.createdAt < :createdTo
+            """)
+    Page<Case> searchByScoreDesc(@Param("statuses") Collection<CaseStatus> statuses,
+                                 @Param("assigneeId") Long assigneeId, @Param("createdFrom") Instant createdFrom,
+                                 @Param("createdTo") Instant createdTo, Pageable pageable);
+
+    @Query(value = """
+            select c from InvestigationCase c
+            where c.status in :statuses
+              and (:assigneeId is null or c.assigneeId = :assigneeId)
+              and c.createdAt >= :createdFrom and c.createdAt < :createdTo
+            order by c.openedScore.score asc nulls last, c.createdAt desc, c.id desc
+            """, countQuery = """
+            select count(c) from InvestigationCase c
+            where c.status in :statuses
+              and (:assigneeId is null or c.assigneeId = :assigneeId)
+              and c.createdAt >= :createdFrom and c.createdAt < :createdTo
+            """)
+    Page<Case> searchByScoreAsc(@Param("statuses") Collection<CaseStatus> statuses,
+                                @Param("assigneeId") Long assigneeId, @Param("createdFrom") Instant createdFrom,
+                                @Param("createdTo") Instant createdTo, Pageable pageable);
+
+    @Override
     @Query("""
             select new com.team.aml.cases.domain.AssigneeCaseCount(c.assigneeId, count(c))
             from InvestigationCase c

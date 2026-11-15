@@ -93,7 +93,7 @@ public class OpenCasesFromAlerts {
                     notHigh++;
                     continue;
                 }
-                openOne.execute(alert);
+                openOne.execute(alert, grade);
                 opened++;
             } catch (CaseAlreadyOpenedException e) {
                 alreadyOpened++;

@@ -111,6 +111,9 @@ class CaseApiTest {
         assertThat(latestScore.get("score").isNull()).isTrue();
         assertThat(latestScore.get("score_band").isNull()).isTrue();
         assertThat(detail.get("score").isNull()).isTrue();          // 점수 전이라 맨 위 score 도 null (Q2 MVP)
+        assertThat(detail.has("opened_score")).isTrue();            // 생성 당시 스냅샷 키는 늘 있다 (SCRUM-237, 계약서 2.3)
+        assertThat(detail.get("opened_score").isNull()).isTrue();   // 스냅샷 없이 만든 케이스
+        assertThat(detailBody).doesNotContain("opened_score_id").doesNotContain("score_id");
         assertThat(latestScore.get("reasons").isArray()).isTrue();
         assertThat(detailBody).doesNotContain(accountKey).doesNotContain("account_key");
 

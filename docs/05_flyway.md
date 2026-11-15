@@ -72,9 +72,10 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 | V010 | `case_history.from_assignee_id`·`to_assignee_id` + CHECK 두 개(배정·재배정 아닌 행은 빈칸 / 배정·재배정은 값 필수 — 예전 이력 때문에 `NOT VALID`). 예전 담당 자기 승인 막기 (미결 32). 같은 파일에서 `case_history.action` CHECK에 `REPORT`(모의 제출) 추가 (SCRUM-174) | 지윤 (W4) | W4 (11/10) | PR | — |
 | V011 | 룰 시드 — `R02_FAN_IN` 버전 1 (`window_hours` 96, `min_distinct_senders` 5, 켬). 다른 룰은 구현할 때 새 번호로 | 준혁 (SCRUM-99) | W4 (11/9) | PR | — |
 | V012 | `batch_runs_succeeded_uq`를 다시 만들어 `SCORE_REQUEST`만 뺌 — 점수 배치는 성공한 날도 재실행(남은 대상만). 적재·룰 스캔·케이스 생성은 그대로 (안건 14·21, 미결 4) | 준혁 (SCRUM-100) | W4 (11/10) | PR | — |
+| V013 | `cases.opened_*` 생성 당시 점수·모델·정책 스냅샷 7칸 + CHECK 두 개 + 예전 케이스 점수 채우기(`alert_scores`에서) + `cases_opened_score_idx` (목록 점수 정렬, 11/15 C안) | 지윤 (SCRUM-236·237) | W5 (11/15) | PR 〔채팅 예약 필요〕 | — |
 | 미배정 | `str_reports` (확정 보고서 번호·마감·PDF) | 채영 | 서식 회의 뒤 | 그때 다음 빈 번호 | — |
 
-**머지 순서**: V004_1 → V004_2 → V004_3 → V005 → V005_1 → V005_2 → V006 → V008 → V009 → V010 → V011 → V012
+**머지 순서**: V004_1 → V004_2 → V004_3 → V005 → V005_1 → V005_2 → V006 → V008 → V009 → V010 → V011 → V012 → V013
 
 - **왜 이 순서** — `ai_call_logs`·`access_logs`는 탐지·케이스 테이블을 참조하지 않아서 V005 앞으로 당겼어요. 진희 PR이 준혁님 V005·지윤님 V006을 기다리지 않아도 돼요. 거의 다 된 `ai_call_logs`를 앞(4_2), 아직 안 만든 `access_logs`를 뒤(4_3)로 둬서 준비된 것부터 들어가요. 진희 파일이 늦어 V005를 막으면 §1 양보 규칙대로 진희가 옮겨요.
 - **`alert_scores`가 V005_1인 이유** — V005 바로 뒤라 채영님 V008·V009를 기다리지 않아요.

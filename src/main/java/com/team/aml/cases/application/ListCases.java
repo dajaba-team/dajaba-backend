@@ -2,9 +2,14 @@ package com.team.aml.cases.application;
 
 import com.team.aml.cases.domain.Case;
 import com.team.aml.cases.domain.CaseAction;
+import com.team.aml.cases.domain.CasePolicy;
+import com.team.aml.cases.domain.CasePolicySource;
 import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.cases.domain.CaseStatus;
+import com.team.aml.cases.domain.PolicyNotConfiguredException;
 import com.team.aml.cases.domain.RejectionReasonCode;
+import com.team.aml.cases.domain.ScoreBand;
+import com.team.aml.cases.domain.ScoreClassification;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.shared.security.CurrentUser;
 import com.team.aml.user.domain.Role;
@@ -16,6 +21,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -30,8 +36,10 @@ import java.util.Set;
  * 케이스 목록 (CASES 명세 API-01, 계약서 C1). 조회 3역할 모두 전체 케이스를 본다.
  * 형식 검사(size 최대 100, sort 화이트리스트, from ≤ to)는 컨트롤러 @Valid 몫(SCRUM-106) — 여기는 검사된 값을 받는다.
  *
- * <p><b>점수(score·score_band·policy_version)는 아직 null.</b> detection 에 경보 점수 공개 조회가 없어서다(SCRUM-152).
- * 그래서 sort=score 는 "점수 전부 null" 과 같은 결과 — 명세의 동률 규칙대로 created_at DESC, id DESC.
+ * <p><b>점수는 케이스 생성 당시 스냅샷(cases.opened_score, V013)</b>이다 — 11/15 결정 C안(SCRUM-236).
+ * 경보 점수는 경보당 1행이고 바뀌지 않아서(V005_1) 상세의 latest_score.score 와 같은 값이다. detection 을 조인하지 않는다.
+ * sort=score 는 asc·desc 모두 점수 없는 케이스를 맨 뒤에 두고, 같은 점수는 created_at DESC, id DESC (명세 API-01).
+ * score_band 는 지금 운영 정책(CasePolicy)으로 계산 — 정책이 없으면 null(목록은 막지 않음), policy_version 은 그 정책 버전.
  */
 @Service
 public class ListCases {
@@ -66,6 +74,7 @@ public class ListCases {
      * availableActions 는 상세와 같은 CaseAction.availableFor — 목록의 [배정]·[담당자 변경]도 이것만 보고 켠다(#23 리뷰).
      */
     public record Item(String caseNo, CaseStatus status, String accountKey, String entityId, UserRef assignee,
+                       BigDecimal score, ScoreBand scoreBand, String policyVersion,
                        RejectionReasonCode rejectionReasonCode, long version, Instant createdAt,
                        List<CaseAction> availableActions) {
         public Item {
@@ -77,17 +86,22 @@ public class ListCases {
     private final UserRepository users;
     private final UserRefs userRefs;
     private final CurrentUser currentUser;
+    private final CasePolicySource policySource;
 
-    public ListCases(CaseRepository cases, UserRepository users, UserRefs userRefs, CurrentUser currentUser) {
+    public ListCases(CaseRepository cases, UserRepository users, UserRefs userRefs, CurrentUser currentUser,
+                     CasePolicySource policySource) {
         this.cases = cases;
         this.users = users;
         this.userRefs = userRefs;
         this.currentUser = currentUser;
+        this.policySource = policySource;
     }
 
     @Transactional(readOnly = true)
     public Page<Item> execute(Query q) {
-        PageRequest pageable = PageRequest.of(q.page(), q.size(), sortOf(q.sort()));
+        Sort sort = sortOf(q.sort());   // 형식 검사도 여기서 — 점수 순이면 아래에서 쿼리 쪽 정렬을 쓴다
+        boolean byScore = q.sort().startsWith("score,");
+        PageRequest pageable = byScore ? PageRequest.of(q.page(), q.size()) : PageRequest.of(q.page(), q.size(), sort);
         Optional<Long> assigneeId = resolveAssignee(q.assignee());
         if (q.assignee() != null && assigneeId.isEmpty()) {
             return Page.empty(pageable);   // 없는 login_id — 그 사람이 담당한 케이스는 없다
@@ -96,13 +110,31 @@ public class ListCases {
         Instant toExclusive = q.to() == null ? NO_UPPER_BOUND
                 : q.to().plusDays(1).atStartOfDay(BUSINESS_ZONE).toInstant();
 
-        Page<Case> found = cases.search(q.statuses(), assigneeId.orElse(null), from, toExclusive, pageable);
+        Page<Case> found = byScore
+                ? cases.searchByScore(q.statuses(), assigneeId.orElse(null), from, toExclusive,
+                        q.sort().endsWith(",asc"), pageable)
+                : cases.search(q.statuses(), assigneeId.orElse(null), from, toExclusive, pageable);
         Map<Long, UserRef> refs = userRefs.of(found.map(Case::getAssigneeId).getContent());
         AppUserDetails me = currentUser.require();
         Role role = Role.valueOf(me.role());
-        return found.map(c -> new Item(c.getCaseNo(), c.getStatus(), c.getAccountKey(), c.getEntityId(),
-                refs.get(c.getAssigneeId()), c.getRejectionReasonCode(), c.getVersion(),
-                c.getCreatedAt().truncatedTo(ChronoUnit.SECONDS), CaseAction.availableFor(c, me.userId(), role)));
+        CasePolicy policy = currentPolicy();
+        return found.map(c -> {
+            BigDecimal score = c.getOpenedScore() == null ? null : c.getOpenedScore().score();
+            ScoreClassification grade = score == null || policy == null ? null : policy.classify(score, null);
+            return new Item(c.getCaseNo(), c.getStatus(), c.getAccountKey(), c.getEntityId(),
+                    refs.get(c.getAssigneeId()), score, grade == null ? null : grade.band(),
+                    grade == null ? null : grade.policyVersion(), c.getRejectionReasonCode(), c.getVersion(),
+                    c.getCreatedAt().truncatedTo(ChronoUnit.SECONDS), CaseAction.availableFor(c, me.userId(), role));
+        });
+    }
+
+    /** 지금 운영 정책. 설정되지 않았으면 null — 등급만 비우고 목록은 그대로 준다(상세 GetCaseDetail 과 같음). */
+    private CasePolicy currentPolicy() {
+        try {
+            return policySource.current();
+        } catch (PolicyNotConfiguredException e) {
+            return null;
+        }
     }
 
     private Optional<Long> resolveAssignee(String assignee) {
@@ -124,8 +156,8 @@ public class ListCases {
         Sort.Direction direction = Sort.Direction.fromString(parts[1]);
         Sort tieBreak = Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id"));
         return switch (parts[0]) {
-            // TODO(SCRUM-152, 미결 23): detection 점수 공개 조회가 생기면 점수 순(null 은 맨 뒤) + 동률 규칙으로
-            case "score" -> tieBreak;
+            // 점수 순은 CaseRepository.searchByScore 가 쿼리에 직접 적는다(nulls last). 여기 값은 쓰지 않는다
+            case "score" -> Sort.by(direction, "openedScore.score").and(tieBreak);
             case "created_at" -> Sort.by(direction, "createdAt").and(Sort.by(direction, "id"));
             default -> Sort.by(direction, "status").and(tieBreak);
         };

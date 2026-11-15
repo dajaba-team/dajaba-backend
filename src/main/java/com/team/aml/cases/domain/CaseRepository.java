@@ -48,6 +48,14 @@ public interface CaseRepository {
                       Pageable pageable);
 
     /**
+     * 목록 점수 순 (API-01 sort=score, SCRUM-236). search 와 같은 조건, 생성 당시 점수(opened_score) 순.
+     * 점수 없는 케이스는 오름·내림 모두 맨 뒤, 같은 점수는 created_at DESC, id DESC. pageable 의 Sort 는 쓰지 않는다
+     * (Spring Data 가 문자열 쿼리에 nulls last 를 붙이지 않아서 정렬을 쿼리에 직접 적는다).
+     */
+    Page<Case> searchByScore(Collection<CaseStatus> statuses, Long assigneeId, Instant createdFrom, Instant createdTo,
+                             boolean ascending, Pageable pageable);
+
+    /**
      * 담당자별 케이스 수 (미결 33, SCRUM-178). assigneeIds·statuses 는 비우지 않고 넘긴다.
      * 한 건도 없는 담당자는 결과에 없다 — 0 채우기는 부르는 쪽(ActiveCaseCounter 구현) 몫.
      */

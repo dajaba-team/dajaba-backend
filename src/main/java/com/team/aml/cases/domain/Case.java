@@ -54,6 +54,9 @@ public class Case extends BaseEntity {
     @Column(name = "close_reason", length = 32)
     private CloseReason closeReason;                  // CLOSED 일 때만 있음 (V006 CHECK)
 
+    @Embedded
+    private OpenedScore openedScore;                  // 생성 당시 점수·정책 (V013). 없으면 null — 목록 점수 정렬에 쓴다
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;                             // 커밋 때 Hibernate 가 올린다. 도메인은 읽기만
@@ -64,20 +67,30 @@ public class Case extends BaseEntity {
     /** JPA 용. */
     protected Case() {}
 
-    private Case(String caseNo, Long alertId, String accountKey, String entityId) {
+    private Case(String caseNo, Long alertId, String accountKey, String entityId, OpenedScore openedScore) {
         this.caseNo = caseNo;
         this.alertId = alertId;
         this.accountKey = accountKey;
         this.entityId = entityId;
+        this.openedScore = openedScore;
         this.status = CaseStatus.OPEN;
     }
 
-    /** 케이스 생성. 생성 배치(OpenCasesFromAlerts)가 CasePolicy 로 HIGH 를 확인한 뒤 부른다. */
+    /** 점수 스냅샷 없이 케이스 생성 — 테스트·예전 데이터용. 실제 생성 배치는 아래 openedScore 판을 쓴다. */
     public static Case open(String caseNo, Long alertId, String accountKey, String entityId, Long actorId) {
+        return open(caseNo, alertId, accountKey, entityId, null, actorId);
+    }
+
+    /**
+     * 케이스 생성. 생성 배치(OpenCasesFromAlerts)가 CasePolicy 로 HIGH 를 확인한 뒤 부른다.
+     * @param openedScore 그때 점수·모델·정책 (V013, SCRUM-237). 만든 뒤에는 바뀌지 않는다
+     */
+    public static Case open(String caseNo, Long alertId, String accountKey, String entityId,
+                            OpenedScore openedScore, Long actorId) {
         Objects.requireNonNull(caseNo, "caseNo");
         Objects.requireNonNull(alertId, "alertId");
         Objects.requireNonNull(accountKey, "accountKey");
-        Case c = new Case(caseNo, alertId, accountKey, entityId);
+        Case c = new Case(caseNo, alertId, accountKey, entityId, openedScore);
         c.record(CaseHistoryAction.OPEN, null, CaseStatus.OPEN, null, null, actorId);
         return c;
     }
@@ -352,6 +365,8 @@ public class Case extends BaseEntity {
     public Long getCurrentDraftId() { return currentDraftId; }
     public RejectionReasonCode getRejectionReasonCode() { return rejectionReasonCode; }
     public CloseReason getCloseReason() { return closeReason; }
+    /** 생성 당시 점수·정책. 없으면 null (V013 전 데이터에 점수도 없던 경우). */
+    public OpenedScore getOpenedScore() { return openedScore; }
     public long getVersion() { return version; }
     /** 저장 전 이력(읽기 전용). 저장된 이력은 CaseHistoryRepository 로 조회한다. */
     public List<CaseHistory> getPendingHistories() { return Collections.unmodifiableList(pendingHistories); }
