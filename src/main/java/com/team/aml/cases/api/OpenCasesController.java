@@ -26,8 +26,9 @@ public class OpenCasesController {
     }
 
     @Operation(summary = "케이스 생성",
-            description = "그 날짜의 점수 있는 경보 중 HIGH 만 케이스로 만든다. 202 로 접수하고 뒤에서 처리 — 결과는 배치 조회로 확인. "
-                    + "정책 없음 409 POLICY_NOT_CONFIGURED, 실행 중 409 BATCH_RUNNING, 이미 성공 409 BATCH_ALREADY_DONE")
+            description = "그 날짜의 점수 있는 경보 중 아직 케이스가 없는 HIGH 만 케이스로 만든다. 202 로 접수하고 뒤에서 처리 — "
+                    + "결과는 배치 조회로 확인. 성공한 날도 다시 돌릴 수 있다(보충 실행 — 새로 HIGH 가 된 경보만). "
+                    + "정책 없음 409 POLICY_NOT_CONFIGURED, 실행 중 409 BATCH_RUNNING")
     @PostMapping("/open-cases")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public RequestOpenCases.Accepted openCases(@RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {

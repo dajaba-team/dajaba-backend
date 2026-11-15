@@ -53,7 +53,7 @@ public class OpenCasesFromAlerts {
     }
 
     /**
-     * 정책이 비어 있거나(POLICY_NOT_CONFIGURED), 같은 날짜가 실행 중(409 BATCH_RUNNING)·이미 성공(409 BATCH_ALREADY_DONE)이면
+     * 정책이 비어 있거나(POLICY_NOT_CONFIGURED), 같은 날짜가 실행 중(409 BATCH_RUNNING)이면
      * batch_runs 행을 만들기 전에 거절한다.
      *
      * @return batch_run_id

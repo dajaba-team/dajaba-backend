@@ -79,16 +79,21 @@ class OpenCasesApiTest {
     }
 
     @Test
-    void 실패_이미_성공한_날짜는_409_BATCH_ALREADY_DONE() throws Exception {
+    void 정상_이미_성공한_날짜도_다시_접수하고_새_경보만_만든다() throws Exception {   // 보충 실행 (SCRUM-238)
         LocalDate date = LocalDate.of(2022, 10, 2);
-        scoredAlert(date, "0.95");
+        long first = scoredAlert(date, "0.95");
         long runId = body(mvc.perform(post("/api/v1/admin/batches/open-cases").param("date", date.toString())
                 .with(admin()).with(csrf())).andReturn(), 202).get("batch_run_id").asLong();
         waitUntilFinished(runId);
 
-        JsonNode error = body(mvc.perform(post("/api/v1/admin/batches/open-cases").param("date", date.toString())
-                .with(admin()).with(csrf())).andReturn(), 409);
-        assertThat(error.get("error").get("code").asText()).isEqualTo("BATCH_ALREADY_DONE");
+        long later = scoredAlert(date, "0.92");
+        long againId = body(mvc.perform(post("/api/v1/admin/batches/open-cases").param("date", date.toString())
+                .with(admin()).with(csrf())).andReturn(), 202).get("batch_run_id").asLong();
+        waitUntilFinished(againId);
+
+        assertThat(againId).isNotEqualTo(runId);
+        assertThat(jdbc.queryForList("select alert_id from ops.cases where alert_id in (?, ?)", Long.class, first, later))
+                .containsExactlyInAnyOrder(first, later);
     }
 
     @Test

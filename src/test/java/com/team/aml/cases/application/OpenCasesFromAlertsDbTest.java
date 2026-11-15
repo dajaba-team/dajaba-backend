@@ -1,6 +1,5 @@
 package com.team.aml.cases.application;
 
-import com.team.aml.shared.batch.BatchAlreadyDoneException;
 import com.team.aml.shared.batch.BatchRunningException;
 import com.team.aml.shared.security.CurrentUser;
 import org.junit.jupiter.api.Test;
@@ -171,12 +170,29 @@ class OpenCasesFromAlertsDbTest {
     }
 
     @Test
-    void 실패_성공한_날은_409_BATCH_ALREADY_DONE_실행_중이면_409_BATCH_RUNNING() {
-        LocalDate done = newDate();
-        openCases.run(openCases.start(done, CurrentUser.SYSTEM_ID), done);
-        assertThatThrownBy(() -> openCases.start(done, CurrentUser.SYSTEM_ID))
-                .isInstanceOf(BatchAlreadyDoneException.class);
+    void 정상_성공한_날도_다시_돌리면_새로_HIGH가_된_경보만_케이스로_만들고_기존_케이스는_그대로() {   // SCRUM-238, V014
+        LocalDate date = newDate();
+        long first = scoredAlert(date, "0.95");
+        long firstRun = openCases.start(date, CurrentUser.SYSTEM_ID);
+        openCases.run(firstRun, date);
+        assertThat(batchRun(firstRun)).containsEntry("status", "SUCCEEDED");
 
+        long later = scoredAlert(date, "0.93");   // 첫 실행 뒤 점수가 매겨진 HIGH 경보
+        long secondRun = openCases.start(date, CurrentUser.SYSTEM_ID);
+        OpenCasesSummary again = openCases.run(secondRun, date).orElseThrow();
+
+        assertThat(again).isEqualTo(new OpenCasesSummary(1, 1, 0, 0, 0));   // 대상은 아직 케이스 없는 경보뿐
+        assertThat(caseAlertIds(date)).containsExactlyInAnyOrder(first, later);
+        assertThat(jdbc.queryForObject("select count(*) from ops.cases where alert_id = ?", Integer.class, first))
+                .isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                select count(*) from ops.batch_runs
+                where batch_type = 'OPEN_CASES' and batch_date = ? and status = 'SUCCEEDED'""", Integer.class, date))
+                .isEqualTo(2);
+    }
+
+    @Test
+    void 실패_같은_날짜가_실행_중이면_409_BATCH_RUNNING() {
         LocalDate running = newDate();
         openCases.start(running, CurrentUser.SYSTEM_ID);   // run 전 = RUNNING
         assertThatThrownBy(() -> openCases.start(running, CurrentUser.SYSTEM_ID))

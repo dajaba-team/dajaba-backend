@@ -1,6 +1,6 @@
 package com.team.aml.cases.application;
 
-import com.team.aml.shared.batch.BatchAlreadyDoneException;
+import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.shared.batch.BatchRun;
 import com.team.aml.shared.batch.BatchRunRepository;
 import com.team.aml.shared.batch.BatchRunningException;
@@ -15,26 +15,26 @@ import java.time.LocalDate;
 /**
  * 케이스 생성 배치(OPEN_CASES)의 batch_runs 기록. 케이스는 경보마다 따로 커밋되므로 기록도 따로(REQUIRES_NEW) 커밋한다.
  * 실패한 경보가 한 건이라도 있으면 FAILED(건수 메시지) — 그 날짜를 다시 돌리면 남은 대상만 처리한다.
- * 실패 없이 끝나면 SUCCEEDED. 성공한 날 재실행은 V004 batch_runs_succeeded_uq 때문에 지금은 409 BATCH_ALREADY_DONE
- * (성공한 날의 보충 실행은 안건 21 에서 인덱스를 좁힐 때 연다).
+ * 실패 없이 끝나면 SUCCEEDED. <b>성공한 날도 다시 돌린다</b>(회의 14 보충 실행, V014, SCRUM-238) — 대상은 아직 케이스가 없는
+ * SCORED 경보뿐이라 새로 HIGH 가 된 경보만 케이스가 된다. 같은 날짜가 돌고 있으면 409 BATCH_RUNNING(시작 advisory lock 으로 줄 세움).
  */
 @Service
 class OpenCasesRecorder {
 
     private final BatchRunRepository batchRuns;
+    private final CaseRepository cases;
 
-    OpenCasesRecorder(BatchRunRepository batchRuns) {
+    OpenCasesRecorder(BatchRunRepository batchRuns, CaseRepository cases) {
         this.batchRuns = batchRuns;
+        this.cases = cases;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public long start(LocalDate batchDate, long triggeredBy) {
+        cases.lockOpenCasesStart();
         if (batchRuns.findFirstByBatchTypeAndBatchDateAndStatus(BatchType.OPEN_CASES, batchDate, BatchStatus.RUNNING)
                 .isPresent()) {
             throw new BatchRunningException(BatchType.OPEN_CASES, batchDate);
-        }
-        if (batchRuns.existsByBatchTypeAndBatchDateAndStatus(BatchType.OPEN_CASES, batchDate, BatchStatus.SUCCEEDED)) {
-            throw new BatchAlreadyDoneException(BatchType.OPEN_CASES, batchDate);
         }
         return batchRuns.save(BatchRun.start(BatchType.OPEN_CASES, batchDate, triggeredBy)).getId();
     }

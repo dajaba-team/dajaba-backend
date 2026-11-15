@@ -22,7 +22,7 @@ import java.util.Optional;
  * domain 의 CaseRepository 를 Spring Data 가 구현하게 한다.
  * JpaRepository 가 아니라 Repository 를 상속해 delete 계열 메서드가 생기지 않게 한다.
  */
-public interface CaseJpaRepository extends Repository<Case, Long>, CaseRepository, CaseVersionBump {
+public interface CaseJpaRepository extends Repository<Case, Long>, CaseRepository, CaseVersionBump, CaseBatchLock {
 
     @Override
     @Lock(LockModeType.PESSIMISTIC_WRITE)
