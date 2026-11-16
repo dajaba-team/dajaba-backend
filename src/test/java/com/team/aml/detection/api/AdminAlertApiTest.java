@@ -21,11 +21,13 @@ import org.testcontainers.utility.MountableFile;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -59,6 +61,12 @@ class AdminAlertApiTest {
     @Autowired ObjectMapper om;
     @Autowired JdbcTemplate jdbc;
 
+    /** 목록 한 줄 칸. 상세는 이것 + rule_facts — 목록에만 칸이 생기면 상세 테스트가 깨진다(#107 리뷰). */
+    private static final String[] ITEM_KEYS = {"alert_no", "batch_date", "rule_id", "rule_version",
+            "typology_hint", "account_no", "account_ref", "window_start", "window_end", "reference_ts",
+            "transaction_count", "score_status", "score_failure_code", "retryable", "latest_score", "case_opened",
+            "created_at"};
+
     // --- R1 목록 ---------------------------------------------------------------
 
     @Test
@@ -72,10 +80,7 @@ class AdminAlertApiTest {
 
         assertThat(body.path("total").asLong()).isEqualTo(1);
         JsonNode item = body.path("items").get(0);
-        assertThat(keys(item)).containsExactlyInAnyOrder("alert_no", "batch_date", "rule_id", "rule_version",
-                "typology_hint", "account_no", "account_ref", "window_start", "window_end", "reference_ts",
-                "transaction_count", "score_status", "score_failure_code", "retryable", "latest_score", "case_opened",
-                "created_at");
+        assertThat(keys(item)).containsExactlyInAnyOrder(ITEM_KEYS);
         assertThat(item.path("alert_no").asText()).isEqualTo(a.alertNo);
         assertThat(item.path("account_no").asText()).isEqualTo("10_****" + a.accountKey.substring(a.accountKey.length() - 4));
         assertThat(item.path("account_ref").asText()).matches("ACR-[0-9A-F]{12}");
@@ -164,8 +169,13 @@ class AdminAlertApiTest {
 
         assertThat(res.getResponse().getStatus()).isEqualTo(200);
         JsonNode body = json(res);
+        assertThat(keys(body)).containsExactlyInAnyOrder(
+                Stream.concat(Arrays.stream(ITEM_KEYS), Stream.of("rule_facts")).toArray(String[]::new));
         assertThat(body.path("rule_facts").path("distinct_senders").asInt()).isEqualTo(31);
         JsonNode s = body.path("latest_score");
+        assertThat(keys(s)).containsExactlyInAnyOrder("score", "threshold", "data_quality_status", "model_version",
+                "feature_version", "prediction_id", "produced_at", "reasons", "evidence_transaction_ids",
+                "context_transaction_ids");
         assertThat(s.path("feature_version").asText()).isEqualTo("f1");
         assertThat(s.path("prediction_id").asText()).isEqualTo("p-" + a.id);
         assertThat(s.path("produced_at").asText()).endsWith("Z");

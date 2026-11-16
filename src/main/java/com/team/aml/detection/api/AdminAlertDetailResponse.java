@@ -12,6 +12,8 @@ import java.time.LocalDateTime;
 /**
  * 경보 상세 (R2) = 목록 한 줄 + rule_facts + 점수 세부. rule_facts 는 저장값 그대로(화면이 풀어 씀, 계약서 5.7).
  * reasons 는 관측값·기준값·기여값 구조 그대로 — 기여값을 관측값처럼 바꾸지 않는다(SD §7).
+ * reasons 도 저장값 그대로다. AI 규약(scores.py StrictModel)에 계좌 칸이 없어서 가리지 않는다 — 칸이 바뀌면 가리기를 더한다.
+ * context_transaction_ids 는 번호만 준다. 경보 밖 참고 거래라 /{alert_no}/transactions 로는 열리지 않는다.
  */
 public record AdminAlertDetailResponse(String alertNo, LocalDate batchDate, String ruleId, int ruleVersion,
                                        String typologyHint, String accountNo, String accountRef,
