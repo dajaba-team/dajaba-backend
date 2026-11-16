@@ -10,7 +10,7 @@
 
 **상태 9개 + 반려 코드** [가이드 §4, 안건 11·24]
 
-`OPEN · REVIEWING · ESCALATED · DRAFTED · PENDING_APPROVAL · APPROVED · REPORTED · REJECTED · CLOSED` (`REPORTED`·`CLOSED`는 끝). `APPROVED`는 내부 승인 완료이고, 모의 제출(API 12-2)을 거쳐 `REPORTED`가 돼요 — 엔티티는 `Case.report()`, 이력 action은 `REPORT`(V010, SCRUM-174). 모의 제출 API·권한(APPROVER)은 str 몫이에요. 반려 이유는 상태를 늘리지 않고 **별도 값** `rejection_reason_code`(`NEED_REVISION`·`NOT_REPORTABLE`)로 둬요. 〔초안: REJECTED일 때 필수, 다른 상태에선 null — CASES 명세 §2.1, 지우는 시점은 STR과 공유 필요〕
+`OPEN · REVIEWING · ESCALATED · DRAFTED · PENDING_APPROVAL · APPROVED · REPORTED · REJECTED · CLOSED` (`REPORTED`·`CLOSED`는 끝). `APPROVED`는 내부 승인 완료이고, 모의 제출(API 12-2)을 거쳐 `REPORTED`가 돼요 — 엔티티는 `Case.report()`, 이력 action은 `REPORT`(V010, SCRUM-174), str이 부르는 공개 기능은 `ReportCase`(SCRUM-234). 모의 제출 API·권한(APPROVER)은 str 몫이에요(SCRUM-240). 반려 이유는 상태를 늘리지 않고 **별도 값** `rejection_reason_code`(`NEED_REVISION`·`NOT_REPORTABLE`)로 둬요. 〔초안: REJECTED일 때 필수, 다른 상태에선 null — CASES 명세 §2.1, 지우는 시점은 STR과 공유 필요〕
 
 **전이 표** (확정) [가이드 §4, 레퍼런스 §5.1, 안건 11·24]
 | 현재 → 결과 | 메서드 | 누가 | 조건 |
@@ -103,7 +103,7 @@
 | `GetCaseDetail` (readOnly 아님) | 02 `GET /cases/{case_no}` | 404 `CASE_NOT_FOUND`(기록 안 함) → `accessLog.view(CASE)` → 최근 이력 20건(최신 먼저, 작성자 login_id) · `available_actions` |
 | `AssignCase` | 03 `POST …/assign` | 404 → version 409 `CONCURRENT_UPDATE` → 대상: 조사역이 남 지정 409 `INVALID_ASSIGNEE`(`details.reason = SELF_ONLY`), 없는 login_id 404 `USER_NOT_FOUND`, 비활성·조사역 아님 409 `INVALID_ASSIGNEE` → 상태 409 `INVALID_CASE_TRANSITION`. 조사역은 `assignee` 생략 = 본인, ADMIN은 필수 |
 | `EscalateCase` | 07 `POST …/escalate` | 404 → version 409 → 담당 403 `NOT_ASSIGNEE` → 상태 409 → 사유 |
-| `CloseCase` | 06 `POST …/close` | 404 → version 409 → 담당 403 → 상태 409 → **초안 있으면 409 `CLOSE_REQUIRES_STR`**(`Case.closeWithoutDraft`) → 사유. 초안 있는 종결(str `close-with-draft`)이 부를 공개 기능은 아직 없음 |
+| `CloseCase` | 06 `POST …/close` | 404 → version 409 → 담당 403 → 상태 409 → **초안 있으면 409 `CLOSE_REQUIRES_STR`**(`Case.closeWithoutDraft`) → 사유. 초안 있는 종결은 str `close-with-draft`가 공개 기능 `CloseCaseWithDraft`(SCRUM-235)를 불러요 |
 | `ReassignCase` (SCRUM-177) | 04 `POST …/reassign` `{assignee, comment?, version}` | **ADMIN만 — SecurityConfig URL 규칙(403 `FORBIDDEN`)** → 404 → version 409 → 대상: 없는 login_id 404 `USER_NOT_FOUND`, 비활성·조사역 아님 409 `INVALID_ASSIGNEE`(`NOT_ACTIVE_INVESTIGATOR`) → 상태 409(REVIEWING·ESCALATED·DRAFTED·REJECTED만). 같은 담당자면 no-op. 이력 REASSIGN에 `from_assignee_id`·`to_assignee_id`(V010)·사유. 대상 확인은 `AssignCase`와 같은 `ActiveInvestigators` |
 | `CaseTransactions.list` (SCRUM-179) | 08 `GET …/transactions?scope&sort&page&size` | 404 → detection `ListAlertTransactions`(경보에 묶인 거래). `direction`은 케이스 계좌 기준 `TransactionDirection`(받음 INBOUND·보냄 OUTBOUND·둘 다 아님 INDIRECT, 자기계좌는 INBOUND). `scope=CONTEXT`는 저장소가 없어 빈 목록 〔참고 거래 등록 방식 미정〕. sort `ts`·`transaction_id` asc·desc, 계좌는 `AccountDisplay` |
 | `CaseTransactions.evidence` (SCRUM-179) | 09 `GET …/evidence/{transaction_id}` | 404 `CASE_NOT_FOUND` → 이 경보의 거래가 아니면(없는 거래 포함) 404 `EVIDENCE_NOT_FOUND` → 열람 기록(`access_logs`에 거래 대상이 없어 CASE로) → `{case_no, transaction, source{dataset, record_id, is_synthetic}, eligible_for_str}` |
@@ -135,13 +135,14 @@
 | `AttachDraftToCase.execute(caseId, draftId, expectedVersion)` → 새 `cases.version` | 초안 insert **뒤에** 연결 → DRAFTED, 반려 코드 지움, `ATTACH_DRAFT` 이력. 돌려준 값을 str이 생성 응답 `case_version`에 실어요 [SCRUM-141] | `lock`과 같은 검사를 한 번 더 |
 | `TouchCaseForRevision.execute(caseId, draftId, expectedVersion)` → 새 `cases.version` | 수정본 저장 전에 잠그고 확인한 뒤 케이스 version +1. **DRAFTED**면 version만 +1(상태·이력 그대로), **보완 반려(REJECTED+NEED_REVISION)**면 DRAFTED로 되돌리고 반려 코드 지움 + `REOPEN_DRAFT` 이력 (version은 상태 변경으로 +1, 두 번 안 올림). 돌려준 값을 str이 수정 응답 `case_version`에 실어요 [SCRUM-141] | 404 → version 409 → 담당자 403 → 현재 초안이 있는데 `draftId`가 아니면 409 `DRAFT_SUPERSEDED`(`details.draft_no`·`current_draft_no`, 상태보다 먼저) → DRAFTED 또는 REJECTED+NEED_REVISION이고 현재 초안이 있음(아니면 409 `INVALID_CASE_TRANSITION`, `details.action = REVISE_DRAFT`·`draft_no`) [SCRUM-223]. 동시 승인 요청과 version으로 부딪히게 해요(NFR-APR-02, 미결 20). str은 상태를 볼 수 없어서 수정본 저장 때는 상태와 상관없이 이것 하나만 불러요 [#43 리뷰 2번, 11/5 채영 확인 A안] |
 
-**str에 주는 공개 기능 — 승인 요청·승인·반려** 셋 다 `Propagation.MANDATORY`, 새 `cases.version`을 돌려줘요(str이 응답 `case_version`에 실음). str이 `approvals` 같은 케이스 FK 행을 넣기 **전에** 불러요(아래 "str 호출 순서"와 같은 이유 — FK insert의 KEY SHARE와 `FOR UPDATE`가 부딪혀 교착).
+**str에 주는 공개 기능 — 승인 요청·승인·반려·모의 제출** 넷 다 `Propagation.MANDATORY`, 새 `cases.version`을 돌려줘요(str이 응답 `case_version`에 실음). str이 `approvals` 같은 케이스 FK 행을 넣기 **전에** 불러요(아래 "str 호출 순서"와 같은 이유 — FK insert의 KEY SHARE와 `FOR UPDATE`가 부딪혀 교착).
 
 | 유스케이스 | 하는 일 | 검사 순서·오류 |
 |---|---|---|
 | `SubmitCaseForApproval.execute(caseId, draftId, expectedVersion)` | DRAFTED → PENDING_APPROVAL, `SUBMIT_FOR_APPROVAL` 이력 (S6) | 케이스 잠금 조회 404 `CASE_NOT_FOUND` → version 409 `CONCURRENT_UPDATE` → 담당자 403 `NOT_ASSIGNEE` → 현재 초안이 `draftId`(다른 초안이면 409 `DRAFT_SUPERSEDED` `details.draft_no`·`current_draft_no`, 현재 초안이 없으면(종결 등) 409 `INVALID_CASE_TRANSITION` `details.draft_no`) → 상태 409 `INVALID_CASE_TRANSITION`. 본문 검증 통과·`NARRATIVE_UNCHANGED`는 str `ApprovalGate` 몫 |
 | `ApproveCase.execute(caseId, draftId, expectedVersion)` | PENDING_APPROVAL → APPROVED, `APPROVE` 이력 (P2) | 404 → version 409 → 현재 초안 409 → 상태 409 → 승인자가 지금·예전 담당이면 409 `SELF_APPROVAL`(안에서 `WasCaseAssignee`를 불러요 — str이 따로 넘기지 않음). 역할(APPROVER)은 `SecurityConfig`·str `ApprovalGate.requireApprover` |
 | `RejectCase.execute(caseId, draftId, expectedVersion, code, comment)` | PENDING_APPROVAL → REJECTED, 반려 코드 저장, `REJECT` 이력(`reason_code`·사유) (P3) | `ApproveCase`와 같고 마지막에 사유 필수(`CommentRequiredException`) |
+| `ReportCase.execute(caseId, draftId, expectedVersion)` | APPROVED → REPORTED(끝 상태), `REPORT` 이력에 제출자 (P4 모의 제출, 실제 전송 없음) [SCRUM-234] | 404 → version 409 → 현재 초안 409(`DRAFT_SUPERSEDED`·`INVALID_CASE_TRANSITION`) → 상태 409 `INVALID_CASE_TRANSITION`(APPROVED만 — 두 번 제출하면 두 번째는 409). 역할(APPROVER)은 `SecurityConfig` POST `/approvals/**`·str. 지금·예전 담당 검사는 안 해요(내용 판단은 승인에서 끝남) 〔확인 필요: 제출자를 승인자로 한정할지 — SCRUM-240〕 |
 
 - **대체된 옛 초안 (SCRUM-223)** — S3·S6·P2·P3 모두 str이 케이스를 먼저 잠그는 순서라 cases가 먼저 봐요. 케이스에 현재 초안이 있고 요청 초안과 다르면 409 `DRAFT_SUPERSEDED` + `details.current_draft_no`(`DisplayNumber.draftNo`, 계약서 3절) — 화면은 그 번호로 초안을 다시 불러요. 예외는 shared `DraftSupersededException`(cases → str 참조가 안 돼서). 남는 `INVALID_CASE_TRANSITION` details도 숫자 id 대신 `draft_no`(계약서 2.2).
 - 승인자·담당자는 `CurrentUser`에서 꺼내요(인자로 안 받음). 동시에 온 수정본 저장(`TouchCaseForRevision`)과는 version으로 부딪혀 뒤 요청이 409.
@@ -174,6 +175,10 @@
 - JPQL에서 `CASE`가 예약어라 엔티티 이름은 `InvestigationCase`예요(`select c from InvestigationCase c`).
 - `case_history.case_version_before`는 **그 변경 직전**의 `cases.version`이에요. `@Version`은 flush 때 올라가서, 한 트랜잭션에서 전이가 두 번 일어나면 두 행에 같은 번호가 남아요.
 
-**아직 남은 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`, 초안 있는 종결(명세 이름 `CloseCase` — 화면용 `CloseCase`가 이미 있어 str 담당과 이름을 맞춰요). Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
+**str에 주는 공개 기능 — 초안 있는 종결 (SCRUM-235)** `CloseCaseWithDraft.execute(caseId, draftId, expectedVersion, closeReason, comment)` → 새 `cases.version`, `Propagation.MANDATORY`. str `close-with-draft`(A6, SCRUM-186)가 현재 초안을 SUPERSEDED로 바꾸기 **전에** 불러요(케이스 먼저 잠금). 명세 이름은 `CloseCase`였지만 화면용 `CloseCase`(API-06)와 겹쳐 `WithDraft`를 붙였어요.
+- 검사 순서: 케이스 잠금 404 → version 409 → 담당자 403 `NOT_ASSIGNEE` → 현재 초안(다른 초안 409 `DRAFT_SUPERSEDED`, 초안 없음 409 `INVALID_CASE_TRANSITION` — 그건 화면용 `close`로) → 상태 409(DRAFTED, REJECTED+NOT_REPORTABLE만) → 사유(`COMMENT_REQUIRED`, 형식 400은 str DTO).
+- CLOSED·`close_reason`·`CLOSE` 이력(`reason_code`=종결 사유), 반려 코드 지움. `current_draft_id`는 남겨요(V006 — CLOSED는 둘 다 허용).
+
+**아직 남은 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`(필요 여부 결정 — SCRUM-243). Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
 
 **〔확인 필요〕** 상세 화면에 "현재 초안"을 합치는 위치(cases → str 의존 금지라 상위 조합 계층 필요 — 권장은 str 조회 유스케이스가 조합. 같은 시점 보장은 한 SQL·REPEATABLE READ·조합 후 버전 재확인 중 하나로, 기본 READ COMMITTED에선 한 트랜잭션만으로는 부족 — 노션 미결 17번), 메모·요약을 편집할 수 있는 상태 범위, 화면 집계 규칙(유입은 받은 금액, 유출은 보낸 금액, 자기계좌 제외 — STR facts와 같은 규칙인지). AI facts는 **같은 법인의 다른 계좌**와 오간 거래를 `internal`로 따로 빼서 입출금에 넣지 않아요(dajaba-AI `docs/str/04_facts.md`). 그래서 같은 경보라도 화면과 STR 숫자가 다를 수 있어요 — 각 숫자가 무엇을 포함하는지 이름·설명을 정하고, 같은 법인 계좌 간 이체·복수 통화 사례로 같이 확인해요.
