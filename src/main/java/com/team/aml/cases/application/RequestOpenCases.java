@@ -42,7 +42,7 @@ public class RequestOpenCases {
     }
 
     /**
-     * 정책 없음(POLICY_NOT_CONFIGURED)·실행 중(409 BATCH_RUNNING)·이미 성공(409 BATCH_ALREADY_DONE)이면 batch_runs 행 없이 거절.
+     * 정책 없음(POLICY_NOT_CONFIGURED)·실행 중(409 BATCH_RUNNING)이면 batch_runs 행 없이 거절. 성공한 날도 다시 돌린다(보충 실행, SCRUM-238).
      * 실행기가 작업을 거절하면 run() 이 안 돌아 RUNNING 이 남고 그 날짜가 막히므로 FAILED 로 기록하고 다시 던진다.
      */
     public Accepted execute(LocalDate batchDate) {

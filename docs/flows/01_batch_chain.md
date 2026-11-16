@@ -1,6 +1,6 @@
 # ① 배치 체인 — 적재 → 룰 스캔 → 점수 → 케이스 생성
 
-관리자가 버튼 네 번을 누르면 경보가 케이스가 된다. 네 배치는 전부 **`shared/batch`의 `BatchRun`** 에 기록되고(10/27 안건 14), 같은 날짜·유형을 두 번 돌리면 `409 BATCH_ALREADY_DONE`.
+관리자가 버튼 네 번을 누르면 경보가 케이스가 된다. 네 배치는 전부 **`shared/batch`의 `BatchRun`** 에 기록되고(10/27 안건 14), 같은 날짜·유형을 두 번 돌리면 적재·룰 스캔은 `409 BATCH_ALREADY_DONE`, 점수(V012)·케이스 생성(V014)은 남은 대상만 다시 처리해요.
 
 폴더 의존 방향 `source ← detection ← cases ← str` 그대로다. 케이스 배치가 detection을 부르지, detection이 cases를 부르지 않는다(지윤 문서 2절과 같음).
 

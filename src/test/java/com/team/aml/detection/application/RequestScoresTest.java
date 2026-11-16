@@ -285,17 +285,19 @@ class RequestScoresTest {
     }
 
     @Test
-    void V012_같은_날짜_SUCCEEDED는_점수_배치만_여러_번_된다() {
+    void V012_V014_같은_날짜_SUCCEEDED는_점수_배치와_케이스_생성만_여러_번_된다() {
         LocalDate d = newDate();
         String insert = "insert into ops.batch_runs(batch_type, batch_date, status, triggered_by) values (?, ?, 'SUCCEEDED', 1)";
         jdbc.update(insert, "SCORE_REQUEST", d);
         jdbc.update(insert, "SCORE_REQUEST", d);
+        jdbc.update(insert, "OPEN_CASES", d);   // V014 (SCRUM-238): 케이스 생성도 보충 실행
+        jdbc.update(insert, "OPEN_CASES", d);
         jdbc.update(insert, "RULE_SCAN", d);
 
         assertThatThrownBy(() -> jdbc.update(insert, "RULE_SCAN", d)).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> {
-            jdbc.update(insert, "OPEN_CASES", d);
-            jdbc.update(insert, "OPEN_CASES", d);
+            jdbc.update(insert, "LOAD_DATASET", d);
+            jdbc.update(insert, "LOAD_DATASET", d);
         }).isInstanceOf(DataIntegrityViolationException.class);
     }
 

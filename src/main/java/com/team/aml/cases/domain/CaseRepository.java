@@ -36,6 +36,12 @@ public interface CaseRepository {
      * "서로 다른 행만 바꾸는 두 요청"이 같은 케이스 version 에서 부딪히게 하려는 것 (NFR-APR-02, 미결 20).
      */
     void bumpVersion(Case c);
+
+    /**
+     * 케이스 생성 배치 시작을 줄 세운다(advisory lock, 트랜잭션 끝에 풀림). 같은 날짜가 동시에 시작해
+     * RUNNING 두 행이 생기지 않게 OpenCasesRecorder.start 가 RUNNING 확인 전에 부른다 (SCRUM-238).
+     */
+    void lockOpenCasesStart();
     Optional<Case> findByCaseNo(String caseNo);
     boolean existsByAlertId(Long alertId);
 
