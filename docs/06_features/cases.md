@@ -54,7 +54,9 @@
 - 경보별 결과: HIGH 아님 → 안 만듦 · 409 `CASE_ALREADY_OPENED` 또는 `cases.alert_id` 중복(그 경보 케이스가 실제로 있을 때) → 건너뜀 · 그 밖 → 실패로 세고 계속.
 - `batch_runs`(`OPEN_CASES`): 실패가 한 건이라도 있으면 **FAILED**(건수 메시지 `대상 · 생성 · HIGH 아님 · 이미 있음 · 실패`), 없으면 SUCCEEDED(`rows_in` 대상, `rows_out` 생성). FAILED인 날은 다시 돌리면 남은 대상만 처리.
 - `cases.alert_id` UNIQUE로 중복 방지. 성공한 날짜도 **보충 실행** 가능(회의 14·안건 21) — V014가 `batch_runs_succeeded_uq`에서 `OPEN_CASES`를 빼요. 다시 돌리면 아직 케이스 없는 SCORED 경보만 대상이라 새로 HIGH가 된 경보만 만들어요. [SCRUM-238]
+  - 그래서 같은 날짜에 `OPEN_CASES` **SUCCEEDED 행이 여러 개**일 수 있어요. "그날 케이스 생성 결과"를 보여 줄 때는 한 행만 기대하면 안 돼요(`findFirstBy…SUCCEEDED` 같은 조회 주의).
 - 시작 전 거절(행 안 만듦): 정책 비어 있음 `POLICY_NOT_CONFIGURED`, 실행 중 409 `BATCH_RUNNING`(시작은 advisory lock `6_006_001`로 줄 세움 — `CaseRepository.lockOpenCasesStart`). 케이스 번호 연도 = 경보 `reference_ts` 연도, 행위자 SYSTEM.
+  - **알려진 한계**: 서버가 배치 도중 죽으면 RUNNING 행이 남아 그 날짜는 계속 409 `BATCH_RUNNING`이에요(점수 배치도 같음). 자동 정리는 아직 없어요.
 - 경계값 설정 `aml.case-policy.{version, low-to-medium, medium-to-high}` — 기본값 없음(평가 뒤 확정, 미결 23). [SCRUM-105]
 - **생성 당시 점수·모델·정책 스냅샷 — 구현됨 (V013, SCRUM-236·237, 11/15 C안)** `cases.opened_*` 7칸(점수 행 id·점수·모델·피처 버전 / 정책 버전·두 경계값). 생성 배치가 HIGH로 판정한 `ScoreClassification`과 경보 점수를 `OpenedScore`(embeddable)로 남겨요. 만든 뒤 안 바뀌어요. V013 전에 만든 케이스는 마이그레이션이 `alert_scores`에서 점수·모델만 채우고 정책 세 칸은 null. CHECK: 점수 네 칸·정책 세 칸은 각각 함께 있거나 함께 없고, 정책은 점수가 있을 때만.
   - **왜 복사하나(C안)** — cases가 목록 SQL에서 detection 테이블을 조인하지 않으려고(규칙 예외 B안 대신). `alert_scores`는 경보당 1행·앱 계정 UPDATE/DELETE 없음(V005_1)이라 생성 당시 점수 = 지금 점수. 재채점(다른 모델로 다시 매기기)이 생기면 이 정렬 방식을 다시 정해요.
