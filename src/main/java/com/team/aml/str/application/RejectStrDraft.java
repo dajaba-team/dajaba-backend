@@ -26,7 +26,10 @@ import org.springframework.transaction.annotation.Transactional;
  *       → 사유 필수. 재생성으로 대체된 옛 초안도 여기서 409 DRAFT_SUPERSEDED 로 막힌다
  *       (cases 의 "현재 초안" 검사, SCRUM-223 — S6·P2 와 같음). approvals INSERT <b>전에</b> 부른다 (RejectCase 주석 "부르는 순서")</li>
  *   <li>초안이 사용 중인지(409 DRAFT_LOCKED) → approvals 반려 한 줄. 초안은 ACTIVE 그대로 — 보완 요청이면 조사역이 고쳐 쓰고,
- *       보고 안 함이면 초안 있는 종료(A6)가 SUPERSEDED 로 바꾼다</li>
+ *       보고 안 함이면 초안 있는 종료(A6)가 SUPERSEDED 로 바꾼다.
+ *       <b>화면이 실제로 받는 코드</b>: 잠긴(LOCKED) 초안은 케이스가 이미 APPROVED·REPORTED 라 ③에서 409 INVALID_CASE_TRANSITION,
+ *       대체된 초안은 ③에서 409 DRAFT_SUPERSEDED 가 먼저 나간다. 여기 DRAFT_LOCKED 는 케이스와 초안 상태가 어긋났을 때만 걸리는
+ *       안전장치다 — 순서는 바꾸지 않는다(케이스 먼저 잠그는 규칙, #108 리뷰)</li>
  * </ol>
  * 반려 당시 해시는 다음 승인 요청 때 ApprovalGate 가 NARRATIVE_UNCHANGED 를 판단하는 기준이다 (게이트 4번).
  */

@@ -2,7 +2,9 @@ package com.team.aml.str.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.team.aml.cases.application.WasCaseAssignee;
 import com.team.aml.cases.domain.Case;
+import com.team.aml.cases.domain.CaseStatus;
 import com.team.aml.cases.domain.CaseNotFoundException;
 import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.shared.audit.AccessLogWriter;
@@ -49,10 +51,11 @@ public class GetStrDraft {
     private final CurrentNarrative currentNarrative;
     private final ApprovalRepository approvals;
     private final UserRepository users;
+    private final WasCaseAssignee wasCaseAssignee;
 
     public GetStrDraft(StrDraftRepository drafts, CaseRepository cases, LatestVerificationRepository verifications,
                        CurrentUser currentUser, AccessLogWriter accessLog, CurrentNarrative currentNarrative,
-                       ApprovalRepository approvals, UserRepository users) {
+                       ApprovalRepository approvals, UserRepository users, WasCaseAssignee wasCaseAssignee) {
         this.drafts = drafts;
         this.cases = cases;
         this.verifications = verifications;
@@ -61,6 +64,7 @@ public class GetStrDraft {
         this.currentNarrative = currentNarrative;
         this.approvals = approvals;
         this.users = users;
+        this.wasCaseAssignee = wasCaseAssignee;
     }
 
     /** readOnly 아님 — accessLog.strView 가 MANDATORY·쓰기 트랜잭션을 요구한다. */
@@ -71,12 +75,17 @@ public class GetStrDraft {
         StrDraft draft = drafts.findById(draftId).orElseThrow(() -> new DraftNotFoundException(draftNo));
         Case c = cases.findById(draft.getCaseId()).orElseThrow(() -> new CaseNotFoundException(draft.getCaseId()));
         accessLog.strView(draftId);
-        if (!canReadBody(Role.valueOf(me.role()), c, me.userId())) return Result.metaOnly(draft, c);
+        Role role = Role.valueOf(me.role());
+        if (!canReadBody(role, c, me.userId())) return Result.metaOnly(draft, c);
         JsonNode verification = verifications.findLatestByDraftId(draftId).orElse(null);
         LastRejection lastRejection = approvals.findLatestRejection(draftId)
                 .map(a -> lastRejection(draft, a))
                 .orElse(null);
-        return Result.full(draft, c, verification, currentNarrative.of(draft), lastRejection);
+        // 예전 담당 조회는 버튼이 걸린 경우(승인자 + 승인 대기)에만 — 그 밖엔 결과가 같아 쿼리를 아낀다
+        boolean wasAssignee = role == Role.APPROVER && c.getStatus() == CaseStatus.PENDING_APPROVAL
+                && wasCaseAssignee.execute(c.getId(), me.userId());
+        List<String> actions = StrDraftActions.of(draftId, draft.getStatus(), c, me.userId(), role, wasAssignee);
+        return Result.full(draft, c, verification, currentNarrative.of(draft), lastRejection, actions);
     }
 
     /**
@@ -130,6 +139,7 @@ public class GetStrDraft {
      * @param suspicionLevelHq          본점용 의심 정도 1~5 (P2). 승인 전이면 null
      * @param references                참고 사례(RAG) 0~3건. AI 초안 응답에 아직 없어 지금은 항상 [] (규약 5.2·SCRUM-125 확인 뒤)
      * @param lastRejection             이 초안의 가장 최근 반려. 반려된 적 없으면 null
+     * @param availableActions          STR 화면 버튼 (StrDraftActions). META_ONLY 는 [] — "할 수 있는 것 없음"
      */
     public record Result(
             String draftNo,
@@ -151,19 +161,20 @@ public class GetStrDraft {
             Integer suspicionLevelBranch,
             Integer suspicionLevelHq,
             List<JsonNode> references,
-            LastRejection lastRejection
+            LastRejection lastRejection,
+            List<String> availableActions
     ) {
 
         /** narrative = CurrentNarrative — 문장은 지금 수정본, 근거는 같은 해시 최신 검증의 narrative_refs 우선. */
         static Result full(StrDraft draft, Case c, JsonNode latestVerification, List<NarrativeSection> narrative,
-                           LastRejection lastRejection) {
+                           LastRejection lastRejection, List<String> availableActions) {
             int currentRevisionNo = draft.getCurrentRevision().getRevisionNo();
             return new Result(DisplayNumber.draftNo(draft.getId()), Access.FULL, c.getCaseNo(), c.getStatus().name(),
                     draft.getStatus(), draft.getVersion(), c.getVersion(), draft.getProducedAt(), draft.getFacts(),
                     narrative, currentRevisionNo, withIsCurrent(latestVerification, NarrativeHash.of(draft.currentBody())),
                     draft.getGenerationId(), draft.getGeneratorVersion(),
                     draft.getSuspicionTypes(), List.of(), draft.getSuspicionLevelBranch(), draft.getSuspicionLevelHq(),
-                    List.of(), lastRejection);
+                    List.of(), lastRejection, availableActions);
         }
 
         /**
@@ -182,7 +193,7 @@ public class GetStrDraft {
         static Result metaOnly(StrDraft draft, Case c) {
             return new Result(DisplayNumber.draftNo(draft.getId()), Access.META_ONLY, c.getCaseNo(), c.getStatus().name(),
                     draft.getStatus(), null, null, draft.getProducedAt(), null, null, null, null,
-                    null, null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null, List.of());
         }
     }
 }

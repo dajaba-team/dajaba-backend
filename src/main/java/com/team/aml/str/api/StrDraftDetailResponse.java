@@ -37,7 +37,8 @@ public record StrDraftDetailResponse(
         Integer suspicionLevelBranch,
         Integer suspicionLevelHq,
         List<JsonNode> references,
-        LastRejectionResponse lastRejection
+        LastRejectionResponse lastRejection,
+        List<String> availableActions
 ) {
 
     private static final String ACCOUNT_KEY = "account_key";
@@ -63,7 +64,8 @@ public record StrDraftDetailResponse(
                 r.suspicionLevelBranch(),
                 r.suspicionLevelHq(),
                 r.references(),
-                LastRejectionResponse.from(r.lastRejection()));
+                LastRejectionResponse.from(r.lastRejection()),
+                r.availableActions());
     }
 
     /** 원본은 두고 복사본을 고친다. */
