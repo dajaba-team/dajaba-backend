@@ -8,6 +8,7 @@ import com.team.aml.str.domain.NarrativeSection;
 import com.team.aml.str.domain.StrSection;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -35,7 +36,8 @@ public record StrDraftDetailResponse(
         List<String> suspicionTypesRecommended,
         Integer suspicionLevelBranch,
         Integer suspicionLevelHq,
-        List<JsonNode> references
+        List<JsonNode> references,
+        LastRejectionResponse lastRejection
 ) {
 
     private static final String ACCOUNT_KEY = "account_key";
@@ -60,7 +62,8 @@ public record StrDraftDetailResponse(
                 r.suspicionTypesRecommended(),
                 r.suspicionLevelBranch(),
                 r.suspicionLevelHq(),
-                r.references());
+                r.references(),
+                LastRejectionResponse.from(r.lastRejection()));
     }
 
     /** 원본은 두고 복사본을 고친다. */
@@ -88,6 +91,22 @@ public record StrDraftDetailResponse(
             }
         } else if (node instanceof ArrayNode array) {
             array.forEach(StrDraftDetailResponse::mask);
+        }
+    }
+
+    /**
+     * 계약서 S2 last_rejection {reason_code, comment, revision_no, decided_by, decided_at, narrative_unchanged}.
+     * decided_at 은 UTC Z 초 단위(계약서 2.4) — 반려 시각은 rejected_at 이 아니라 decided_at.
+     */
+    public record LastRejectionResponse(String reasonCode, String comment, Integer revisionNo, String decidedBy,
+                                        Instant decidedAt, boolean narrativeUnchanged) {
+
+        static LastRejectionResponse from(GetStrDraft.LastRejection r) {
+            if (r == null) {
+                return null;
+            }
+            return new LastRejectionResponse(r.reasonCode(), r.comment(), r.revisionNo(), r.decidedBy(),
+                    r.decidedAt() == null ? null : r.decidedAt().truncatedTo(ChronoUnit.SECONDS), r.narrativeUnchanged());
         }
     }
 

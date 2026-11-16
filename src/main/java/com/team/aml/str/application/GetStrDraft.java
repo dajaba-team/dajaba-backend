@@ -9,6 +9,8 @@ import com.team.aml.shared.audit.AccessLogWriter;
 import com.team.aml.shared.domain.DisplayNumber;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.shared.security.CurrentUser;
+import com.team.aml.str.domain.Approval;
+import com.team.aml.str.domain.ApprovalRepository;
 import com.team.aml.str.domain.DraftNotFoundException;
 import com.team.aml.str.domain.LatestVerificationRepository;
 import com.team.aml.str.domain.NarrativeHash;
@@ -17,6 +19,8 @@ import com.team.aml.str.domain.StrDraft;
 import com.team.aml.str.domain.StrDraftRepository;
 import com.team.aml.str.domain.StrDraftStatus;
 import com.team.aml.user.domain.Role;
+import com.team.aml.user.domain.User;
+import com.team.aml.user.domain.UserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,15 +47,20 @@ public class GetStrDraft {
     private final CurrentUser currentUser;
     private final AccessLogWriter accessLog;
     private final CurrentNarrative currentNarrative;
+    private final ApprovalRepository approvals;
+    private final UserRepository users;
 
     public GetStrDraft(StrDraftRepository drafts, CaseRepository cases, LatestVerificationRepository verifications,
-                       CurrentUser currentUser, AccessLogWriter accessLog, CurrentNarrative currentNarrative) {
+                       CurrentUser currentUser, AccessLogWriter accessLog, CurrentNarrative currentNarrative,
+                       ApprovalRepository approvals, UserRepository users) {
         this.drafts = drafts;
         this.cases = cases;
         this.verifications = verifications;
         this.currentUser = currentUser;
         this.accessLog = accessLog;
         this.currentNarrative = currentNarrative;
+        this.approvals = approvals;
+        this.users = users;
     }
 
     /** readOnly 아님 — accessLog.strView 가 MANDATORY·쓰기 트랜잭션을 요구한다. */
@@ -64,8 +73,32 @@ public class GetStrDraft {
         accessLog.strView(draftId);
         if (!canReadBody(Role.valueOf(me.role()), c, me.userId())) return Result.metaOnly(draft, c);
         JsonNode verification = verifications.findLatestByDraftId(draftId).orElse(null);
-        return Result.full(draft, c, verification, currentNarrative.of(draft));
+        LastRejection lastRejection = approvals.findLatestRejection(draftId)
+                .map(a -> lastRejection(draft, a))
+                .orElse(null);
+        return Result.full(draft, c, verification, currentNarrative.of(draft), lastRejection);
     }
+
+    /**
+     * 이 초안의 가장 최근 반려 (계약서 S2 last_rejection — 편집 화면 맨 위 "보완 요청: …" 한 줄).
+     * revision_no = 반려 당시 수정본 번호, decided_by = 승인자 표시 이름(S4 edited_by 와 같은 모양 — users.id 는 안 내보냄),
+     * narrative_unchanged = 지금 본문 해시가 반려 당시와 같은가 — 같으면 다시 요청해도 409 NARRATIVE_UNCHANGED (ApprovalGate 4번과 같은 기준).
+     */
+    private LastRejection lastRejection(StrDraft draft, Approval a) {
+        Integer revisionNo = draft.getRevisions().stream()
+                .filter(r -> Objects.equals(r.getId(), a.getRevisionId()))
+                .map(r -> r.getRevisionNo())
+                .findFirst().orElse(null);
+        String decidedBy = a.getCreatedBy() == null ? null
+                : users.findById(a.getCreatedBy()).map(User::getDisplayName).orElse(null);
+        boolean unchanged = a.getNarrativeSha256().equals(NarrativeHash.of(draft.currentBody()));
+        return new LastRejection(a.getReasonCode().name(), a.getComment(), revisionNo, decidedBy, a.getCreatedAt(),
+                unchanged);
+    }
+
+    /** S2 last_rejection. reasonCode 는 NEED_REVISION·NOT_REPORTABLE 문자열 — str api 는 cases enum 을 못 본다(ArchUnit). */
+    public record LastRejection(String reasonCode, String comment, Integer revisionNo, String decidedBy,
+                                Instant decidedAt, boolean narrativeUnchanged) {}
 
     /** 본문은 승인자 또는 담당 조사역만. */
     private static boolean canReadBody(Role role, Case c, long userId) {
@@ -96,6 +129,7 @@ public class GetStrDraft {
      * @param suspicionLevelBranch      지점용 의심 정도 1~5 (S6). 요청 전이면 null
      * @param suspicionLevelHq          본점용 의심 정도 1~5 (P2). 승인 전이면 null
      * @param references                참고 사례(RAG) 0~3건. AI 초안 응답에 아직 없어 지금은 항상 [] (규약 5.2·SCRUM-125 확인 뒤)
+     * @param lastRejection             이 초안의 가장 최근 반려. 반려된 적 없으면 null
      */
     public record Result(
             String draftNo,
@@ -116,18 +150,20 @@ public class GetStrDraft {
             List<String> suspicionTypesRecommended,
             Integer suspicionLevelBranch,
             Integer suspicionLevelHq,
-            List<JsonNode> references
+            List<JsonNode> references,
+            LastRejection lastRejection
     ) {
 
         /** narrative = CurrentNarrative — 문장은 지금 수정본, 근거는 같은 해시 최신 검증의 narrative_refs 우선. */
-        static Result full(StrDraft draft, Case c, JsonNode latestVerification, List<NarrativeSection> narrative) {
+        static Result full(StrDraft draft, Case c, JsonNode latestVerification, List<NarrativeSection> narrative,
+                           LastRejection lastRejection) {
             int currentRevisionNo = draft.getCurrentRevision().getRevisionNo();
             return new Result(DisplayNumber.draftNo(draft.getId()), Access.FULL, c.getCaseNo(), c.getStatus().name(),
                     draft.getStatus(), draft.getVersion(), c.getVersion(), draft.getProducedAt(), draft.getFacts(),
                     narrative, currentRevisionNo, withIsCurrent(latestVerification, NarrativeHash.of(draft.currentBody())),
                     draft.getGenerationId(), draft.getGeneratorVersion(),
                     draft.getSuspicionTypes(), List.of(), draft.getSuspicionLevelBranch(), draft.getSuspicionLevelHq(),
-                    List.of());
+                    List.of(), lastRejection);
         }
 
         /**
@@ -146,7 +182,7 @@ public class GetStrDraft {
         static Result metaOnly(StrDraft draft, Case c) {
             return new Result(DisplayNumber.draftNo(draft.getId()), Access.META_ONLY, c.getCaseNo(), c.getStatus().name(),
                     draft.getStatus(), null, null, draft.getProducedAt(), null, null, null, null,
-                    null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null);
         }
     }
 }

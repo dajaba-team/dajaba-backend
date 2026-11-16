@@ -3,10 +3,13 @@ package com.team.aml.str.application;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.team.aml.cases.domain.RejectionReasonCode;
 import com.team.aml.shared.domain.DisplayNumber;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.str.api.StrDraftDetailResponse;
 import com.team.aml.str.application.GetStrDraft.Access;
+import com.team.aml.str.domain.Approval;
+import com.team.aml.str.domain.ApprovalRepository;
 import com.team.aml.str.domain.DraftNotFoundException;
 import com.team.aml.str.domain.NarrativeHash;
 import com.team.aml.str.domain.StrDraftRequest;
@@ -30,6 +33,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -74,6 +78,8 @@ class GetStrDraftDbTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired TransactionTemplate tx;
     @Autowired ObjectMapper om;
+    @Autowired ApprovalRepository approvals;
+    @Autowired ReviseStrDraft reviseDraft;
 
     long investigator;
     long otherInvestigator;
@@ -87,7 +93,7 @@ class GetStrDraftDbTest {
         int n = SEQ.incrementAndGet();
         investigator = user("get-inv" + n, "INVESTIGATOR");
         otherInvestigator = user("get-inv-other" + n, "INVESTIGATOR");
-        approver = user("get-apr" + n, "APPROVER");
+        approver = user("get-apr" + n, "APPROVER", "승인자");
         admin = user("get-adm" + n, "ADMIN");
         batchRunId = jdbc.queryForObject("insert into ops.batch_runs(batch_type, batch_date, status, triggered_by) "
                 + "values ('RULE_SCAN', date '2024-01-01' + ?, 'SUCCEEDED', 1) returning id", Long.class, n);
@@ -319,6 +325,7 @@ class GetStrDraftDbTest {
         assertThat(r.suspicionLevelHq()).isNull();
         assertThat(r.suspicionTypesRecommended()).isEmpty();                 // 룰 → 유형 표 전까지 항상 [] (rules.md 미결 4)
         assertThat(r.references()).isEmpty();                                // RAG 응답 칸 확인 전까지 항상 []
+        assertThat(r.lastRejection()).isNull();                              // 반려된 적 없음
     }
 
     // 10
@@ -365,6 +372,58 @@ class GetStrDraftDbTest {
         }
     }
 
+    // 12
+    @Test
+    void 정상_보완_요청_반려_뒤에는_last_rejection에_코드_사유_수정본_승인자_시각이_오고_같은_본문이면_narrative_unchanged() throws Exception {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        rejected(draftId, RejectionReasonCode.NEED_REVISION, "근거 거래 설명 보완");
+        login(investigator, "INVESTIGATOR");
+
+        GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+
+        assertThat(r.lastRejection().reasonCode()).isEqualTo("NEED_REVISION");
+        assertThat(r.lastRejection().comment()).isEqualTo("근거 거래 설명 보완");
+        assertThat(r.lastRejection().revisionNo()).isEqualTo(1);              // 반려 당시 수정본
+        assertThat(r.lastRejection().decidedBy()).isEqualTo("승인자");          // 표시 이름 — users.id 는 안 나감
+        assertThat(r.lastRejection().decidedAt()).isNotNull();
+        assertThat(r.lastRejection().narrativeUnchanged()).isTrue();           // 이대로 다시 요청하면 409 NARRATIVE_UNCHANGED
+
+        JsonNode body = om.readTree(om.writeValueAsString(StrDraftDetailResponse.from(r))).path("last_rejection");
+        assertThat(body.path("reason_code").asText()).isEqualTo("NEED_REVISION");
+        assertThat(body.path("decided_by").asText()).isEqualTo("승인자");
+        assertThat(body.path("narrative_unchanged").asBoolean()).isTrue();
+        assertThat(body.path("decided_at").asText()).matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z");   // 초 단위 UTC Z
+        assertThat(body.has("rejected_at")).isFalse();
+    }
+
+    // 13
+    @Test
+    void 정상_반려_뒤_본문을_고치면_narrative_unchanged가_false이고_revision_no는_반려_당시_번호() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        rejected(draftId, RejectionReasonCode.NEED_REVISION, "보완");
+        login(investigator, "INVESTIGATOR");
+        reviseDraft.execute(DisplayNumber.draftNo(draftId), caseVersion(caseId), Map.of(StrSection.METHOD, "고친 문장"));
+
+        GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+
+        assertThat(r.currentRevisionNo()).isEqualTo(2);
+        assertThat(r.lastRejection().revisionNo()).isEqualTo(1);
+        assertThat(r.lastRejection().narrativeUnchanged()).isFalse();
+    }
+
+    // 14
+    @Test
+    void 정상_META_ONLY에는_반려_사유가_없다() {   // 다른 조사역에게 반려 코멘트를 보여 주지 않는다 (계약서 S2 제한 응답, 11/8)
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        rejected(draftId, RejectionReasonCode.NOT_REPORTABLE, "보고 대상 아님");
+        login(otherInvestigator, "INVESTIGATOR");
+
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).lastRejection()).isNull();
+    }
+
     // ---- 도우미 ----
 
     private void assertMetaOnly(GetStrDraft.Result r, long draftId, long caseId) {
@@ -387,6 +446,16 @@ class GetStrDraftDbTest {
         assertThat(r.suspicionLevelHq()).isNull();
         assertThat(r.generatorVersion()).isNull();
         assertThat(r.references()).isNull();
+    }
+
+    /**
+     * 승인자가 지금 본문으로 반려 한 줄 (approvals). created_by 는 auditing 이 로그인한 승인자로 채운다.
+     * 케이스 상태는 바꾸지 않는다 — S2 는 케이스 상태와 상관없이 그 초안의 최신 반려를 준다(전이는 RejectStrDraftDbTest 몫).
+     */
+    private void rejected(long draftId, RejectionReasonCode code, String comment) {
+        login(approver, "APPROVER");
+        tx.executeWithoutResult(s -> approvals.save(Approval.rejected(drafts.findById(draftId).orElseThrow(), code, comment)));
+        SecurityContextHolder.clearContext();
     }
 
     private long strViewCount(long draftId) {
@@ -464,8 +533,12 @@ class GetStrDraftDbTest {
     }
 
     private long user(String loginId, String role) {
+        return user(loginId, role, "사용자");
+    }
+
+    private long user(String loginId, String role, String displayName) {
         return jdbc.queryForObject("insert into ops.users(login_id, display_name, role, created_by, updated_by) "
-                + "values (?, '사용자', ?, 1, 1) returning id", Long.class, loginId, role);
+                + "values (?, ?, ?, 1, 1) returning id", Long.class, loginId, displayName, role);
     }
 
     private long caseVersion(long caseId) {
