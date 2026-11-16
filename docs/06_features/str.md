@@ -40,7 +40,7 @@
 | # | API | 누가 |
 |---|---|---|
 | 1 | `POST /cases/{case_no}/str-drafts` (최대 90초) | 담당 |
-| 2 | `GET /str-drafts/{draft_no}` | 담당·승인자는 본문, 관리자·비담당 조사역은 상태·날짜만(`META_ONLY` — `case_no`·`case_status`는 값, 나머지 null). 열람 기록 `strView`. 11/13: `generation_id`·`generator_version`·`suspicion_types`·`suspicion_level_branch`·`suspicion_level_hq` 추가, `suspicion_types_recommended`·`references`는 출처가 생길 때까지 `[]` |
+| 2 | `GET /str-drafts/{draft_no}` | 담당·승인자는 본문, 관리자·비담당 조사역은 상태·날짜만(`META_ONLY` — `case_no`·`case_status`는 값, 나머지 null). 열람 기록 `strView`. 11/13: `generation_id`·`generator_version`·`suspicion_types`·`suspicion_level_branch`·`suspicion_level_hq` 추가, `suspicion_types_recommended`·`references`는 출처가 생길 때까지 `[]`. `last_rejection`은 그 초안의 최신 반려(`decided_by` = 표시 이름, `narrative_unchanged` = 지금 본문 해시가 반려 당시와 같은가 — 게이트 4번과 같은 기준), META_ONLY는 null |
 | 3 | `PUT /str-drafts/{draft_no}/revisions` `{case_version, sections:[{section, text}]}` (고친 섹션만) | 담당 |
 | 4 | `GET /str-drafts/{draft_no}/revisions` (`?revision_no=` 전·후 본문) | 담당·승인자. 그 밖은 403 `NOT_ASSIGNEE`, 없는 번호는 404 `REVISION_NOT_FOUND` |
 | 5 | `POST /str-drafts/{draft_no}/verify` (body `{}`) | 담당 |
