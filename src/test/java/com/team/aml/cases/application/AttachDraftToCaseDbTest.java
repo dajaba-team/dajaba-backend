@@ -48,7 +48,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * str 에 주는 cases 기능 — AttachDraftToCase(lock·execute), TouchCaseForRevision, CaseRepository.findForUpdate
- * (SCRUM-98), SubmitCaseForApproval·ApproveCase·RejectCase — 실제 PostgreSQL. str SaveStrDraft 대신 TransactionTemplate 으로 바깥 트랜잭션을 연다.
+ * (SCRUM-98), SubmitCaseForApproval·ApproveCase·RejectCase·ReportCase(SCRUM-234) — 실제 PostgreSQL. str SaveStrDraft 대신 TransactionTemplate 으로 바깥 트랜잭션을 연다.
  * 초안은 V008 cases_current_draft_fk 때문에 진짜로 만든다(newDraft).
  */
 @Testcontainers
@@ -84,6 +84,7 @@ class AttachDraftToCaseDbTest {
     @Autowired SubmitCaseForApproval submitForApproval;
     @Autowired ApproveCase approveCase;
     @Autowired RejectCase rejectCase;
+    @Autowired ReportCase reportCase;
     @Autowired CaseRepository cases;
     @Autowired CaseHistoryRepository histories;
     @Autowired JdbcTemplate jdbc;
@@ -736,6 +737,85 @@ class AttachDraftToCaseDbTest {
         assertThat(histories.findByCaseIdOrderByIdAsc(pending.getId())).hasSize(historyCount);
     }
 
+    // ── 모의 제출 (ReportCase, SCRUM-234) ──────────────────────
+
+    @Test
+    void 정상_모의_제출하면_REPORTED_REPORT_이력에_제출자가_남고_돌려준_version이_커밋된_값과_같다() {
+        Case c = prepare(CaseStatus.APPROVED);
+        loginAs(apr);
+
+        long returned = tx().execute(s -> reportCase.execute(c.getId(), c.getCurrentDraftId(), c.getVersion()));
+
+        Case after = cases.findById(c.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.REPORTED);
+        assertThat(after.getCurrentDraftId()).isEqualTo(c.getCurrentDraftId());
+        assertThat(after.getRejectionReasonCode()).isNull();
+        assertThat(returned).isEqualTo(after.getVersion()).isEqualTo(c.getVersion() + 1);
+        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId())).last().satisfies(h -> {
+            assertThat(h.getAction()).isEqualTo(CaseHistoryAction.REPORT);
+            assertThat(h.getFromStatus()).isEqualTo(CaseStatus.APPROVED);
+            assertThat(h.getToStatus()).isEqualTo(CaseStatus.REPORTED);
+            assertThat(h.getCreatedBy()).isEqualTo(apr);
+        });
+    }
+
+    @Test
+    void 실패_모의_제출은_APPROVED가_아니면_409이고_REPORTED에서_다시_내도_409() {
+        Case pending = prepare(CaseStatus.PENDING_APPROVAL);
+        Case drafted = prepare(CaseStatus.DRAFTED);
+        Case approved = prepare(CaseStatus.APPROVED);
+        loginAs(apr);
+
+        for (Case c : List.of(pending, drafted)) {
+            assertThatThrownBy(() -> inTx(() -> reportCase.execute(c.getId(), c.getCurrentDraftId(), c.getVersion())))
+                    .isInstanceOf(InvalidCaseTransitionException.class);
+            assertUnchanged(c);
+        }
+
+        long v = tx().execute(s -> reportCase.execute(approved.getId(), approved.getCurrentDraftId(), approved.getVersion()));
+        assertThatThrownBy(() -> inTx(() -> reportCase.execute(approved.getId(), approved.getCurrentDraftId(), v)))
+                .isInstanceOf(InvalidCaseTransitionException.class);
+        assertThat(histories.findByCaseIdOrderByIdAsc(approved.getId()))
+                .filteredOn(h -> h.getAction() == CaseHistoryAction.REPORT).hasSize(1);
+        assertThat(dbVersion(approved.getId())).isEqualTo(v);
+    }
+
+    @Test
+    void 실패_모의_제출은_현재_초안이_아니거나_version이_다르거나_없는_케이스면_거부되고_아무것도_안_바뀐다() {
+        Case approved = prepare(CaseStatus.APPROVED);
+        long other = newDraftOfOtherCase();
+        loginAs(apr);
+
+        assertThatThrownBy(() -> inTx(() -> reportCase.execute(approved.getId(), other, approved.getVersion())))
+                .isInstanceOfSatisfying(DraftSupersededException.class, e -> assertThat(e.details())
+                        .containsEntry("current_draft_no", DisplayNumber.draftNo(approved.getCurrentDraftId())));
+        assertThatThrownBy(() -> inTx(() ->
+                reportCase.execute(approved.getId(), approved.getCurrentDraftId(), approved.getVersion() - 1)))
+                .isInstanceOf(OptimisticLockException.class);
+        assertThatThrownBy(() -> inTx(() -> reportCase.execute(Long.MAX_VALUE, approved.getCurrentDraftId(), 0L)))
+                .isInstanceOf(CaseNotFoundException.class);
+        assertUnchanged(approved);
+    }
+
+    @Test
+    void 실패_모의_제출도_str_트랜잭션_밖에서는_거부되고_바깥이_롤백되면_같이_롤백() {
+        Case approved = prepare(CaseStatus.APPROVED);
+        loginAs(apr);
+
+        assertThatThrownBy(() -> reportCase.execute(approved.getId(), approved.getCurrentDraftId(), approved.getVersion()))
+                .isInstanceOf(IllegalTransactionStateException.class);
+
+        int historyCount = histories.findByCaseIdOrderByIdAsc(approved.getId()).size();
+        tx().executeWithoutResult(s -> {            // str 쪽(제출 기록 저장 등)이 실패한 경우
+            reportCase.execute(approved.getId(), approved.getCurrentDraftId(), approved.getVersion());
+            s.setRollbackOnly();
+        });
+        Case after = cases.findById(approved.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.APPROVED);
+        assertThat(after.getVersion()).isEqualTo(approved.getVersion());
+        assertThat(histories.findByCaseIdOrderByIdAsc(approved.getId())).hasSize(historyCount);
+    }
+
     private long dbVersion(long caseId) {
         return cases.findById(caseId).orElseThrow().getVersion();
     }
@@ -753,7 +833,7 @@ class AttachDraftToCaseDbTest {
             Case c = Case.open("CASE-2022-%06d".formatted(SEQ.incrementAndGet()), alertId, "010_A", null, SYSTEM);
             if (target != CaseStatus.OPEN) c.assign(inv, inv);
             if (target == CaseStatus.ESCALATED || target == CaseStatus.DRAFTED || target == CaseStatus.REJECTED
-                    || target == CaseStatus.PENDING_APPROVAL) {
+                    || target == CaseStatus.PENDING_APPROVAL || target == CaseStatus.APPROVED) {
                 c.escalate(inv, "STR 초안 작성 필요");
             }
             Case saved = cases.save(c);
@@ -761,13 +841,18 @@ class AttachDraftToCaseDbTest {
             return saved.getId();
         });
         // 초안이 있어야 하는 상태는 케이스 id 가 생긴 뒤 진짜 초안을 만들어 붙인다 (V008 cases_current_draft_fk).
-        if (target == CaseStatus.DRAFTED || target == CaseStatus.REJECTED || target == CaseStatus.PENDING_APPROVAL) {
+        if (target == CaseStatus.DRAFTED || target == CaseStatus.REJECTED || target == CaseStatus.PENDING_APPROVAL
+                || target == CaseStatus.APPROVED) {
             long draftId = newDraft(id);
             tx().executeWithoutResult(s -> {
                 Case c = cases.findById(id).orElseThrow();
                 c.attachDraft(draftId, inv);
-                if (target == CaseStatus.REJECTED || target == CaseStatus.PENDING_APPROVAL) {
+                if (target == CaseStatus.REJECTED || target == CaseStatus.PENDING_APPROVAL
+                        || target == CaseStatus.APPROVED) {
                     c.submitForApproval(inv);
+                }
+                if (target == CaseStatus.APPROVED) {
+                    c.approve(apr, false);
                 }
                 if (target == CaseStatus.REJECTED) {
                     c.reject(apr, false, rejection, "보완 필요");
@@ -844,6 +929,11 @@ class AttachDraftToCaseDbTest {
                 values (?, ?, ?, 'test', '2026-11-03T01:10:00Z', '{"facts":{}}'::jsonb, 1, 1)
                 """, draftId, caseId, "g-" + draftId);
         return draftId;
+    }
+
+    /** 다른 케이스(DRAFTED)에 딸린 초안 id — 승인된 초안은 LOCKED 라 같은 케이스에서 새 초안을 만들지 않는다. */
+    private long newDraftOfOtherCase() {
+        return prepare(CaseStatus.DRAFTED).getCurrentDraftId();
     }
 
     private long newAlert() {
