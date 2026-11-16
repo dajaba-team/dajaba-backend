@@ -14,6 +14,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -80,6 +81,26 @@ class OpenCasesFromAlertsDbTest {
 
         assertThat(batchRun(runId)).containsEntry("status", "SUCCEEDED")
                 .containsEntry("rows_in", 4).containsEntry("rows_out", 2);
+    }
+
+    @Test
+    void 정상_케이스에_생성_당시_점수_모델_정책_스냅샷을_남긴다() {   // V013, SCRUM-236·237
+        LocalDate date = newDate();
+        long high = scoredAlert(date, "0.95");
+
+        openCases.run(openCases.start(date, CurrentUser.SYSTEM_ID), date).orElseThrow();
+
+        Map<String, Object> c = jdbc.queryForMap("""
+                select opened_score_id, opened_score, opened_model_version, opened_feature_version,
+                       opened_policy_version, opened_low_to_medium, opened_medium_to_high
+                from ops.cases where alert_id = ?""", high);
+        long scoreId = jdbc.queryForObject("select id from ops.alert_scores where alert_id = ?", Long.class, high);
+        assertThat(((Number) c.get("opened_score_id")).longValue()).isEqualTo(scoreId);
+        assertThat((BigDecimal) c.get("opened_score")).isEqualByComparingTo("0.95");
+        assertThat(c).containsEntry("opened_model_version", "xgb-test").containsEntry("opened_feature_version", "f1")
+                .containsEntry("opened_policy_version", "test-v1");
+        assertThat((BigDecimal) c.get("opened_low_to_medium")).isEqualByComparingTo("0.5");
+        assertThat((BigDecimal) c.get("opened_medium_to_high")).isEqualByComparingTo("0.9");
     }
 
     @Test

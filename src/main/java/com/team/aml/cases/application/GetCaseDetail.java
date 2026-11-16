@@ -11,6 +11,7 @@ import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.cases.domain.CaseStatus;
 import com.team.aml.cases.domain.CasePolicySource;
 import com.team.aml.cases.domain.CloseReason;
+import com.team.aml.cases.domain.OpenedScore;
 import com.team.aml.cases.domain.PolicyNotConfiguredException;
 import com.team.aml.cases.domain.RejectionReasonCode;
 import com.team.aml.cases.domain.ScoreBand;
@@ -42,7 +43,8 @@ import java.util.Map;
  * <p>이번에 채우는 것: 케이스 칸·담당자·최근 이력 20건·available_actions, alert·latest_score(detection GetAlertSummary, SCRUM-152),
  * latest_summary(API-13 과 같은 값 — GetCaseSummary, SCRUM-175), investigator_notes(마지막 NOTE 행, SCRUM-176).
  * 최근 이력 20건에는 NOTE 를 넣지 않는다 — 메모 전문은 API-15(명세 API-11).
- * score·score_band·policy_version 은 계약서 Q2 MVP 대로 latest_score 와 같은 값(지금 정책으로 계산). 생성 때 스냅샷은 후속.
+ * score·score_band·policy_version 은 계약서 Q2 MVP 대로 latest_score 와 같은 값(지금 정책으로 계산).
+ * openedScore 는 케이스 생성 당시 점수·모델·정책 스냅샷(V013, SCRUM-237) — latest_score 와 섞지 않고 따로 준다.
  * aggregates 는 근거 거래 전체로 계산(CaseAggregates, SCRUM-179). 아직 없는 것(후속): current_draft 본문(str 조합 계층, 노션 미결 17). 컨트롤러가 그 칸은 null 로 내보낸다.
  */
 @Service
@@ -51,7 +53,8 @@ public class GetCaseDetail {
     public record Result(String caseNo, CaseStatus status, String accountKey, String entityId, UserRef assignee,
                          RejectionReasonCode rejectionReasonCode, CloseReason closeReason, Long currentDraftId,
                          long version, Instant createdAt, Instant updatedAt, Alert alert, LatestScore latestScore,
-                         String policyVersion, CaseSummaryResult.Summary latestSummary, String investigatorNotes,
+                         String policyVersion, OpenedScore openedScore, CaseSummaryResult.Summary latestSummary,
+                         String investigatorNotes,
                          CaseAggregates aggregates, List<History> history,
                          List<CaseAction> availableActions) {
         public Result {
@@ -134,7 +137,8 @@ public class GetCaseDetail {
                         a.transactionCount()),
                 new LatestScore(s.status(), s.score(), band == null ? null : band.band(), s.failureCode(),
                         s.modelVersion(), s.featureVersion(), s.dataQualityStatus(), s.reasons()),
-                band == null ? null : band.policyVersion(), caseSummary.latestOf(c), notes.currentOf(c.getId()),
+                band == null ? null : band.policyVersion(), c.getOpenedScore(), caseSummary.latestOf(c),
+                notes.currentOf(c.getId()),
                 transactions.aggregatesOf(c), history, actions);
     }
 

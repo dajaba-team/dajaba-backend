@@ -12,6 +12,7 @@ import com.team.aml.cases.domain.CloseRequiresStrException;
 import com.team.aml.cases.domain.InvalidAssigneeException;
 import com.team.aml.cases.domain.InvalidCaseTransitionException;
 import com.team.aml.cases.domain.NotAssigneeException;
+import com.team.aml.cases.domain.OpenedScore;
 import com.team.aml.cases.domain.ScoreBand;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.user.domain.UserNotFoundException;
@@ -37,6 +38,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
@@ -380,6 +382,76 @@ class CaseUseCasesDbTest {
     @Test
     void 실패_없는_케이스면_예전_담당_조회도_404() {
         assertThatThrownBy(() -> wasAssignee.execute(-1L, inv.userId())).isInstanceOf(CaseNotFoundException.class);
+    }
+
+    // ── 목록 점수 정렬 (SCRUM-236, V013 생성 당시 점수) ───────────────
+
+    @Test
+    void 정상_점수_순_정렬은_없는_점수를_맨_뒤에_두고_같은_점수는_최신_생성_먼저() {
+        AppUserDetails sorter = user("sort_inv_" + SEQ.incrementAndGet(), "INVESTIGATOR");
+        Case a = scored("0.95", sorter);
+        Case b = scored("0.91", sorter);
+        Case none = scored(null, sorter);   // V013 전처럼 점수 스냅샷 없음
+        Case d = scored("0.91", sorter);    // b 와 같은 점수, 더 늦게 생성
+        login(sorter);
+
+        assertThat(sortedBy("score,desc", 0, 20)).containsExactly(
+                a.getCaseNo(), d.getCaseNo(), b.getCaseNo(), none.getCaseNo());
+        assertThat(sortedBy("score,asc", 0, 20)).containsExactly(     // 오름차순도 없는 점수는 맨 뒤 (0 으로 안 바꿈)
+                d.getCaseNo(), b.getCaseNo(), a.getCaseNo(), none.getCaseNo());
+        assertThat(sortedBy("score,desc", 1, 2)).containsExactly(     // 전체를 정렬한 뒤 페이지를 자른다
+                b.getCaseNo(), none.getCaseNo());
+        assertThat(sortedBy(null, 0, 1)).containsExactly(a.getCaseNo()); // 기본은 score,desc
+    }
+
+    @Test
+    void 정상_목록_한_줄의_점수는_생성_당시_점수_등급과_정책은_지금_정책() {
+        AppUserDetails viewer = user("score_inv_" + SEQ.incrementAndGet(), "INVESTIGATOR");
+        Case high = scored("0.95", viewer);
+        Case none = scored(null, viewer);
+        login(viewer);
+
+        var items = list.execute(new ListCases.Query(null, "me", null, null, "score,desc", 0, 20)).getContent();
+        assertThat(items.get(0)).satisfies(i -> {
+            assertThat(i.caseNo()).isEqualTo(high.getCaseNo());
+            assertThat(i.score()).isEqualByComparingTo("0.95");
+            assertThat(i.scoreBand()).isEqualTo(ScoreBand.HIGH);      // 정책 test-v1: ≥ 0.9
+            assertThat(i.policyVersion()).isEqualTo("test-v1");
+        });
+        assertThat(items.get(1)).satisfies(i -> {
+            assertThat(i.caseNo()).isEqualTo(none.getCaseNo());
+            assertThat(i.score()).isNull();
+            assertThat(i.scoreBand()).isNull();
+            assertThat(i.policyVersion()).isNull();
+        });
+        // 상세는 생성 당시 스냅샷을 latest_score 와 따로 준다 (SCRUM-237)
+        assertThat(detail.execute(high.getCaseNo()).openedScore()).satisfies(o -> {
+            assertThat(o.score()).isEqualByComparingTo("0.95");
+            assertThat(o.modelVersion()).isEqualTo("xgb-test");
+            assertThat(o.policyVersion()).isEqualTo("test-v1");
+            assertThat(o.mediumToHigh()).isEqualByComparingTo("0.9");
+        });
+        assertThat(detail.execute(none.getCaseNo()).openedScore()).isNull();
+    }
+
+    private java.util.List<String> sortedBy(String sort, int page, int size) {
+        return list.execute(new ListCases.Query(null, "me", null, null, sort, page, size)).getContent().stream()
+                .map(ListCases.Item::caseNo).toList();
+    }
+
+    /** 생성 당시 점수가 있는(또는 없는) 케이스를 who 담당으로. score 가 null 이면 스냅샷 없음. */
+    private Case scored(String score, AppUserDetails who) {
+        long alertId = newAlert();
+        OpenedScore opened = score == null ? null : new OpenedScore(alertId, new BigDecimal(score), "xgb-test", "f1",
+                "test-v1", new BigDecimal("0.5"), new BigDecimal("0.9"));
+        return tx().execute(s -> {
+            Case c = Case.open("CASE-2023-%06d".formatted(SEQ.incrementAndGet()), alertId, "010_U" + alertId, null,
+                    opened, SYSTEM);
+            c.assign(who.userId(), who.userId());
+            Case saved = cases.saveAndFlush(c);
+            histories.saveAll(saved.takePendingHistories());
+            return saved;
+        });
     }
 
     // ── 준비 ──────────────────────────────────────────────────
