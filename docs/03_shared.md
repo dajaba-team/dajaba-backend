@@ -95,7 +95,7 @@
 | 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |
 | 409 | `CASE_ALREADY_OPENED` | detection `MarkCaseOpened` — 이미 케이스가 생긴 경보. 케이스 생성 트랜잭션째 롤백 | 확정 [SCRUM-108] |
 | 409 | `LOGIN_ID_TAKEN`, `ASSIGNEE_HAS_ACTIVE_CASES` (`details.active_case_count`), `ACCOUNT_CHANGE_NOT_ALLOWED` (`details.reason` = `SELF`·`SYSTEM`) | user 계정 관리 — 아이디 중복(DB unique 위반도 같은 409) · 진행 중 담당이 남은 조사역을 승인자로 · 관리자 본인·SYSTEM 계정 변경 | 확정 [SCRUM-135 ②, 11/10 진희] |
-| 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 거부), `AI_TIMEOUT`, `AI_BAD_RESPONSE`, `AI_DRAFT_NOT_FOUND`·`AI_INVALID_REQUEST`·`AI_UNAUTHENTICATED`(AI 404·400·401 이름 바꿈, SCRUM-128), `SUMMARY_CODE_CHECK_FAILED` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정. 〔제안〕 `SUMMARY_CODE_CHECK_FAILED` — 요약 응답은 200인데 `code_checks` 중 `match=false`가 있어 저장하지 않음(`details.failed_checks`), 기존 요약 유지 [규약 v0.4 §6.1, RefreshCaseSummary] |
+| 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 실패 — 연결 거부·이름 조회 실패·보낸 뒤 끊김, SCRUM-229), `AI_TIMEOUT`, `AI_BAD_RESPONSE`, `AI_DRAFT_NOT_FOUND`·`AI_INVALID_REQUEST`·`AI_UNAUTHENTICATED`(AI 404·400·401 이름 바꿈, SCRUM-128), `SUMMARY_CODE_CHECK_FAILED` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정. 〔제안〕 `SUMMARY_CODE_CHECK_FAILED` — 요약 응답은 200인데 `code_checks` 중 `match=false`가 있어 저장하지 않음(`details.failed_checks`), 기존 요약 유지 [규약 v0.4 §6.1, RefreshCaseSummary] |
 | 500 | `INTERNAL_ERROR` | 공통 | 확정 |
 
 AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지고 `LLM_UNAVAILABLE`로 합쳐졌어요. `VERIFY_UNAVAILABLE`은 에러가 아니라 **검증 결과의 `status` 값**(200 응답)이라 검증 결과 한 줄로 저장해요 [§5.3].
@@ -144,14 +144,16 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 - **시간 한도** — 초안·검증·요약처럼 **화면에서 부르는 요청은 전체 90초**(재시도 포함, 호출마다 90초가 아님). 점수 배치는 **500건 묶음 호출 하나마다** 같은 규칙이에요(배치 전체가 90초가 아님). MVP는 **동기**(`@Async`·큐·폴링은 고도화). [10/29]
 - 4xx는 재시도 없이 `AiClientException` → 502. 단 409 `GENERATION_IN_PROGRESS`는 409 `DRAFT_IN_PROGRESS`로. [10/29]
 - **재시도** — 최대 **1회**, 그리고 **위 시간 한도 안에 남은 시간이 있을 때만**. [10/29]
-  - 다시 보내는 것(판별은 HTTP 5xx가 아니라 코드/원인): AI가 **바로 돌려준** `LLM_UNAVAILABLE`·`MODEL_UNAVAILABLE`·**503 `DB_UNAVAILABLE`**, 또는 백엔드가 AI에 **연결을 거부당한** 경우(`ConnectException`)만.
-  - 다시 보내지 않는 것: AI 500 `INTERNAL` 등 **그 밖의 5xx·4xx**(코드 그대로 502), **연결 타임아웃(`ConnectTimeoutException`)**·**백엔드 쪽 응답 대기 타임아웃**(시간을 이미 다 썼고, AI가 아직 처리 중일 수 있음), `LLM_INVALID_OUTPUT`·`LLM_BUDGET_EXCEEDED`·`GENERATION_IN_PROGRESS`.
-  - 재시도 후에도 실패하면 **AI가 준 코드 그대로 502**. 연결 거부로 끝나 AI 코드가 없을 때만 **`AI_UNAVAILABLE` 502**, 타임아웃은 `AI_TIMEOUT` 502. [SCRUM-17, 10/29]
+  - 다시 보내는 것(판별은 HTTP 5xx가 아니라 코드/원인): AI가 **바로 돌려준** `LLM_UNAVAILABLE`·`MODEL_UNAVAILABLE`·**503 `DB_UNAVAILABLE`**, 또는 요청이 AI에 **닿기 전에 연결 단계에서 실패한** 경우만 — 연결 거부(`ConnectException`), 이름 조회 실패(`UnknownHostException`, compose에서 ai 컨테이너가 멈췄을 때), 경로 없음(`NoRouteToHostException`). 요청이 안 갔으니 다시 보내도 중복이 없어요. [SCRUM-229]
+  - 다시 보내지 않는 것: AI 500 `INTERNAL` 등 **그 밖의 5xx·4xx**(코드 그대로 502), **연결 타임아웃(`ConnectTimeoutException`)**·**백엔드 쪽 응답 대기 타임아웃**(시간을 이미 다 썼고, AI가 아직 처리 중일 수 있음), **요청을 보낸 뒤 연결이 끊긴 경우**(`PrematureCloseException` · `SocketException`(연결 단계 셋 제외, Connection reset 등) · 리눅스 epoll `NativeIoException` → `AI_UNAVAILABLE` — AI가 이미 받아 생성 중일 수 있음) [SCRUM-229], `LLM_INVALID_OUTPUT`·`LLM_BUDGET_EXCEEDED`·`GENERATION_IN_PROGRESS`.
+  - 재시도 후에도 실패하면 **AI가 준 코드 그대로 502**. AI 코드 없이 연결이 실패하면(위 연결 단계 실패, 보낸 뒤 끊김) **`AI_UNAVAILABLE` 502** "AI 서버 응답 없음. 잠시 후 다시 시도", 타임아웃은 `AI_TIMEOUT` 502. [SCRUM-17, 10/29, SCRUM-229]
+  - 그 밖에 분류되지 않은 예외는 `AI_BAD_RESPONSE` 502 "AI 응답 처리 실패" — 메시지에 예외 클래스 이름을 넣지 않고, 클래스 이름은 서버 로그 `cause=` 칸에만 남겨요. [SCRUM-229]
   - 대상 코드는 규약 v0.2 §6.2 그대로이고, "남은 시간 안에서만"과 "백엔드 타임아웃은 제외"를 10/29에 더했어요. 규약 문구도 다음 규약 변경 때 맞출게요. 〔레퍼런스 §8.5·SD 명세의 "5xx·타임아웃 1회"는 그 전 표기〕
 - AI 쪽 중첩 재시도 금지. [안건 21]
-- 모든 호출은 `ai_call_logs`에 **시도마다 한 줄**(재시도하면 같은 `request_id`로 `attempt` 1·2) — **메타데이터만**: 엔드포인트, `request_id`, 상태 코드(AI가 준 HTTP 상태, 타임아웃·연결 실패는 null), 에러 코드, 소요 ms, 재시도 회차, 버전, `generation_id`, 대상(`target_type`·`target_id`). **요청·응답 본문은 실패해도 저장하지 않아요.** 실패 요청에 조사 메모·보고서 본문이 들어갈 수 있어서예요. 전문은 **AI가 그 요청을 저장했을 때만** AI 쪽 `ai.generations`에서 `request_id`로 찾을 수 있어요(연결 실패·인증 거부처럼 AI가 기록 전에 끝난 요청은 전문이 없어요). [규약 v0.2 §6.4, 10/29] 〔레퍼런스 §3.4의 "실패한 호출만 본문 저장"은 그 전 안〕
+- 모든 호출은 `ai_call_logs`에 **시도마다 한 줄**(재시도하면 같은 `request_id`로 `attempt` 1·2) — **메타데이터만**: 엔드포인트, `request_id`, 상태 코드(AI가 준 HTTP 상태, 타임아웃·연결 실패는 null — 단 2xx 본문을 받는 중 끊긴 경우는 실제 2xx, 아래 "2xx인데 응답 확인" 줄의 예외 [SCRUM-229]), 에러 코드, 소요 ms, 재시도 회차, 버전, `generation_id`, 대상(`target_type`·`target_id`). **요청·응답 본문은 실패해도 저장하지 않아요.** 실패 요청에 조사 메모·보고서 본문이 들어갈 수 있어서예요. 전문은 **AI가 그 요청을 저장했을 때만** AI 쪽 `ai.generations`에서 `request_id`로 찾을 수 있어요(연결 실패·인증 거부처럼 AI가 기록 전에 끝난 요청은 전문이 없어요). [규약 v0.2 §6.4, 10/29] 〔레퍼런스 §3.4의 "실패한 호출만 본문 저장"은 그 전 안〕
 - `ai_call_logs`의 대상·버전은 엔드포인트별로 고정이에요. 버전·`generation_id`는 **2xx 응답 본문이 있을 때만** 채워요(4xx·5xx·타임아웃·연결 실패는 null). [SCRUM-18]
 - **2xx인데 `AiClient`의 응답 확인(필수 칸·칸 타입·점수 묶음 `batch_run_id`·`alert_id` 대조)이 실패하면** 그 시도는 실패 행이에요 — `status_code`=실제 2xx, `error_code`=`AI_BAD_RESPONSE`, 버전·`generation_id`는 본문에서 읽은 값. 재시도 안 함(형식 오류는 재시도 대상 아님). 대상: 점수·초안·검증·요약(health 제외). [SCRUM-128]
+  - 예외: 2xx 본문을 **받는 중 연결이 끊기면** 형식 오류가 아니라 연결 실패예요 — `error_code`=`AI_UNAVAILABLE`, `status_code`=실제 2xx, 버전·`generation_id`는 null(본문을 못 받음), 재시도 안 함 — 위 `ai_call_logs` 상태 코드 칸의 예외와 같은 경우. [SCRUM-229]
 - `AiClient`가 돌려준 **뒤** 유스케이스가 하는 업무 검사 실패(str `AiDraftResponseReader`·`SaveStrDraft`, cases `RefreshCaseSummary`의 `SUMMARY_CODE_CHECK_FAILED`)는 기록이 **성공 행 그대로**예요 — 화면엔 실패지만 AI 호출 자체는 정상이었어요. [SCRUM-128]
 
   | 엔드포인트 | `target_type` / `target_id` | `ai_version` (응답 필드) |

@@ -98,17 +98,20 @@ sequenceDiagram
     REQ->>DB: 케이스·경보·reasons 읽기 (읽기만), draft_id 선발급
     REQ->>AIC: createDraft(draftRequest) — facts는 AI가 계산(안건 23)
     AIC->>AI: POST /v1/str/drafts (타임아웃 90초)
-    alt 서버 다운
-        AI--xAIC: connection refused (재시도 1회 후 — 안건 21 현값)
+    alt 서버 다운 (연결 거부·이름 조회 실패 — 요청이 AI에 안 닿음)
+        AI--xAIC: connection refused / UnknownHost (재시도 1회 후 — 안건 21 현값, SCRUM-229)
+    else 보낸 뒤 연결 끊김
+        AI--xAIC: PrematureClose · SocketException(연결 단계 셋 제외, reset 등) · epoll NativeIoException (재시도 안 함 — AI가 생성 중일 수 있음, SCRUM-229)
     else 90초 초과
         AI--xAIC: timeout
     else AI가 500/502 반환
         AI-->>AIC: 502 {error_code: LLM_INVALID_OUTPUT | LLM_BUDGET_EXCEEDED}
     end
     AIC->>DB: INSERT ai_call_logs (FAILED, error_code, 소요 ms)  ⟵ 별도 트랜잭션
-    AIC-->>REQ: AiUnavailableException / AiRejectedException
+    AIC-->>REQ: AiClientException (502)
     REQ-->>STRC: 예외
-    STRC-->>FE: 502 {code: AI_UNAVAILABLE, message: "AI 서버 응답 없음. 잠시 후 다시 시도"}
+    STRC-->>FE: 502 {code: AI_UNAVAILABLE | AI_TIMEOUT | AI가 준 코드, message}
+    note over STRC,FE: 서버 다운·끊김은 AI_UNAVAILABLE "AI 서버 응답 없음. 잠시 후 다시 시도"
     note over STRC,DB: SaveStrDraft는 호출되지 않음 → str_drafts 행 없음, 케이스는 ESCALATED 그대로
     FE-->>Inv: 실패 메시지 + "다시 시도" 버튼 (케이스 화면은 그대로)
 
@@ -133,4 +136,4 @@ sequenceDiagram
 | 점수는 500개 묶음마다 커밋 (안건 10) | 4-1: 묶음 1 성공분이 묶음 2 실패에 영향 없음 |
 | 점수 요청 자동 재시도 | 4-1: 횟수·대상 오류·시간 한도는 공통 `AiClient` 계약으로 확정. 4-2 STR 그림의 원문 횟수는 이번 ML 수정에서 변경하지 않음 |
 | 점수 재시도의 저장 중복 방지 | AI는 동일 입력·모델/특징 버전의 `prediction_id`와 결과를 재사용. 백엔드 저장 키/제약은 공통 확인 대상이며 `alert_id` 하나로 모든 모델 버전 이력을 막지 않음 |
-| 에러 코드는 백엔드가 매핑 (안건 9) | 4-2: AI 502 → 백엔드 `AI_UNAVAILABLE`, 프론트는 코드로 메시지 |
+| 에러 코드는 백엔드가 매핑 (안건 9) | 4-2: AI가 준 코드는 그대로 502, AI 코드가 없는 연결 실패는 `AI_UNAVAILABLE`·타임아웃은 `AI_TIMEOUT` 502(`03_shared` AI 연동). 프론트는 502에 코드별 문구 없이 서버 `message`를 보여 줌 |

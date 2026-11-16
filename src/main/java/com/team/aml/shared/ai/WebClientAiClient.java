@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.shared.ai.AiDtos.*;
 import com.team.aml.shared.config.AmlProperties;
 import io.netty.channel.ConnectTimeoutException;
+import io.netty.channel.unix.Errors;
 import io.netty.handler.timeout.ReadTimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,8 +17,12 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import reactor.core.Exceptions;
 import reactor.core.publisher.Mono;
+import reactor.netty.http.client.PrematureCloseException;
 
 import java.net.ConnectException;
+import java.net.NoRouteToHostException;
+import java.net.SocketException;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -39,9 +44,10 @@ import java.util.regex.Pattern;
  *  - 헤더 X-Internal-Key, X-Request-Id(UUID, 재시도해도 같은 값), X-Budget-Ms(그 시도 때 남은 예산 ms)
  *  - 화면 요청 전체 90초(재시도 포함) = aml.ai.timeout-seconds. 점수는 500건 묶음마다 같은 한도.
  *  - 재시도 1회, 남은 시간 안에서만. 판별은 HTTP 5xx 가 아니라 코드/원인으로:
- *      재시도 O: LLM_UNAVAILABLE·MODEL_UNAVAILABLE·DB_UNAVAILABLE, 또는 연결 거부(ConnectException)
- *      재시도 X: 그 밖의 5xx·4xx·409, 연결 타임아웃(ConnectTimeoutException)·응답 타임아웃
- *  - 실패 매핑: AI 가 준 코드 그대로 502. 연결 거부로 끝나면 AI_UNAVAILABLE 502, 타임아웃은 AI_TIMEOUT 502.
+ *      재시도 O: LLM_UNAVAILABLE·MODEL_UNAVAILABLE·DB_UNAVAILABLE, 또는 연결 단계 실패(CONNECT_STAGE_FAILURES — 연결 거부·이름 조회 실패·경로 없음)
+ *      재시도 X: 그 밖의 5xx·4xx·409, 연결 타임아웃(ConnectTimeoutException)·응답 타임아웃, 보낸 뒤 끊김(CLOSED_AFTER_SEND)
+ *  - 실패 매핑: AI 가 준 코드 그대로 502. 연결 실패(단계 실패·보낸 뒤 끊김)는 AI_UNAVAILABLE 502, 타임아웃은 AI_TIMEOUT 502,
+ *    그 밖은 AI_BAD_RESPONSE 502 "AI 응답 처리 실패"(예외 클래스 이름은 로그 cause= 에만, SCRUM-229).
  *  - AI 409 GENERATION_IN_PROGRESS → 409 DRAFT_IN_PROGRESS (재시도 없음).
  *  - AI 404 DRAFT_NOT_FOUND·400 INVALID_REQUEST·401 UNAUTHENTICATED → AI_ 붙여 502 (백엔드 코드와 이름 충돌).
  *
@@ -60,6 +66,20 @@ public class WebClientAiClient implements AiClient {
 
     /** 재시도 대상 AI 응답 코드 (HTTP 5xx 여부가 아니라 코드로 판별). */
     private static final Set<String> RETRYABLE_AI_CODES = Set.of("LLM_UNAVAILABLE", "MODEL_UNAVAILABLE", "DB_UNAVAILABLE");
+
+    /**
+     * 연결 단계 실패 — 요청이 AI 에 닿기 전에 끝남. 다시 보내도 중복 생성이 없어 AI_UNAVAILABLE + 재시도 1회 (SCRUM-229).
+     * ConnectException 은 연결 거부(netty AnnotatedConnectException 포함). 하위인 ConnectTimeoutException 은 classify 가 먼저 거른다.
+     */
+    private static final List<Class<? extends Throwable>> CONNECT_STAGE_FAILURES =
+            List.of(ConnectException.class, UnknownHostException.class, NoRouteToHostException.class);
+
+    /**
+     * 보낸 뒤(또는 보냈는지 모를 때) 연결 끊김 — AI 가 이미 받아 생성 중일 수 있어 AI_UNAVAILABLE + 재시도 안 함 (SCRUM-229).
+     * PrematureCloseException: 응답 전·2xx 본문 중 끊김. 연결 리셋은 NIO(맥)는 SocketException, epoll(리눅스 컨테이너)은 NativeIoException.
+     */
+    private static final List<Class<? extends Throwable>> CLOSED_AFTER_SEND =
+            List.of(PrematureCloseException.class, SocketException.class, Errors.NativeIoException.class);
 
     /**
      * "HTTP 상태 + AI 코드" → 프론트에 줄 코드. 백엔드 자체 404 DRAFT_NOT_FOUND·400 INVALID_REQUEST·401 UNAUTHENTICATED 와
@@ -315,8 +335,8 @@ public class WebClientAiClient implements AiClient {
                 last = classify(e);
                 Integer status = e instanceof ClassifiedResponse cr ? cr.aiStatus : null;
                 recordAttempt(path, requestId, tries, status, last.ex().code(), start, null, targetType, targetId);
-                log.warn("ai call failed path={} request_id={} code={} http={} retryable={} ms={} try={}",
-                        path, requestId, last.ex().code(), last.ex().httpStatus(), last.retryable(), msSince(start), tries);
+                log.warn("ai call failed path={} request_id={} code={} http={} retryable={} cause={} ms={} try={}",
+                        path, requestId, last.ex().code(), last.ex().httpStatus(), last.retryable(), last.cause(), msSince(start), tries);
                 if (!last.retryable()) break;
                 continue;
             }
@@ -324,10 +344,11 @@ public class WebClientAiClient implements AiClient {
             try {
                 value = reader.apply(response.body());
             } catch (RuntimeException e) {
-                AiClientException bad = classify(e).ex();          // AiClientException 은 그대로, 그 밖은 AI_BAD_RESPONSE
+                Classified rejected = classify(e);                  // AiClientException 은 그대로, 그 밖은 AI_BAD_RESPONSE
+                AiClientException bad = rejected.ex();
                 recordAttempt(path, requestId, tries, response.status(), bad.code(), start, response.body(), targetType, targetId);
-                log.warn("ai response rejected path={} request_id={} code={} http={} ms={} try={}",
-                        path, requestId, bad.code(), response.status(), msSince(start), tries);
+                log.warn("ai response rejected path={} request_id={} code={} http={} cause={} ms={} try={}",
+                        path, requestId, bad.code(), response.status(), rejected.cause(), msSince(start), tries);
                 throw bad;
             }
             recordAttempt(path, requestId, tries, response.status(), null, start, response.body(), targetType, targetId);
@@ -357,18 +378,18 @@ public class WebClientAiClient implements AiClient {
         String code = body.hasNonNull("code") ? body.get("code").asText() : "AI_BAD_RESPONSE";
         String message = body.hasNonNull("message") ? body.get("message").asText() : ("AI 오류 (HTTP " + status + ")");
         if (status == 409 && "GENERATION_IN_PROGRESS".equals(code)) {         // 409 일 때만 "생성 중" 매핑
-            return new ClassifiedResponse(new AiClientException("DRAFT_IN_PROGRESS", message, Map.of(), 409), false, status);
+            return new ClassifiedResponse(new AiClientException("DRAFT_IN_PROGRESS", message, Map.of(), 409), false, status, null);
         }
         String renamed = RENAMED_AI_CODES.get(status + " " + code);          // 백엔드 자체 코드와 이름이 같은 AI 4xx
         if (renamed != null) {
-            return new ClassifiedResponse(new AiClientException(renamed, message, Map.of(), 502), false, status);
+            return new ClassifiedResponse(new AiClientException(renamed, message, Map.of(), 502), false, status, null);
         }
         boolean retryable = status >= 500 && RETRYABLE_AI_CODES.contains(code);   // 5xx + 해당 코드만 재시도 (4xx 는 안 함)
-        return new ClassifiedResponse(new AiClientException(code, message, Map.of(), 502), retryable, status);   // AI 코드 그대로 502
+        return new ClassifiedResponse(new AiClientException(code, message, Map.of(), 502), retryable, status, null);   // AI 코드 그대로 502
     }
 
     private ClassifiedResponse badResponse(String message) {
-        return new ClassifiedResponse(new AiClientException("AI_BAD_RESPONSE", message, Map.of(), 502), false, null);
+        return new ClassifiedResponse(new AiClientException("AI_BAD_RESPONSE", message, Map.of(), 502), false, null, null);
     }
 
     /**
@@ -378,24 +399,36 @@ public class WebClientAiClient implements AiClient {
     Classified classify(Throwable error) {
         Throwable c = Exceptions.unwrap(error);
         if (c instanceof ClassifiedResponse cr) {                  // 응답 코드+상태로 이미 분류됨
-            return new Classified(cr.ex, cr.retryable);
+            return new Classified(cr.ex, cr.retryable, cr.cause);
         }
         if (c instanceof AiClientException ae) {                   // 직접 던져진 경우 — 안전하게 재시도 안 함
-            return new Classified(ae, false);
+            return new Classified(ae, false, null);
         }
         if (c instanceof WebClientRequestException && c.getCause() != null) {
             c = c.getCause();
         }
+        String cause = c.getClass().getSimpleName();               // 로그 cause= 칸에만 — 응답 메시지엔 넣지 않음
         if (c instanceof ConnectTimeoutException) {                // ⚠ 반드시 ConnectException 보다 먼저
-            return new Classified(new AiClientException("AI_TIMEOUT", "AI 연결 시간 초과", Map.of(), 502), false);
+            return new Classified(new AiClientException("AI_TIMEOUT", "AI 연결 시간 초과", Map.of(), 502), false, cause);
         }
-        if (c instanceof ConnectException) {                       // 연결 거부 → 재시도 대상
-            return new Classified(new AiClientException("AI_UNAVAILABLE", "AI 서버 응답 없음. 잠시 후 다시 시도", Map.of(), 502), true);
+        if (isAny(c, CONNECT_STAGE_FAILURES)) {                   // 요청이 AI 에 안 닿음 → 재시도 대상
+            return new Classified(unavailable(), true, cause);
         }
         if (c instanceof ReadTimeoutException || c instanceof TimeoutException) {
-            return new Classified(new AiClientException("AI_TIMEOUT", "AI 서버 응답 시간 초과", Map.of(), 502), false);
+            return new Classified(new AiClientException("AI_TIMEOUT", "AI 서버 응답 시간 초과", Map.of(), 502), false, cause);
         }
-        return new Classified(new AiClientException("AI_BAD_RESPONSE", "AI 응답 처리 실패: " + c.getClass().getSimpleName(), Map.of(), 502), false);
+        if (isAny(c, CLOSED_AFTER_SEND)) {                        // ⚠ CONNECT_STAGE_FAILURES 뒤 — SocketException 이 둘의 부모
+            return new Classified(unavailable(), false, cause);
+        }
+        return new Classified(new AiClientException("AI_BAD_RESPONSE", "AI 응답 처리 실패", Map.of(), 502), false, cause);
+    }
+
+    private static AiClientException unavailable() {
+        return new AiClientException("AI_UNAVAILABLE", "AI 서버 응답 없음. 잠시 후 다시 시도", Map.of(), 502);
+    }
+
+    private static boolean isAny(Throwable c, List<Class<? extends Throwable>> types) {
+        return types.stream().anyMatch(t -> t.isInstance(c));
     }
 
     /** block() 이후 호출 스레드에서만 저장. 프록시의 flush·commit 실패까지 격리한다. */
@@ -422,7 +455,7 @@ public class WebClientAiClient implements AiClient {
     private ClassifiedResponse withStatus(int status, Throwable error) {
         Classified c = classify(error);
         Integer aiStatus = error instanceof ReadTimeoutException || error instanceof TimeoutException ? null : status;
-        return new ClassifiedResponse(c.ex(), c.retryable(), aiStatus);
+        return new ClassifiedResponse(c.ex(), c.retryable(), aiStatus, c.cause());
     }
 
     private static String text(JsonNode node, String field) {
@@ -440,19 +473,21 @@ public class WebClientAiClient implements AiClient {
         }
     }
 
-    /** 실패 분류 결과 — 예외와 재시도 여부. 테스트가 직접 검사한다. */
-    record Classified(AiClientException ex, boolean retryable) {}
+    /** 실패 분류 결과 — 예외와 재시도 여부, 로그 cause= 칸에 찍을 원인 클래스 이름(없으면 null). 테스트가 직접 검사한다. */
+    record Classified(AiClientException ex, boolean retryable, String cause) {}
 
     /** 응답 오류 분류 결과를 재시도 루프로 전달하는 내부 캐리어(HTTP 상태까지 반영해 재시도 여부 결정). */
     private static final class ClassifiedResponse extends RuntimeException {
         final transient AiClientException ex;
         final boolean retryable;
         final Integer aiStatus;
-        ClassifiedResponse(AiClientException ex, boolean retryable, Integer aiStatus) {
+        final String cause;
+        ClassifiedResponse(AiClientException ex, boolean retryable, Integer aiStatus, String cause) {
             super(null, null, false, false);   // 스택트레이스 없이 가볍게
             this.ex = ex;
             this.retryable = retryable;
             this.aiStatus = aiStatus;
+            this.cause = cause;
         }
     }
 }
