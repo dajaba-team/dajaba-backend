@@ -1,6 +1,8 @@
 package com.team.aml.str.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.cases.application.WasCaseAssignee;
 import com.team.aml.cases.domain.Case;
@@ -27,6 +29,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -109,6 +112,30 @@ public class GetStrDraft {
     public record LastRejection(String reasonCode, String comment, Integer revisionNo, String decidedBy,
                                 Instant decidedAt, boolean narrativeUnchanged) {}
 
+    /**
+     * 화면에 주는 참고 사례 칸 — AI Reference(shared/schemas/str/draft.py) 중 text 를 뺀 것.
+     * text 는 AI 가 프롬프트에 넣으려고 쓰는 원문 조각(최대 600자)이라 "보통 생략"이고, 화면은 문서명·쪽만 쓴다(계약서 S2 references).
+     */
+    static final List<String> REFERENCE_FIELDS = List.of("chunk_id", "doc_id", "doc_title", "page", "score");
+
+    /** 저장된 AI 응답(payload)의 generation_meta.references → 화면 칸만 골라 새 객체로. 배열이 아니거나 없으면 []. */
+    static List<JsonNode> references(JsonNode payload) {
+        JsonNode refs = payload == null ? null : payload.path("generation_meta").path("references");
+        if (refs == null || !refs.isArray()) {
+            return List.of();
+        }
+        List<JsonNode> out = new ArrayList<>();
+        for (JsonNode ref : refs) {
+            if (!ref.isObject()) continue;
+            ObjectNode picked = JsonNodeFactory.instance.objectNode();
+            for (String field : REFERENCE_FIELDS) {
+                picked.set(field, ref.has(field) ? ref.get(field).deepCopy() : NullNode.getInstance());   // 없는 칸도 키는 null 로
+            }
+            out.add(picked);
+        }
+        return List.copyOf(out);
+    }
+
     /** 본문은 승인자 또는 담당 조사역만. */
     private static boolean canReadBody(Role role, Case c, long userId) {
         return role == Role.APPROVER || (role == Role.INVESTIGATOR && Objects.equals(c.getAssigneeId(), userId));
@@ -137,7 +164,8 @@ public class GetStrDraft {
      * @param suspicionTypesRecommended 룰이 추천한 유형. 룰 → 서식 VI 유형 표가 아직 없어 지금은 항상 [] (rules.md 미결 4)
      * @param suspicionLevelBranch      지점용 의심 정도 1~5 (S6). 요청 전이면 null
      * @param suspicionLevelHq          본점용 의심 정도 1~5 (P2). 승인 전이면 null
-     * @param references                참고 사례(RAG) 0~3건. AI 초안 응답에 아직 없어 지금은 항상 [] (규약 5.2·SCRUM-125 확인 뒤)
+     * @param references                참고 사례(RAG) 0~3건 — 저장된 AI 응답의 generation_meta.references 에서 옮긴다(SCRUM-125).
+     *                                  AI 가 안 줬으면 []. 칸은 {@link #REFERENCE_FIELDS} 만 (text 는 프롬프트용이라 뺀다)
      * @param lastRejection             이 초안의 가장 최근 반려. 반려된 적 없으면 null
      * @param availableActions          STR 화면 버튼 (StrDraftActions). META_ONLY 는 [] — "할 수 있는 것 없음"
      */
@@ -173,8 +201,7 @@ public class GetStrDraft {
                     draft.getStatus(), draft.getVersion(), c.getVersion(), draft.getProducedAt(), draft.getFacts(),
                     narrative, currentRevisionNo, withIsCurrent(latestVerification, NarrativeHash.of(draft.currentBody())),
                     draft.getGenerationId(), draft.getGeneratorVersion(),
-                    draft.getSuspicionTypes(), List.of(), draft.getSuspicionLevelBranch(), draft.getSuspicionLevelHq(),
-                    List.of(), lastRejection, availableActions);
+                    draft.getSuspicionTypes(), List.of(), draft.getSuspicionLevelBranch(), draft.getSuspicionLevelHq(), GetStrDraft.references(draft.getPayload()), lastRejection, availableActions);
         }
 
         /**

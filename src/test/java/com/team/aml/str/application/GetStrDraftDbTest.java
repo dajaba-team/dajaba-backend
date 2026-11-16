@@ -33,6 +33,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -324,7 +325,7 @@ class GetStrDraftDbTest {
         assertThat(r.suspicionLevelBranch()).isNull();
         assertThat(r.suspicionLevelHq()).isNull();
         assertThat(r.suspicionTypesRecommended()).isEmpty();                 // 룰 → 유형 표 전까지 항상 [] (rules.md 미결 4)
-        assertThat(r.references()).isEmpty();                                // RAG 응답 칸 확인 전까지 항상 []
+        assertThat(r.references()).isEmpty();                                // AI 가 generation_meta.references 를 안 줬으면 []
         assertThat(r.lastRejection()).isNull();                              // 반려된 적 없음
     }
 
@@ -498,6 +499,30 @@ class GetStrDraftDbTest {
         assertThat(getDraft.execute(DisplayNumber.draftNo(newDraftId)).availableActions()).contains("REVISE", "SUBMIT");
     }
 
+    // 20
+    @Test
+    void 정상_AI가_준_참고_사례는_문서명과_쪽만_옮기고_원문_조각_text는_뺀다() throws Exception {   // #109 후속 (SCRUM-125)
+        long caseId = escalatedCase();
+        ObjectNode ref1 = JSON.createObjectNode().put("chunk_id", "c-1").put("doc_id", "kofiu-2023")
+                .put("doc_title", "STR 작성 사례집").put("page", 12).put("score", 0.83).put("text", "프롬프트용 원문");
+        ObjectNode ref2 = JSON.createObjectNode().put("doc_id", "kofiu-2021")
+                .put("doc_title", "의심거래 유형").put("page", 3).put("score", 0.71);   // chunk_id·text 없음
+        long draftId = savedDraft(caseId, List.of(ref1, ref2));
+        login(investigator, "INVESTIGATOR");
+
+        GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+
+        assertThat(r.references()).hasSize(2);
+        JsonNode body = om.readTree(om.writeValueAsString(StrDraftDetailResponse.from(r))).path("references");
+        assertThat(body.get(0).path("doc_title").asText()).isEqualTo("STR 작성 사례집");
+        assertThat(body.get(0).path("page").asInt()).isEqualTo(12);
+        assertThat(body.get(0).path("chunk_id").asText()).isEqualTo("c-1");
+        assertThat(body.get(0).has("text")).isFalse();                       // 원문 조각은 안 나간다
+        assertThat(body.get(1).get("chunk_id").isNull()).isTrue();           // 없는 칸은 키만 null
+        login(admin, "ADMIN");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).references()).isNull();   // META_ONLY 는 그대로 null
+    }
+
     // ---- 도우미 ----
 
     private void assertMetaOnly(GetStrDraft.Result r, long draftId, long caseId) {
@@ -544,11 +569,19 @@ class GetStrDraftDbTest {
 
     /** 담당 조사역으로 SaveStrDraft — 케이스 DRAFTED, 초안 ACTIVE, 수정본 1번. 끝나면 로그아웃. */
     private long savedDraft(long caseId) {
+        return savedDraft(caseId, List.of());
+    }
+
+    /** AI 응답 generation_meta.references 에 참고 사례를 실어 저장한다 (AI Reference 모양). */
+    private long savedDraft(long caseId, List<ObjectNode> references) {
         long draftId = requests.nextDraftId();
         JsonNode snapshot = JSON.createObjectNode().put("draft_id", DisplayNumber.draftNo(draftId));
         tx.executeWithoutResult(s -> requests.save(StrDraftRequest.request(draftId, caseId, snapshot)));
         login(investigator, "INVESTIGATOR");
-        saveDraft.execute(caseId, draftId, caseVersion(caseId), response(draftId));
+        ObjectNode response = response(draftId);
+        var refs = ((ObjectNode) response.path("generation_meta")).putArray("references");
+        references.forEach(refs::add);
+        saveDraft.execute(caseId, draftId, caseVersion(caseId), response);
         SecurityContextHolder.clearContext();
         return draftId;
     }
