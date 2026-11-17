@@ -4,6 +4,7 @@ import com.team.aml.shared.api.PageResponse;
 import com.team.aml.str.application.ApproveStrDraft;
 import com.team.aml.str.application.ListPendingApprovals;
 import com.team.aml.str.application.RejectStrDraft;
+import com.team.aml.str.application.ReportStrDraft;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -28,12 +29,15 @@ public class ApprovalController {
     private final ListPendingApprovals listPendingApprovals;
     private final ApproveStrDraft approveStrDraft;
     private final RejectStrDraft rejectStrDraft;
+    private final ReportStrDraft reportStrDraft;
 
     public ApprovalController(ListPendingApprovals listPendingApprovals, ApproveStrDraft approveStrDraft,
-                              RejectStrDraft rejectStrDraft) {
+                              RejectStrDraft rejectStrDraft,
+                              ReportStrDraft reportStrDraft) {
         this.listPendingApprovals = listPendingApprovals;
         this.approveStrDraft = approveStrDraft;
         this.rejectStrDraft = rejectStrDraft;
+        this.reportStrDraft = reportStrDraft;
     }
 
     @Operation(summary = "승인 대기 목록",
@@ -68,5 +72,16 @@ public class ApprovalController {
                                         @Valid @RequestBody RejectStrDraftRequest request) {
         return StrCaseChangeResponse.from(rejectStrDraft.execute(draftNo, request.caseVersion(),
                 request.reasonCode(), request.comment()));
+    }
+
+    @Operation(summary = "STR 모의 제출",
+            description = "이 초안을 승인한 사람만(역할이 승인자가 아니면 403 NOT_APPROVER, 다른 승인자는 403 NOT_DRAFT_APPROVER). 실제 기관 전송 없음 — 승인된 보고서를 제출됨으로 기록한다. "
+                    + "케이스 APPROVED·현재 초안이어야 한다(아니면 409 INVALID_CASE_TRANSITION, 대체된 초안은 409 DRAFT_SUPERSEDED). "
+                    + "이미 제출했으면 409 INVALID_CASE_TRANSITION, case_version 다르면 409 CONCURRENT_UPDATE. "
+                    + "응답: case_status REPORTED·문서번호·마감·제출 시각·늦음(late)·pdf_status PENDING")
+    @PostMapping("/{draftNo}/report")
+    public ReportStrDraftResponse report(@PathVariable String draftNo,
+                                         @Valid @RequestBody ReportStrDraftRequest request) {
+        return ReportStrDraftResponse.from(reportStrDraft.execute(draftNo, request.caseVersion()));
     }
 }
