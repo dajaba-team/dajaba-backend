@@ -30,8 +30,9 @@ swagger에서 **`POST /api/v1/auth/login`** 본문 `{"login_id": "inv01", "passw
 | `APP_MIGRATE_PASSWORD` | Flyway DDL 계정. db 계정 만들기(`01_roles.sh`)와 앱 Flyway가 같이 씀 | `app_migrate` | — | 없음 (필수) |
 | `APP_BACKEND_PASSWORD` | 앱 DB 계정 (`ops` 읽기·쓰기) | `app_backend` | — | 없음 (필수) |
 | `APP_AI_PASSWORD` | AI 서버 DB 계정. 앱은 안 씀(db 계정 만들기용) | `app_ai` | **같음** | 없음 (필수) |
-| `AI_INTERNAL_KEY` | AI 서버와 맞추는 내부 키(32자 이상 난수, `X-Internal-Key`) | — | **같음** | 비어 있음 (local은 목업이라 무관) |
+| `AI_INTERNAL_KEY` | AI 서버와 맞추는 내부 키(32자 이상 난수, `X-Internal-Key`) | — | **같음** | 비어 있음 (`AML_AI_MOCK=true`면 무관) |
 | `AI_BASE_URL` | AI 서버 주소 | — | — | compose 앱 `http://ai:8000` · IDE `http://localhost:8000` |
+| `AML_AI_MOCK` | local에서 AI 목업(`true`)·진짜 AI 서버(`false`). `true`/`false`만 — 다른 값이면 앱이 안 떠요 | — | — | `true` (목업) |
 | `DEV_USER_PASSWORD` | local 시연 계정 4명(admin·inv01·apr01·inv02)의 비밀번호 | — | — | 비어 있음 → 개발 계정을 안 만들고 경고 한 줄 |
 | `DB_HOST` | DB 호스트 | — | — | compose 앱 `db`(고정) · IDE `localhost` |
 | `DB_PORT` | DB 포트 | — | — | `5432` |
@@ -43,6 +44,17 @@ swagger에서 **`POST /api/v1/auth/login`** 본문 `{"login_id": "inv01", "passw
 | 참고: `SPRING_PROFILES_ACTIVE` | 프로파일 | — | — | compose 앱은 `local` 고정 · IDE는 실행 설정에 `local` |
 
 IDE에서 띄우면 앱이 리포 루트의 `.env`를 직접 읽어요(`application.yml`의 `spring.config.import`). compose로 띄운 앱은 위 표의 변수를 `compose.yaml`이 넘겨 줘요.
+
+**진짜 AI로 띄우기** (기본은 목업 — 토큰·AI 서버 없이 화면 개발. 연결 확인·통합 테스트·시연만 진짜 AI, SCRUM-262)
+
+```bash
+AML_AI_MOCK=false docker compose up -d app   # 진짜 AI — 같은 aml-app 컨테이너를 다시 만들어요
+docker compose up -d app                     # 목업으로 돌아가기
+```
+
+- 명령 앞에 붙여 쓰고 `export` 하지 마세요. 셸에 남아 있으면 `./gradlew test`까지 진짜 AI로 떠서 테스트가 깨질 수 있어요.
+- 시연처럼 계속 진짜 AI로 둘 때는 `.env`에 `AML_AI_MOCK=false`. 이러면 compose·IDE 둘 다 **기본이 진짜 모드**가 돼요 — 목업으로 돌아가려면 그 줄을 지우거나 `false`를 `true`로.
+- AI 서버(dajaba-AI compose)가 떠 있어야 하고, `AI_INTERNAL_KEY`가 AI `.env`와 같아야 해요.
 
 DB를 완전히 초기화하려면 `docker compose down -v` (볼륨 삭제 → 다음 기동 때 `db/init/00_extensions.sql`·`01_roles.sh` 와 Flyway가 다시 돈다).
 
