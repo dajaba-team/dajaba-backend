@@ -115,6 +115,11 @@ public class GetStrDraft {
     /**
      * 화면에 주는 참고 사례 칸 — AI Reference(shared/schemas/str/draft.py) 중 text 를 뺀 것.
      * text 는 AI 가 프롬프트에 넣으려고 쓰는 원문 조각(최대 600자)이라 "보통 생략"이고, 화면은 문서명·쪽만 쓴다(계약서 S2 references).
+     * <ul>
+     *   <li>page 는 <b>PDF 쪽 번호(1부터)</b>다 — 문서에 인쇄된 쪽 번호와 다를 수 있다(예: PDF 43~44쪽 = 인쇄 41~42쪽).
+     *       화면은 "PDF n쪽"처럼 기준을 같이 적어 헷갈리지 않게 한다 (#117 리뷰)</li>
+     *   <li>건수는 AI 프롬프트가 정한다 — narrative_v2(기본) 최대 3건, v3 최대 2건. 계약서가 "0~3건"이라 여기서 자르지 않는다</li>
+     * </ul>
      */
     static final List<String> REFERENCE_FIELDS = List.of("chunk_id", "doc_id", "doc_title", "page", "score");
 
@@ -201,7 +206,8 @@ public class GetStrDraft {
                     draft.getStatus(), draft.getVersion(), c.getVersion(), draft.getProducedAt(), draft.getFacts(),
                     narrative, currentRevisionNo, withIsCurrent(latestVerification, NarrativeHash.of(draft.currentBody())),
                     draft.getGenerationId(), draft.getGeneratorVersion(),
-                    draft.getSuspicionTypes(), List.of(), draft.getSuspicionLevelBranch(), draft.getSuspicionLevelHq(), GetStrDraft.references(draft.getPayload()), lastRejection, availableActions);
+                    draft.getSuspicionTypes(), List.of(), draft.getSuspicionLevelBranch(), draft.getSuspicionLevelHq(),
+                    GetStrDraft.references(draft.getPayload()), lastRejection, availableActions);
         }
 
         /**
