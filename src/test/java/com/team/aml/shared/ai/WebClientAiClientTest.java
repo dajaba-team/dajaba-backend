@@ -8,14 +8,25 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.shared.ai.AiDtos.*;
 import com.team.aml.shared.config.AmlProperties;
 import io.netty.channel.ConnectTimeoutException;
+import io.netty.channel.unix.Errors;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import okhttp3.mockwebserver.SocketPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import reactor.netty.http.client.PrematureCloseException;
 
 import java.net.ConnectException;
+import java.net.NoRouteToHostException;
+import java.net.SocketException;
+import java.net.URI;
+import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -486,6 +497,103 @@ class WebClientAiClientTest {
         assertThat(writer.rows).extracting(AiCallLog::getStatusCode).containsOnlyNulls();
         assertThat(writer.rows).extracting(AiCallLog::getErrorCode).containsOnly("AI_UNAVAILABLE");
         assertThat(writer.rows.get(0).getRequestId()).isEqualTo(writer.rows.get(1).getRequestId());
+    }
+
+    // --- 연결 단계 실패 · 보낸 뒤 끊김 (SCRUM-229) ----------------------------
+
+    private static WebClientRequestException wrapped(Throwable cause) {
+        return new WebClientRequestException(cause, HttpMethod.POST, URI.create("http://ai:8000/v1/str/drafts"), new HttpHeaders());
+    }
+
+    private static void assertUnavailable(WebClientAiClient.Classified c, boolean retryable) {
+        assertThat(c.ex().code()).isEqualTo("AI_UNAVAILABLE");
+        assertThat(c.ex().httpStatus()).isEqualTo(502);
+        assertThat(c.ex().getMessage()).isEqualTo("AI 서버 응답 없음. 잠시 후 다시 시도");
+        assertThat(c.retryable()).isEqualTo(retryable);
+    }
+
+    @Test
+    void 정상_이름_조회_실패는_연결_거부처럼_AI_UNAVAILABLE이고_재시도_대상() {
+        UnknownHostException e = new UnknownHostException("ai");
+        assertUnavailable(client.classify(e), true);
+        assertUnavailable(client.classify(wrapped(e)), true);
+    }
+
+    @Test
+    void 정상_경로_없음도_연결_단계_실패라_재시도_대상() {
+        // NoRouteToHostException 은 SocketException 하위(ConnectException 아님)
+        assertUnavailable(client.classify(wrapped(new NoRouteToHostException("no route"))), true);
+    }
+
+    @Test
+    void 경계_싸인_연결_타임아웃은_그대로_AI_TIMEOUT이고_재시도하지_않는다() {
+        WebClientAiClient.Classified c = client.classify(wrapped(new ConnectTimeoutException("connection timed out")));
+        assertThat(c.ex().code()).isEqualTo("AI_TIMEOUT");
+        assertThat(c.retryable()).isFalse();
+    }
+
+    @Test
+    void 경계_보낸_뒤_끊김은_AI_UNAVAILABLE이고_재시도하지_않는다() {
+        assertUnavailable(client.classify(wrapped(PrematureCloseException.TEST_EXCEPTION)), false);
+        assertUnavailable(client.classify(PrematureCloseException.TEST_EXCEPTION), false);   // 2xx 본문 중 끊김은 안 싸여 옴
+        assertUnavailable(client.classify(wrapped(new SocketException("Connection reset"))), false);   // 맥(NIO)
+        // 리눅스(epoll) ECONNRESET — 맥엔 네이티브 라이브러리가 없어 생성자 대신 mock
+        assertUnavailable(client.classify(wrapped(Mockito.mock(Errors.NativeIoException.class))), false);
+    }
+
+    @Test
+    void 실패_분류_안_된_예외는_AI_BAD_RESPONSE이고_메시지에_클래스_이름이_없다() {
+        WebClientAiClient.Classified c = client.classify(new IllegalStateException("boom"));
+        assertThat(c.ex().code()).isEqualTo("AI_BAD_RESPONSE");
+        assertThat(c.ex().httpStatus()).isEqualTo(502);
+        assertThat(c.ex().getMessage()).isEqualTo("AI 응답 처리 실패").doesNotContain("IllegalStateException").doesNotContain("boom");
+        assertThat(c.retryable()).isFalse();
+    }
+
+    @Test
+    void 이름_조회_실패_엔드투엔드_재시도_뒤에도_실패하면_AI_UNAVAILABLE() {
+        WebClientAiClient dead = newClient("http://ai-nohost.invalid:8000/", 3);   // .invalid 는 풀리지 않는 예약 도메인
+
+        assertThatThrownBy(() -> dead.createDraft(draftReq()))
+                .isInstanceOfSatisfying(AiClientException.class, e -> {
+                    assertThat(e.code()).isEqualTo("AI_UNAVAILABLE");
+                    assertThat(e.httpStatus()).isEqualTo(502);
+                    assertThat(e.getMessage()).doesNotContain("Exception");
+                });
+        assertThat(writer.rows).extracting(AiCallLog::getAttempt).containsExactly((short) 1, (short) 2);
+        assertThat(writer.rows).extracting(AiCallLog::getStatusCode).containsOnlyNulls();
+        assertThat(writer.rows).extracting(AiCallLog::getErrorCode).containsOnly("AI_UNAVAILABLE");
+        assertThat(writer.rows.get(0).getRequestId()).isEqualTo(writer.rows.get(1).getRequestId());
+    }
+
+    @Test
+    void 경계_요청을_받은_뒤_끊으면_한_번만_보내고_AI_UNAVAILABLE() {
+        server.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST));
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));   // 재시도하면 이게 성공으로 잡힌다
+
+        assertThatThrownBy(() -> client.createDraft(draftReq()))
+                .isInstanceOfSatisfying(AiClientException.class, e -> assertThat(e.code()).isEqualTo("AI_UNAVAILABLE"));
+        assertThat(server.getRequestCount()).isEqualTo(1);
+        assertThat(writer.rows).hasSize(1);
+        assertThat(writer.rows.get(0).getStatusCode()).isNull();
+        assertThat(writer.rows.get(0).getErrorCode()).isEqualTo("AI_UNAVAILABLE");
+    }
+
+    @Test
+    void 경계_2xx_본문_중_끊기면_상태는_실제_2xx이고_AI_UNAVAILABLE_한_행() {
+        server.enqueue(json(200, "{\"draft_id\":\"D1\",\"generation_id\":\"G1\",\"pad\":\"" + "x".repeat(20_000) + "\"}")
+                .setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY));
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));
+
+        assertThatThrownBy(() -> client.createDraft(draftReq()))
+                .isInstanceOfSatisfying(AiClientException.class, e -> assertThat(e.code()).isEqualTo("AI_UNAVAILABLE"));
+        assertThat(server.getRequestCount()).isEqualTo(1);
+        assertThat(writer.rows).hasSize(1);
+        AiCallLog row = writer.rows.get(0);
+        assertThat(row.getStatusCode()).isEqualTo(200);
+        assertThat(row.getErrorCode()).isEqualTo("AI_UNAVAILABLE");
+        assertThat(row.getGenerationId()).isNull();
+        assertThat(row.getAiVersion()).isNull();
     }
 
     @Test
