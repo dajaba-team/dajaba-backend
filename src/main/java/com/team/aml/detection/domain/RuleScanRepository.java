@@ -5,7 +5,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
-/** 룰 스캔의 집계·저장 (SD 명세 §5). 집계는 SQL, 판정은 FanInRule 같은 domain 룰이 한다. */
+/** 룰 스캔의 집계·저장 (SD 명세 §5). 집계는 SQL, 판정은 FanInRule·FanOutRule 같은 domain 룰이 한다. */
 public interface RuleScanRepository {
 
     /** 같은 날짜 스캔 시작을 줄 세운다. 트랜잭션이 끝나면 풀린다. */
@@ -23,10 +23,16 @@ public interface RuleScanRepository {
      * R02 집계 — 그날 입금이 있었던 (계좌, 분) 마다 지금 창·1분 전 창(길이 rule.windowHours)의 송금 계좌 수.
      * minDistinctSenders 는 후보 계좌를 미리 거르는 데만 쓴다(하루 범위에서도 그 수가 안 되면 어느 분에도 참이 될 수 없다).
      */
-    List<FanInMinute> fanInMinutes(LocalDate date, FanInRule rule);
+    List<FanMinute> fanInMinutes(LocalDate date, FanInRule rule);
+
+    /** R01 집계 — 그날 송금한 (계좌, 분) 마다 지금 창·1분 전 창의 수신 계좌 수. minDistinctReceivers 는 후보 거르기에만. */
+    List<FanMinute> fanOutMinutes(LocalDate date, FanOutRule rule);
 
     /** [windowStart, windowEnd) 의 입금 근거(자기 계좌 제외) + 계좌의 법인. */
-    FanInEvidence fanInEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd);
+    FanEvidence fanInEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd);
+
+    /** [windowStart, windowEnd) 의 송금 근거(자기 계좌 제외, 보낸 쪽 금액) + 계좌의 법인. */
+    FanEvidence fanOutEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd);
 
     /** 경보 + alert_transactions 저장. 경보 id. */
     long insertAlert(NewAlert alert);

@@ -27,20 +27,13 @@ public record FanInRule(int windowHours, int minDistinctSenders) {
 
     /** rules.params 에서 둘 다 읽는다. 없거나 정수가 아니거나 1 미만이면 INVALID_RULE_PARAMS — 기본값으로 돌지 않는다. */
     public static FanInRule from(JsonNode params) {
-        return new FanInRule(intParam(params, WINDOW), intParam(params, MIN_SENDERS));
-    }
-
-    private static int intParam(JsonNode params, String key) {
-        JsonNode n = params == null ? null : params.get(key);
-        if (n == null || !n.isIntegralNumber() || !n.canConvertToInt()) {
-            throw new InvalidRuleParamsException(RULE_ID, key);
-        }
-        return n.intValue();
+        return new FanInRule(RuleParams.requiredInt(params, RULE_ID, WINDOW),
+                RuleParams.requiredInt(params, RULE_ID, MIN_SENDERS));
     }
 
     /** 이 분에 거짓→참이 됐나. */
-    public boolean fires(FanInMinute m) {
-        return m.sendersNow() >= minDistinctSenders && m.sendersBefore() < minDistinctSenders;
+    public boolean fires(FanMinute m) {
+        return m.countNow() >= minDistinctSenders && m.countBefore() < minDistinctSenders;
     }
 
     /** 창 끝 = reference_ts = E+1분. 원천 시각이 분 단위라 뜻은 (E-H, E] — 지금 분은 넣고 정확히 H 전 그 분은 뺀다. */

@@ -12,7 +12,7 @@
 
 | rule_id | 이름 | `typology_hint` | 조건 (한 줄) | v2 `params` | 상태 | 구현 |
 |---|---|---|---|---|---|---|
-| `R01_FAN_OUT` | 분산 송금 | `FAN_OUT` | 서로 다른 수신 계좌 N개 이상 | `window_hours` 96, `min_distinct_receivers` 10 | 확정 · 시드 V016 | SCRUM-188 |
+| `R01_FAN_OUT` | 분산 송금 | `FAN_OUT` | 서로 다른 수신 계좌 N개 이상 | `window_hours` 96, `min_distinct_receivers` 10 | 확정 · 시드 V016 · **구현됨** | SCRUM-188 |
 | `R02_FAN_IN` | 집중 입금 | `FAN_IN` | 서로 다른 송신 계좌 N개 이상 | `window_hours` 96, `min_distinct_senders` 5 | 확정 · **구현됨 (V011)** | SCRUM-99 |
 | `R03_FX_RELAY` | 환전 중계 | `FX_RELAY` (V016) | 받은 돈을 늦은 분에 **다른 통화로** 비슷한 금액(USD 환산 ±10%) 내보냄 | `window_hours` 96, `amount_tolerance` 0.1, `require_currency_change` true, `usd_rates` | 확정 · 시드 V016 | SCRUM-193 |
 | `R04_CYCLE` | 순환 거래 | `CYCLE` | 4홉 안에 시작 계좌로 돌아옴 | `window_hours` 96, `max_hops` 4 | 확정 · 시드 V016 | SCRUM-192 |
@@ -67,7 +67,7 @@ H = `params.window_hours`(v2는 모두 96).
 
 ## 2. 룰별 명세
 
-### R01_FAN_OUT — 분산 송금 〔확정〕
+### R01_FAN_OUT — 분산 송금 〔확정 — V016, SCRUM-188〕
 
 | 항목 | 내용 |
 |---|---|
@@ -77,6 +77,7 @@ H = `params.window_hours`(v2는 모두 96).
 | `params` | `{"window_hours": 96, "min_distinct_receivers": 10}` |
 | `rule_facts` | `{distinct_receivers, amounts_by_currency:[{currency, total_amount, transaction_count, transaction_ids}]}` — `amount_paid` 기준 |
 | 근거 거래 | 창 안의 송금 전부 |
+| 구현 | 집계 SQL `RuleScanJdbcRepository.fanOutMinutes` → 판정 `FanOutRule.fires` (R02와 같은 SQL, 방향만 송금 — `transactions_from_ts_idx`) |
 
 ### R02_FAN_IN — 집중 입금 〔확정 — V011, SCRUM-99〕
 
