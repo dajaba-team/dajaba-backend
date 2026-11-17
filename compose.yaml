@@ -132,7 +132,7 @@ services:
   grafana:
     image: grafana/grafana:13.3.1
     profiles: [ops]
-    mem_limit: 256m
+    mem_limit: 384m
     depends_on:
       ops-env-check:
         condition: service_completed_successfully
@@ -165,7 +165,7 @@ services:
   alloy:
     image: grafana/alloy:v1.22.0
     profiles: [ops]
-    mem_limit: 128m
+    mem_limit: 256m
     command: ["run", "--server.http.listen-addr=0.0.0.0:12345", "--storage.path=/var/lib/alloy/data", "/etc/alloy/config.alloy"]
     depends_on:
       loki:
@@ -325,8 +325,11 @@ services:
   langfuse-worker:
     image: docker.langfuse.com/langfuse/langfuse-worker:4.82.0
     profiles: [ops]
-    mem_limit: 512m
-    environment: *langfuse-env
+    mem_limit: 768m
+    environment:
+      <<: *langfuse-env
+      HOSTNAME: 0.0.0.0 # 모든 주소에서 받기 — 127.0.0.1 healthcheck용
+      NODE_OPTIONS: --max-old-space-size=768 # Node 힙 = 컨테이너 상한(공식 권장)
     depends_on: &langfuse-depends-on
       ops-env-check:
         condition: service_completed_successfully
@@ -350,10 +353,12 @@ services:
   langfuse-web:
     image: docker.langfuse.com/langfuse/langfuse:4.82.0
     profiles: [ops]
-    mem_limit: 512m
+    mem_limit: 1g
     depends_on: *langfuse-depends-on
     environment:
       <<: *langfuse-env
+      HOSTNAME: 0.0.0.0 # 모든 주소에서 받기 — 127.0.0.1 healthcheck용
+      NODE_OPTIONS: --max-old-space-size=1024 # Node 힙 = 컨테이너 상한(공식 권장)
       LANGFUSE_INIT_ORG_ID: dajaba
       LANGFUSE_INIT_ORG_NAME: dajaba
       LANGFUSE_INIT_PROJECT_ID: dajaba-ai
