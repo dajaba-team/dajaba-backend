@@ -424,6 +424,80 @@ class GetStrDraftDbTest {
         assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).lastRejection()).isNull();
     }
 
+    // 14
+    @Test
+    void 버튼_담당_조사역은_DRAFTED에서_수정_검증_승인_요청_재생성_종료() throws Exception {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        login(investigator, "INVESTIGATOR");
+
+        GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+
+        assertThat(r.availableActions()).containsExactly("REVISE", "VERIFY", "SUBMIT", "REGENERATE", "CLOSE_WITH_DRAFT");
+        assertThat(om.readTree(om.writeValueAsString(StrDraftDetailResponse.from(r))).path("available_actions").toString())
+                .isEqualTo("[\"REVISE\",\"VERIFY\",\"SUBMIT\",\"REGENERATE\",\"CLOSE_WITH_DRAFT\"]");
+    }
+
+    // 15
+    @Test
+    void 버튼_보완_요청_반려면_수정과_재생성만_보고_안_함이면_종료만() {   // 계약서 4절 반려 두 줄
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        login(investigator, "INVESTIGATOR");
+
+        caseState(caseId, "REJECTED", "NEED_REVISION");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions())
+                .containsExactly("REVISE", "REGENERATE");                     // 저장하면 DRAFTED → 그때 검증·요청
+
+        caseState(caseId, "REJECTED", "NOT_REPORTABLE");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions())
+                .containsExactly("CLOSE_WITH_DRAFT");
+    }
+
+    // 16
+    @Test
+    void 버튼_승인_대기면_승인자만_승인_반려이고_담당_조사역과_예전_담당_승인자는_없다() {   // 미결 32
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        caseState(caseId, "PENDING_APPROVAL", null);
+        long formerAssignee = user("get-apr-former" + SEQ.incrementAndGet(), "APPROVER");
+        jdbc.update("insert into ops.case_history(case_id, action, from_status, to_status, case_version_before, "
+                + "created_by, to_assignee_id) values (?, 'ASSIGN', 'OPEN', 'REVIEWING', 0, 1, ?)", caseId, formerAssignee);
+
+        login(approver, "APPROVER");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("APPROVE", "REJECT");
+        login(formerAssignee, "APPROVER");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
+        login(investigator, "INVESTIGATOR");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();   // 읽기만
+    }
+
+    // 17
+    @Test
+    void 버튼_승인자는_승인_대기가_아니면_없고_관리자와_비담당_조사역은_항상_없다() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);                    // DRAFTED
+
+        login(approver, "APPROVER");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
+        login(admin, "ADMIN");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();    // META_ONLY 도 [] (null 아님)
+        login(otherInvestigator, "INVESTIGATOR");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
+    }
+
+    // 18
+    @Test
+    void 버튼_재생성으로_대체된_옛_초안은_담당에게도_없고_새_초안에만_있다() {
+        long caseId = escalatedCase();
+        long oldDraftId = savedDraft(caseId);
+        long newDraftId = savedDraft(caseId);                 // 옛 초안 SUPERSEDED
+        login(investigator, "INVESTIGATOR");
+
+        assertThat(getDraft.execute(DisplayNumber.draftNo(oldDraftId)).availableActions()).isEmpty();
+        assertThat(getDraft.execute(DisplayNumber.draftNo(newDraftId)).availableActions()).contains("REVISE", "SUBMIT");
+    }
+
     // ---- 도우미 ----
 
     private void assertMetaOnly(GetStrDraft.Result r, long draftId, long caseId) {
@@ -456,6 +530,11 @@ class GetStrDraftDbTest {
         login(approver, "APPROVER");
         tx.executeWithoutResult(s -> approvals.save(Approval.rejected(drafts.findById(draftId).orElseThrow(), code, comment)));
         SecurityContextHolder.clearContext();
+    }
+
+    /** 케이스 상태만 SQL 로 맞춘다 — 전이 자체는 SubmitStrDraft·RejectStrDraft 테스트가 본다. 반려 코드는 REJECTED 일 때만(V006 CHECK). */
+    private void caseState(long caseId, String status, String rejectionCode) {
+        jdbc.update("update ops.cases set status = ?, rejection_reason_code = ? where id = ?", status, rejectionCode, caseId);
     }
 
     private long strViewCount(long draftId) {
