@@ -83,7 +83,7 @@ spring:
       on-profile: local
 aml:
   ai:
-    mock: true                            # AI 서버 없이 고정 응답. 진짜 서버 붙이면 false
+    mock: ${AML_AI_MOCK:true}              # AI 목업(true)·진짜 AI 서버(false). compose·IDE(.env) 둘 다 AML_AI_MOCK 하나로 (SCRUM-262)
   dev-users:
     enabled: true
     password: ${DEV_USER_PASSWORD:}
