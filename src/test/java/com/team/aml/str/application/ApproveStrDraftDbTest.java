@@ -128,6 +128,59 @@ class ApproveStrDraftDbTest {
         assertThat(a.get("reason_code")).isNull();
         assertThat(jdbc.queryForObject("select count(*) from ops.case_history where case_id = ? and action = 'APPROVE' "
                 + "and created_by = ?", Long.class, caseId, approver)).isEqualTo(1);
+        assertThat(reportCount(draftId)).isEqualTo(1);   // 확정 보고서도 같은 트랜잭션 (V015)
+    }
+
+    // 1-1
+    @Test
+    void 정상_승인하면_확정_보고서에_문서번호_마감_의심유형정도_해시_스냅샷이_고정된다() throws Exception {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        submit(caseId, draftId);
+        jdbc.update("update ops.users set display_name = '승인자' where id = ?", approver);   // I-2 이름 구분용
+        login(approver, "APPROVER");
+
+        approveDraft.execute(DisplayNumber.draftNo(draftId), caseVersion(caseId), 4);
+
+        Map<String, Object> r = jdbc.queryForMap("select r.report_no, r.case_id, r.approval_id, r.suspicion_types::text "
+                + "as types, r.suspicion_level_branch, r.suspicion_level_hq, r.narrative_sha256, r.snapshot_version, "
+                + "r.created_by, r.reported_at, r.late, r.pdf_status, r.approved_at = a.created_at as same_time, "
+                + "r.report_due_at = ((((a.created_at at time zone 'Asia/Seoul')::date + case extract(isodow from "
+                + "(a.created_at at time zone 'Asia/Seoul')) when 3 then 5 when 4 then 5 when 5 then 5 when 6 then 4 "
+                + "else 3 end) + time '23:59:59') at time zone 'Asia/Seoul') as due_ok, r.form_snapshot::text as form "
+                + "from ops.str_reports r join ops.approvals a on a.id = r.approval_id where r.draft_id = ?", draftId);
+        assertThat((String) r.get("report_no")).matches("STR-\\d{4}-\\d{6,}");
+        assertThat(r).containsEntry("case_id", caseId)
+                .containsEntry("types", "{VI-1}")                 // S6 에서 고른 유형
+                .containsEntry("suspicion_level_branch", 3)
+                .containsEntry("suspicion_level_hq", 4)
+                .containsEntry("narrative_sha256", currentHash(draftId))
+                .containsEntry("snapshot_version", StrReportForm.VERSION)
+                .containsEntry("created_by", approver)
+                .containsEntry("same_time", true)                  // 승인 시각 = 승인 기록 시각
+                .containsEntry("due_ok", true);                    // 다음 영업일부터 3번째 영업일 23:59:59 KST (토·일 제외)
+        assertThat(r.get("reported_at")).isNull();
+        assertThat(r.get("late")).isNull();
+        assertThat(r.get("pdf_status")).isNull();
+        JsonNode form = JSON.readTree((String) r.get("form"));
+        assertThat(form.path("narrative").path("related_docs").path("case_no").asText()).isEqualTo(caseNo(caseId));
+        assertThat(form.path("narrative").path("related_docs").path("draft_no").asText())
+                .isEqualTo(DisplayNumber.draftNo(draftId));
+        assertThat(form.path("narrative").path("sections")).hasSize(StrSection.V2.size());
+        assertThat(form.path("account").path("account_key").asText()).isEqualTo(accountKey(caseId));
+        assertThat(form.path("institution").path("staff_name").asText()).isEqualTo("사용자");      // 담당 조사역 표시 이름
+        assertThat(form.path("institution").path("responsible_name").asText()).isEqualTo("승인자");
+        assertThat(form.path("suspicion").path("level_hq").asInt()).isEqualTo(4);
+        assertThat(form.has("header")).isFalse();                 // 문서번호·보고일자는 칸에, 스냅샷에는 없음
+    }
+
+    // 1-2
+    @Test
+    void 정상_승인할_때마다_문서번호가_하나씩_늘어난다() {
+        long first = approvedReportSeq();
+        long second = approvedReportSeq();
+
+        assertThat(second).isGreaterThan(first);
     }
 
     // 2
@@ -250,6 +303,30 @@ class ApproveStrDraftDbTest {
         assertThat(draftStatus(draftId)).isEqualTo("ACTIVE");
         assertThat(jdbc.queryForObject("select suspicion_level_hq from ops.str_drafts where id = ?", Integer.class,
                 draftId)).isNull();
+        assertThat(reportCount(draftId)).isZero();               // 보고서 없는 승인도, 승인 없는 보고서도 남지 않는다
+    }
+
+    private long reportCount(long draftId) {
+        return jdbc.queryForObject("select count(*) from ops.str_reports where draft_id = ?", Long.class, draftId);
+    }
+
+    /** 승인 한 번 하고 그 보고서 문서번호의 일련번호(뒤 6자리 이상). */
+    private long approvedReportSeq() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        submit(caseId, draftId);
+        login(approver, "APPROVER");
+        approveDraft.execute(DisplayNumber.draftNo(draftId), caseVersion(caseId), 4);
+        String no = jdbc.queryForObject("select report_no from ops.str_reports where draft_id = ?", String.class, draftId);
+        return Long.parseLong(no.substring(no.lastIndexOf('-') + 1));
+    }
+
+    private String caseNo(long caseId) {
+        return jdbc.queryForObject("select case_no from ops.cases where id = ?", String.class, caseId);
+    }
+
+    private String accountKey(long caseId) {
+        return jdbc.queryForObject("select account_key from ops.cases where id = ?", String.class, caseId);
     }
 
     /** 검증 통과 한 줄을 넣고 담당이 승인 요청(S6). 돌려주는 값 = 그 검증의 verification_results.id. */

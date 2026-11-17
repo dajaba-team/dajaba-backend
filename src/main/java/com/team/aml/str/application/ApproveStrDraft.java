@@ -1,6 +1,7 @@
 package com.team.aml.str.application;
 
 import com.team.aml.cases.application.ApproveCase;
+import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.shared.security.CurrentUser;
 import com.team.aml.str.domain.Approval;
 import com.team.aml.str.domain.ApprovalGate;
@@ -9,6 +10,8 @@ import com.team.aml.str.domain.DraftNotFoundException;
 import com.team.aml.str.domain.NarrativeHash;
 import com.team.aml.str.domain.StrDraft;
 import com.team.aml.str.domain.StrDraftRepository;
+import com.team.aml.str.domain.StrReport;
+import com.team.aml.str.domain.StrReportRepository;
 import com.team.aml.str.domain.VerificationResult;
 import com.team.aml.str.domain.VerificationResultRepository;
 import com.team.aml.user.domain.Role;
@@ -30,6 +33,10 @@ import org.springframework.transaction.annotation.Transactional;
  *   <li>ApprovalGate.requireVerified(요청 번호 없이) — 승인 때도 지금 본문의 최신 검증이 통과인지 같은 기준으로 다시 본다
  *       (str.md 게이트 1·2번 "승인 P2는 번호 없이 null")</li>
  *   <li>본점 의심 정도 저장 → approvals 승인 한 줄(근거 검증·수정본·해시) → 초안 LOCKED (recordHqSuspicion 은 lock 보다 먼저)</li>
+ *   <li>확정 보고서 str_reports 한 줄 (V015, 서식 회의 10/30 결정 1·2·5-3) — 문서번호(ops.str_report_no_seq, 서울 기준 승인 연도),
+ *       마감(승인일 다음 영업일부터 3번째 영업일 23:59:59 KST), 의심 유형·정도, 본문 해시, 서식 스냅샷(표제부~VII, StrReportForm).
+ *       승인 시각 = 승인 기록의 created_at (같은 값을 두 곳에). 여기서 실패하면 승인 전체가 롤백된다 — 보고서 없는 승인을 남기지 않는다.
+ *       케이스 FK 행이라 ApproveCase 뒤에 넣는다(위 3번과 같은 이유)</li>
  * </ol>
  */
 @Service
@@ -41,16 +48,21 @@ public class ApproveStrDraft {
     private final ApproveCase approveCase;
     private final CurrentUser currentUser;
     private final StrCaseChangeReader caseChange;
+    private final StrReportRepository reports;
+    private final StrReportFormAssembler reportForm;
 
     public ApproveStrDraft(StrDraftRepository drafts, VerificationResultRepository verifications,
                            ApprovalRepository approvals, ApproveCase approveCase, CurrentUser currentUser,
-                           StrCaseChangeReader caseChange) {
+                           StrCaseChangeReader caseChange, StrReportRepository reports,
+                           StrReportFormAssembler reportForm) {
         this.drafts = drafts;
         this.verifications = verifications;
         this.approvals = approvals;
         this.approveCase = approveCase;
         this.currentUser = currentUser;
         this.caseChange = caseChange;
+        this.reports = reports;
+        this.reportForm = reportForm;
     }
 
     /**
@@ -59,7 +71,8 @@ public class ApproveStrDraft {
      */
     @Transactional
     public StrCaseChange execute(String draftNo, long expectedCaseVersion, int suspicionLevelHq) {
-        ApprovalGate.requireApprover(Role.valueOf(currentUser.require().role()));
+        AppUserDetails me = currentUser.require();
+        ApprovalGate.requireApprover(Role.valueOf(me.role()));
 
         long draftId = DraftNumbers.require(draftNo);
         StrDraft draft = drafts.findById(draftId).orElseThrow(() -> new DraftNotFoundException(draftNo));
@@ -70,9 +83,12 @@ public class ApproveStrDraft {
                 verifications.findSameBody(draftId, NarrativeHash.of(draft.currentBody())), null);
 
         draft.recordHqSuspicion(suspicionLevelHq);
-        approvals.save(Approval.approved(draft, verification));
+        Approval approval = approvals.save(Approval.approved(draft, verification));
         draft.lock();
         drafts.save(draft);
+
+        reports.save(StrReport.approve(draft, approval, reports.nextReportSeq(), approval.getCreatedAt(),
+                reportForm.assemble(draft, approval, verification, me.userId()), StrReportForm.VERSION));
 
         return caseChange.read(draft.getCaseId());
     }
