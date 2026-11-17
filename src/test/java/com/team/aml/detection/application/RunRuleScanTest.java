@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 룰 스캔 R02 (SCRUM-99). 시드 V011 의 R02_FAN_IN 버전 1(96시간, N=5)로 돈다.
- * V015 의 나머지 다섯 룰도 켜져 있지만 구현 전이라 건너뛴다 (SCRUM-260 임시).
+ * V016 의 나머지 다섯 룰도 켜져 있지만 구현 전이라 건너뛴다 (SCRUM-260 임시).
  * 경보는 지울 수 없고 같은 날짜는 한 번만 성공하므로 테스트마다 날짜·계좌를 따로 쓰고, 단언은 그 계좌의 경보만 본다.
  */
 @Testcontainers

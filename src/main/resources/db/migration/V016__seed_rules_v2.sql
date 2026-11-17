@@ -1,4 +1,4 @@
--- V015: 룰 시드 — R01·R03·R04·R05·R06 버전 1 (SCRUM-260, 룰 v2). V011(R02)과 같은 방식으로 나머지 다섯 개를 한 번에 넣는다.
+-- V016: 룰 시드 — R01·R03·R04·R05·R06 버전 1 (SCRUM-260, 룰 v2). V011(R02)과 같은 방식으로 나머지 다섯 개를 한 번에 넣는다.
 -- 기준값은 rules.md v2(11/10) 그대로 = 학습용 PARAMS(ML 규약 §2.3). 바꿀 때는 이 파일을 고치지 않고 새 버전 행을 넣는다.
 -- 구현 전 룰은 RuleScanner 가 건너뛴다 (임시, 마지막 룰 PR SCRUM-193 에서 되돌림).
 insert into ops.rules(rule_id, version, name, typology_hint, params, is_active, created_by, updated_by)

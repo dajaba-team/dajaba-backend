@@ -27,7 +27,7 @@ public class RuleScanner {
     private static final Logger log = LoggerFactory.getLogger(RuleScanner.class);
 
     /**
-     * 임시 (SCRUM-260): V015 로 다섯 룰을 구현 전에 먼저 켰다. 여기 없는 룰은 경고만 남기고 건너뛰며 alerts_by_rule 에도 넣지 않는다.
+     * 임시 (SCRUM-260): V016 으로 다섯 룰을 구현 전에 먼저 켰다. 여기 없는 룰은 경고만 남기고 건너뛰며 alerts_by_rule 에도 넣지 않는다.
      * 룰 PR 마다 ID 를 여기와 switch 에 추가하고, 마지막 룰(R03, SCRUM-193) PR 에서 이 목록과 건너뛰기를 지운다.
      */
     private static final Set<String> IMPLEMENTED = Set.of(FanInRule.RULE_ID);
