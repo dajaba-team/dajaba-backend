@@ -37,8 +37,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 룰 스캔 R02 (SCRUM-99). 시드 V011 의 R02_FAN_IN 버전 1(96시간, N=5)로 돈다.
- * V016 의 나머지 다섯 룰도 켜져 있지만 구현 전이라 건너뛴다 (SCRUM-260 임시).
+ * 룰 스캔 R01·R02 (SCRUM-188·99). V016 R01_FAN_OUT v1(96시간, N=10)·V011 R02_FAN_IN v1(96시간, N=5)로 돈다.
+ * V016 의 나머지 네 룰(R03~R06)은 켜져 있지만 구현 전이라 건너뛴다 (SCRUM-260 임시).
  * 경보는 지울 수 없고 같은 날짜는 한 번만 성공하므로 테스트마다 날짜·계좌를 따로 쓰고, 단언은 그 계좌의 경보만 본다.
  */
 @Testcontainers
@@ -118,10 +118,9 @@ class RunRuleScanTest {
         assertThat(result.run().status()).isEqualTo(BatchStatus.SUCCEEDED);
         assertThat(result.run().rowsIn()).isEqualTo(count(
                 "select count(*) from ops.transactions where ts >= '2022-09-02' and ts < '2022-09-03'"));
-        assertThat(result.alertsByRule()).singleElement().satisfies(r -> {
-            assertThat(r.ruleId()).isEqualTo("R02_FAN_IN");
-            assertThat(r.ruleVersion()).isEqualTo(1);
-        });
+        assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId)
+                .containsExactly("R01_FAN_OUT", "R02_FAN_IN");   // rule_id 순, R03~R06 은 건너뜀
+        assertThat(result.alertsByRule()).allSatisfy(r -> assertThat(r.ruleVersion()).isEqualTo(1));
     }
 
     @Test
@@ -233,7 +232,7 @@ class RunRuleScanTest {
     }
 
     @Test
-    void 시드로_여섯_룰이_켜져_있고_구현_전_룰은_건너뛰어_R02만_센다() {   // SCRUM-260 임시
+    void 시드로_여섯_룰이_켜져_있고_구현_전_룰은_건너뛰어_R01_R02만_센다() {   // SCRUM-260 임시
         LocalDate d = LocalDate.of(2022, 9, 13);
         inbound(newKey(), newKey(), d.atTime(1, 0), "1", "US Dollar");
 
@@ -246,7 +245,81 @@ class RunRuleScanTest {
         RuleScanResult result = runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
 
         assertThat(result.run().status()).isEqualTo(BatchStatus.SUCCEEDED);
-        assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId).containsExactly("R02_FAN_IN");
+        assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId)
+                .containsExactly("R01_FAN_OUT", "R02_FAN_IN");
+    }
+
+    @Test
+    void R01_수신_계좌가_N개가_되는_분에_경보_1건이고_금액은_보낸_쪽() {
+        LocalDate d = LocalDate.of(2022, 9, 14);
+        String source = accountWithEntity();
+        List<Long> ids = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {   // 보낸 쪽 10 USD, 받은 쪽 8.5 EUR — rule_facts 는 보낸 쪽
+            ids.add(transfer(source, newKey(), d.atTime(14, i), "10", "US Dollar", "8.5", "Euro"));
+        }
+        transfer(source, newKey(), d.atTime(14, 30), "3", "Yen", "3", "Yen");   // 참 유지 — 새 경보 없음
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        List<Map<String, Object>> alerts = alertsOf(source);
+        assertThat(alerts).hasSize(1);
+        Map<String, Object> a = alerts.get(0);
+        assertThat(a.get("rule_id")).isEqualTo("R01_FAN_OUT");
+        assertThat(ts(a.get("window_start"))).isEqualTo(d.minusDays(4).atTime(14, 10));
+        assertThat(ts(a.get("window_end"))).isEqualTo(d.atTime(14, 10));
+        assertThat(ts(a.get("reference_ts"))).isEqualTo(d.atTime(14, 10));
+        assertThat(a.get("entity_id")).isEqualTo("E_" + source);
+        assertThat(linkedIds((Long) a.get("id"))).containsExactlyElementsOf(ids);
+
+        JsonNode facts = facts(a);
+        assertThat(facts.get("distinct_receivers").asInt()).isEqualTo(10);
+        assertThat(facts.has("distinct_senders")).isFalse();
+        assertThat(facts.get("amounts_by_currency")).singleElement().satisfies(c -> {
+            assertThat(c.get("currency").asText()).isEqualTo("US Dollar");
+            assertThat(c.get("total_amount").decimalValue()).isEqualByComparingTo("100");
+            assertThat(c.get("transaction_count").asInt()).isEqualTo(10);
+        });
+    }
+
+    @Test
+    void R01은_같은_수신_계좌를_한_번만_세고_자기_계좌_거래는_뺀다() {
+        LocalDate d = LocalDate.of(2022, 9, 15);
+        String source = newKey();
+        String repeated = newKey();
+        for (int i = 0; i < 8; i++) {
+            transfer(source, newKey(), d.atTime(9, i), "1", "US Dollar", "1", "US Dollar");
+        }
+        transfer(source, repeated, d.atTime(9, 10), "1", "US Dollar", "1", "US Dollar");
+        transfer(source, repeated, d.atTime(9, 11), "1", "US Dollar", "1", "US Dollar");   // 9곳 그대로
+        selfTransfer(source, d.atTime(9, 12));                                              // 세지 않음
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        assertThat(alertsOf(source)).isEmpty();
+    }
+
+    @Test
+    void R01_전날까지_N_미만이던_계좌는_그날_N이_되는_분에_경보_이미_N_이상이던_계좌는_없음() {
+        LocalDate d = LocalDate.of(2022, 9, 17);   // 전날 9/16 은 그날 모든 분의 1분 전 창에 들어간다 — 후보 거르기 경계
+        String crossing = newKey();
+        for (int i = 0; i < 9; i++) {
+            transfer(crossing, newKey(), d.minusDays(1).atTime(12, i), "1", "US Dollar", "1", "US Dollar");
+        }
+        transfer(crossing, newKey(), d.atTime(10, 0), "1", "US Dollar", "1", "US Dollar");   // 10번째
+        String hub = newKey();
+        for (int i = 0; i < 10; i++) {
+            transfer(hub, newKey(), d.minusDays(1).atTime(12, i), "1", "US Dollar", "1", "US Dollar");
+        }
+        transfer(hub, newKey(), d.atTime(10, 0), "1", "US Dollar", "1", "US Dollar");        // 참이 이어지는 중
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        assertThat(alertsOf(crossing)).singleElement().satisfies(a -> {
+            assertThat(a.get("rule_id")).isEqualTo("R01_FAN_OUT");
+            assertThat(ts(a.get("reference_ts"))).isEqualTo(d.atTime(10, 1));
+            assertThat(facts(a).get("distinct_receivers").asInt()).isEqualTo(10);
+        });
+        assertThat(alertsOf(hub)).isEmpty();
     }
 
     @Test
@@ -300,6 +373,17 @@ class RunRuleScanTest {
     }
 
     private long transaction(String from, String to, LocalDateTime ts, String amount, String currency, boolean self) {
+        return transfer(from, to, ts, amount, currency, amount, currency, self);
+    }
+
+    /** 보낸 쪽·받은 쪽 금액이 다른 거래 — R01(보낸 쪽)·R02(받은 쪽)가 방향대로 읽는지 본다. */
+    private long transfer(String from, String to, LocalDateTime ts, String paid, String paidCurrency,
+                          String received, String receivedCurrency) {
+        return transfer(from, to, ts, paid, paidCurrency, received, receivedCurrency, false);
+    }
+
+    private long transfer(String from, String to, LocalDateTime ts, String paid, String paidCurrency,
+                          String received, String receivedCurrency, boolean self) {
         if (sourceFileId == null) {
             sourceFileId = jdbc.queryForObject(
                     "insert into ops.source_files(file_name, file_hash) values ('scan.csv', ?) returning id",
@@ -312,15 +396,16 @@ class RunRuleScanTest {
                     from_bank_id_raw, to_bank_id_raw)
                 values (?, '10', ?, ?, '10', ?, ?, ?::numeric, ?, ?::numeric, ?, 'ACH', false, ?, ?, ?, '010', '010')
                 returning transaction_id""", Long.class,
-                ts, from.substring(3), from, to.substring(3), to, amount, currency, amount, currency, self,
+                ts, from.substring(3), from, to.substring(3), to, received, receivedCurrency, paid, paidCurrency, self,
                 sourceFileId, SEQUENCE.incrementAndGet());
     }
 
     private List<Map<String, Object>> alertsOf(String accountKey) {
         return jdbc.queryForList("""
-                select id, alert_no, entity_id, window_start, window_end, reference_ts, batch_date, score_status,
-                       rule_facts::text as facts
-                from ops.alerts where account_key = ? order by reference_ts""", accountKey);
+                select a.id, a.alert_no, r.rule_id, a.entity_id, a.window_start, a.window_end, a.reference_ts,
+                       a.batch_date, a.score_status, a.rule_facts::text as facts
+                from ops.alerts a join ops.rules r on r.id = a.rule_ref_id
+                where a.account_key = ? order by a.reference_ts""", accountKey);
     }
 
     private List<Long> linkedIds(long alertId) {

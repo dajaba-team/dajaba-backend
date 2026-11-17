@@ -5,9 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.team.aml.detection.domain.ActiveRule;
 import com.team.aml.detection.domain.DataRange;
-import com.team.aml.detection.domain.FanInEvidence;
-import com.team.aml.detection.domain.FanInMinute;
+import com.team.aml.detection.domain.FanEvidence;
 import com.team.aml.detection.domain.FanInRule;
+import com.team.aml.detection.domain.FanMinute;
+import com.team.aml.detection.domain.FanOutRule;
 import com.team.aml.detection.domain.NewAlert;
 import com.team.aml.detection.domain.RuleScanRepository;
 import com.team.aml.shared.domain.DisplayNumber;
@@ -37,42 +38,55 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
             from ops.rules where is_active order by rule_id""";
 
     /*
-     * ① 후보: 하루의 모든 창을 덮는 [D 00:01 - H, D+1 00:00) 에서 송금 계좌가 N 이상이고 그날 입금이 있는 계좌.
-     * ② 그 계좌의 그날 입금 분 E 마다 지금 창 [E+1분-H, E+1분) 과 1분 전 창 [E-H, E) 의 송금 계좌 수. H = window_hours.
-     * 자기 계좌 거래는 셋 다 뺀다. transactions_to_ts_idx (to_account_key, ts) 를 탄다.
+     * ① 후보: 하루의 모든 창을 덮는 [D 00:01 - H, D+1 00:00) 에서 상대 계좌가 N 이상이고 그날 거래가 있는 계좌.
+     *    그중 그날 모든 분의 1분 전 창에 공통으로 들어가는 [D+1 00:00 - 1분 - H, D 00:00) 에서 이미 N 이상인 계좌는 뺀다
+     *    — 그날 어느 분에도 1분 전 창이 N 미만일 수 없어 거짓→참이 안 된다. 결과는 같고, 상대가 수천인 대형 계좌를
+     *    분마다 다시 세지 않는다(9/5 R01: 6분 → 5초, 경보 252건 동일). H < 24시간+1분이면 이 구간이 비어 거르지 않는다.
+     * ② 그 계좌의 그날 거래 분 E 마다 지금 창 [E+1분-H, E+1분) 과 1분 전 창 [E-H, E) 의 상대 계좌 수. H = window_hours.
+     * 자기 계좌 거래는 셋 다 뺀다. %1$s = 대상 계좌 칼럼, %2$s = 상대 계좌 칼럼 (코드 상수만 넣는다).
+     * R02 = (to_account_key, from_account_key) → transactions_to_ts_idx,
+     * R01 = (from_account_key, to_account_key) → transactions_from_ts_idx.
      */
-    private static final String FAN_IN_MINUTES = """
+    private static final String FAN_MINUTES = """
             with candidates as (
-                select to_account_key as account_key
+                select %1$s as account_key
                 from ops.transactions
                 where ts >= ? and ts < ? and not is_self_transfer
-                group by to_account_key
-                having count(distinct from_account_key) >= ? and max(ts) >= ?
+                group by %1$s
+                having count(distinct %2$s) >= ? and max(ts) >= ?
+                   and count(distinct %2$s) filter (where ts >= ? and ts < ?) < ?
             ),
             minutes as (
-                select distinct t.to_account_key as account_key, date_trunc('minute', t.ts) as e
+                select distinct t.%1$s as account_key, date_trunc('minute', t.ts) as e
                 from ops.transactions t
-                join candidates c on c.account_key = t.to_account_key
+                join candidates c on c.account_key = t.%1$s
                 where t.ts >= ? and t.ts < ? and not t.is_self_transfer
             )
             select m.account_key, m.e,
-                   (select count(distinct x.from_account_key) from ops.transactions x
-                     where x.to_account_key = m.account_key and not x.is_self_transfer
+                   (select count(distinct x.%2$s) from ops.transactions x
+                     where x.%1$s = m.account_key and not x.is_self_transfer
                        and x.ts >= m.e + interval '1 minute' - make_interval(hours => ?)
-                       and x.ts < m.e + interval '1 minute') as senders_now,
-                   (select count(distinct x.from_account_key) from ops.transactions x
-                     where x.to_account_key = m.account_key and not x.is_self_transfer
-                       and x.ts >= m.e - make_interval(hours => ?) and x.ts < m.e) as senders_before
+                       and x.ts < m.e + interval '1 minute') as count_now,
+                   (select count(distinct x.%2$s) from ops.transactions x
+                     where x.%1$s = m.account_key and not x.is_self_transfer
+                       and x.ts >= m.e - make_interval(hours => ?) and x.ts < m.e) as count_before
             from minutes m
             order by m.account_key, m.e""";
+    private static final String FAN_IN_MINUTES = FAN_MINUTES.formatted("to_account_key", "from_account_key");
+    private static final String FAN_OUT_MINUTES = FAN_MINUTES.formatted("from_account_key", "to_account_key");
 
-    private static final String FAN_IN_EVIDENCE = """
-            select currency_received as currency, sum(amount_received) as total_amount, count(*) as transaction_count,
+    /** %1$s = 대상 계좌 칼럼, %2$s·%3$s = 그 방향의 통화·금액 칼럼 (rules.md 1절 4 금액은 방향대로). */
+    private static final String FAN_EVIDENCE = """
+            select %2$s as currency, sum(%3$s) as total_amount, count(*) as transaction_count,
                    array_agg(transaction_id order by transaction_id) as transaction_ids
             from ops.transactions
-            where to_account_key = ? and not is_self_transfer and ts >= ? and ts < ?
-            group by currency_received
-            order by currency_received""";
+            where %1$s = ? and not is_self_transfer and ts >= ? and ts < ?
+            group by %2$s
+            order by %2$s""";
+    private static final String FAN_IN_EVIDENCE =
+            FAN_EVIDENCE.formatted("to_account_key", "currency_received", "amount_received");
+    private static final String FAN_OUT_EVIDENCE =
+            FAN_EVIDENCE.formatted("from_account_key", "currency_paid", "amount_paid");
 
     private static final String INSERT_ALERT = """
             insert into ops.alerts(alert_no, batch_run_id, rule_ref_id, account_key, entity_id, window_start,
@@ -114,25 +128,44 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
     }
 
     @Override
-    public List<FanInMinute> fanInMinutes(LocalDate date, FanInRule rule) {
-        LocalDateTime dayStart = date.atStartOfDay();
-        LocalDateTime dayEnd = dayStart.plusDays(1);
-        LocalDateTime candidatesFrom = rule.windowStart(dayStart);   // 그날 첫 분(00:00)의 창 시작
-        return jdbc.query(FAN_IN_MINUTES, (rs, rowNum) -> new FanInMinute(rs.getString("account_key"),
-                        rs.getObject("e", LocalDateTime.class), rs.getInt("senders_now"), rs.getInt("senders_before")),
-                candidatesFrom, dayEnd, rule.minDistinctSenders(), dayStart, dayStart, dayEnd,
-                rule.windowHours(), rule.windowHours());
+    public List<FanMinute> fanInMinutes(LocalDate date, FanInRule rule) {
+        return fanMinutes(FAN_IN_MINUTES, date, rule.windowHours(), rule.minDistinctSenders());
     }
 
     @Override
-    public FanInEvidence fanInEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd) {
-        List<FanInEvidence.CurrencyTotal> byCurrency = jdbc.query(FAN_IN_EVIDENCE, (rs, rowNum) ->
-                new FanInEvidence.CurrencyTotal(rs.getString("currency"), rs.getBigDecimal("total_amount"),
+    public List<FanMinute> fanOutMinutes(LocalDate date, FanOutRule rule) {
+        return fanMinutes(FAN_OUT_MINUTES, date, rule.windowHours(), rule.minDistinctReceivers());
+    }
+
+    private List<FanMinute> fanMinutes(String sql, LocalDate date, int windowHours, int minCount) {
+        LocalDateTime dayStart = date.atStartOfDay();
+        LocalDateTime dayEnd = dayStart.plusDays(1);
+        LocalDateTime candidatesFrom = dayStart.plusMinutes(1).minusHours(windowHours);   // 그날 첫 분(00:00)의 창 시작
+        LocalDateTime alwaysBeforeFrom = dayEnd.minusMinutes(1).minusHours(windowHours);  // 마지막 분(23:59)의 1분 전 창 시작
+        return jdbc.query(sql, (rs, rowNum) -> new FanMinute(rs.getString("account_key"),
+                        rs.getObject("e", LocalDateTime.class), rs.getInt("count_now"), rs.getInt("count_before")),
+                candidatesFrom, dayEnd, minCount, dayStart, alwaysBeforeFrom, dayStart, minCount,
+                dayStart, dayEnd, windowHours, windowHours);
+    }
+
+    @Override
+    public FanEvidence fanInEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd) {
+        return fanEvidence(FAN_IN_EVIDENCE, accountKey, windowStart, windowEnd);
+    }
+
+    @Override
+    public FanEvidence fanOutEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd) {
+        return fanEvidence(FAN_OUT_EVIDENCE, accountKey, windowStart, windowEnd);
+    }
+
+    private FanEvidence fanEvidence(String sql, String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd) {
+        List<FanEvidence.CurrencyTotal> byCurrency = jdbc.query(sql, (rs, rowNum) ->
+                new FanEvidence.CurrencyTotal(rs.getString("currency"), rs.getBigDecimal("total_amount"),
                         rs.getInt("transaction_count"), ids(rs.getArray("transaction_ids"))),
                 accountKey, windowStart, windowEnd);
         String entityId = jdbc.query("select entity_id from ops.accounts where account_key = ?",
                 (rs, rowNum) -> rs.getString(1), accountKey).stream().findFirst().orElse(null);
-        return new FanInEvidence(entityId, byCurrency);
+        return new FanEvidence(entityId, byCurrency);
     }
 
     @Override

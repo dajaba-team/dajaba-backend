@@ -8,12 +8,13 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * R02 경보 한 건의 근거 — 창 안의 입금(자기 계좌 거래 제외)을 통화별로 묶은 것 (ML 규약 §2.3 amounts_by_currency).
- * 금액은 받은 쪽(amount_received·currency_received). 통화는 원문 그대로, 다른 통화끼리 더하지 않는다.
+ * R01·R02 경보 한 건의 근거 — 창 안의 송금(R01)·입금(R02)을 통화별로 묶은 것, 자기 계좌 거래 제외 (ML 규약 §2.3).
+ * 금액은 방향대로(rules.md 1절 4) — R01 은 보낸 쪽(amount_paid·currency_paid), R02 는 받은 쪽(amount_received·currency_received).
+ * 통화는 원문 그대로, 다른 통화끼리 더하지 않는다.
  */
-public record FanInEvidence(String entityId, List<CurrencyTotal> byCurrency) {
+public record FanEvidence(String entityId, List<CurrencyTotal> byCurrency) {
 
-    public FanInEvidence {
+    public FanEvidence {
         byCurrency = List.copyOf(byCurrency);
     }
 
@@ -29,10 +30,13 @@ public record FanInEvidence(String entityId, List<CurrencyTotal> byCurrency) {
         return byCurrency.stream().flatMap(c -> c.transactionIds().stream()).distinct().sorted().toList();
     }
 
-    /** {"distinct_senders": n, "amounts_by_currency": [{currency, total_amount, transaction_count, transaction_ids}]} */
-    public ObjectNode toRuleFacts(int distinctSenders) {
+    /**
+     * {countField: n, "amounts_by_currency": [{currency, total_amount, transaction_count, transaction_ids}]}
+     * — countField 는 R01 distinct_receivers, R02 distinct_senders.
+     */
+    public ObjectNode toRuleFacts(String countField, int count) {
         JsonNodeFactory f = JsonNodeFactory.instance;
-        ObjectNode facts = f.objectNode().put("distinct_senders", distinctSenders);
+        ObjectNode facts = f.objectNode().put(countField, count);
         ArrayNode amounts = facts.putArray("amounts_by_currency");
         for (CurrencyTotal c : byCurrency) {
             ObjectNode item = amounts.addObject()

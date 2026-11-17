@@ -19,18 +19,18 @@ class FanInRuleTest {
 
     @Test
     void 지금_N_이상이고_1분_전_N_미만이면_경보() {
-        assertThat(rule.fires(new FanInMinute("A", E, 5, 4))).isTrue();
-        assertThat(rule.fires(new FanInMinute("A", E, 7, 0))).isTrue();   // 같은 분에 한꺼번에
+        assertThat(rule.fires(new FanMinute("A", E, 5, 4))).isTrue();
+        assertThat(rule.fires(new FanMinute("A", E, 7, 0))).isTrue();   // 같은 분에 한꺼번에
     }
 
     @Test
     void 참이_이어지면_경보_없음() {
-        assertThat(rule.fires(new FanInMinute("A", E, 6, 5))).isFalse();
+        assertThat(rule.fires(new FanMinute("A", E, 6, 5))).isFalse();
     }
 
     @Test
     void 지금_N_미만이면_경보_없음() {
-        assertThat(rule.fires(new FanInMinute("A", E, 4, 3))).isFalse();
+        assertThat(rule.fires(new FanMinute("A", E, 4, 3))).isFalse();
     }
 
     @Test
