@@ -17,3 +17,6 @@ out/
 # 로컬 데이터 (원본 CSV는 리포에 넣지 않는다)
 data/
 *.log
+
+# 로컬 화면 확인용 포트 묶음 (README "운영 도구") — 커밋하지 않는다
+compose.override.yml
