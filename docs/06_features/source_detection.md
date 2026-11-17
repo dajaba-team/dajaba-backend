@@ -106,7 +106,7 @@
 - 룰 전체가 **한 트랜잭션**(하나라도 실패하면 그 실행의 경보 전부 롤백 → 다시 돌려도 두 번 생기지 않음), `SUCCEEDED`도 그 안에서. 실패는 `FAILED`를 따로 커밋. 앱이 죽어 남은 `RUNNING`은 기동 때 `FAILED`로.
 - 경보: `alert_no`는 시퀀스, `score_status = PENDING`, `case_opened = false`. R02 창은 B7(11/2) 슬라이딩 `window_hours`(v2 96시간) — `window_end = reference_ts = E+1분`(뜻은 `(E-H, E]`), `batch_date` = 스캔 날짜(E의 날짜). 자기 계좌 거래 제외. `entity_id`는 `accounts`.
 - R02 `rule_facts` = `{distinct_senders, amounts_by_currency:[{currency, total_amount, transaction_count, transaction_ids}]}`(받은 쪽 금액, 통화 원문 그대로). `transaction_ids` = 창 안 입금 전부.
-- 룰 행은 Flyway 시드(`V011` = `R02_FAN_IN` 버전 1, 96시간·N = 5). 다른 룰은 구현할 때 같은 방식으로 새 파일에 넣어요. 켜진 룰에 구현이 없으면 500(배치 FAILED).
+- 룰 행은 Flyway 시드(`V011` = `R02_FAN_IN` 버전 1, 96시간·N = 5, `V016` = 나머지 다섯 룰 버전 1). 켜진 룰에 구현이 없으면 500(배치 FAILED)이지만, 지금은 임시로 경고 로그만 남기고 건너뛰어요(SCRUM-260, 마지막 룰 R03 PR에서 되돌림). 건너뛰는 동안 성공한 날짜는 다시 스캔하지 않으므로 시연 데이터는 여섯 룰 머지 뒤 DB 초기화 후 스캔해요.
 - 룰 기준값은 기존 행을 고치지 않고 새 버전 행을 추가해요. DB도 `rules`는 `is_active`·`updated_*`만 바꿀 수 있어요(V005).
 - 이미 성공한 날짜는 다시 스캔하지 않아요(`batch_runs`). 그래서 룰 버전을 올려도 같은 날짜에 같은 룰·계좌·창 경보가 버전별로 또 생기지 않아요. 새 버전은 다음 스캔부터 적용돼요.
 

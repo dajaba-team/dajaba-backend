@@ -38,6 +38,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 룰 스캔 R02 (SCRUM-99). 시드 V011 의 R02_FAN_IN 버전 1(96시간, N=5)로 돈다.
+ * V016 의 나머지 다섯 룰도 켜져 있지만 구현 전이라 건너뛴다 (SCRUM-260 임시).
  * 경보는 지울 수 없고 같은 날짜는 한 번만 성공하므로 테스트마다 날짜·계좌를 따로 쓰고, 단언은 그 계좌의 경보만 본다.
  */
 @Testcontainers
@@ -48,6 +49,8 @@ class RunRuleScanTest {
 
     private static final AtomicLong SEQUENCE = new AtomicLong();
     private static final long SYSTEM = CurrentUser.SYSTEM_ID;
+    private static final List<String> SEEDED = List.of("R01_FAN_OUT", "R02_FAN_IN", "R03_FX_RELAY",
+            "R04_CYCLE", "R05_SCATTER_GATHER", "R06_GATHER_SCATTER");
 
     @Container
     @ServiceConnection
@@ -221,12 +224,29 @@ class RunRuleScanTest {
     void 켜진_룰이_없으면_409_NO_ACTIVE_RULES() {
         LocalDate d = LocalDate.of(2022, 9, 11);
         inbound(newKey(), newKey(), d.atTime(1, 0), "1", "US Dollar");
-        setActive("R02_FAN_IN", 1, false);
+        SEEDED.forEach(r -> setActive(r, 1, false));
         try {
             assertThatThrownBy(() -> runRuleScan.start(d, SYSTEM)).isInstanceOf(NoActiveRulesException.class);
         } finally {
-            setActive("R02_FAN_IN", 1, true);
+            SEEDED.forEach(r -> setActive(r, 1, true));
         }
+    }
+
+    @Test
+    void 시드로_여섯_룰이_켜져_있고_구현_전_룰은_건너뛰어_R02만_센다() {   // SCRUM-260 임시
+        LocalDate d = LocalDate.of(2022, 9, 13);
+        inbound(newKey(), newKey(), d.atTime(1, 0), "1", "US Dollar");
+
+        assertThat(jdbc.queryForList(
+                "select rule_id from ops.rules where is_active and version = 1 order by rule_id", String.class))
+                .containsExactlyElementsOf(SEEDED);
+        assertThat(count("select count(*) from ops.rules r, jsonb_object_keys(r.params->'usd_rates') "
+                + "where r.rule_id = 'R03_FX_RELAY'")).isEqualTo(15);   // rules.md 환율 표 15개 통화
+
+        RuleScanResult result = runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        assertThat(result.run().status()).isEqualTo(BatchStatus.SUCCEEDED);
+        assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId).containsExactly("R02_FAN_IN");
     }
 
     @Test
