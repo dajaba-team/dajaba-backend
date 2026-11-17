@@ -24,7 +24,8 @@ create table ops.str_reports (
     reported_by             bigint references ops.users(id),       -- 모의 제출한 승인자
     late                    boolean,                               -- 마감일 다음 날 00:00 KST 이후 제출이면 true (23:59 분 전체 인정). 제출 때 판정해 저장
     -- 5-3. 의심 유형·정도 — 승인 때 str_drafts 에서 복사해 고정
-    suspicion_types         varchar(16)[] not null,                -- 서식 VI 유형 번호
+    suspicion_types         varchar(16)[] not null                 -- 서식 VI 유형 번호. 1개 이상, null 원소 없음
+                            check (cardinality(suspicion_types) > 0 and array_position(suspicion_types, null) is null),  -- #119 리뷰
     suspicion_level_branch  smallint not null check (suspicion_level_branch between 1 and 5),  -- 지점용, 조사역
     suspicion_level_hq      smallint not null check (suspicion_level_hq between 1 and 5),      -- 본점용, 승인자
     -- 2. 무엇을 승인했나 + PDF 재료. 최신 점수·바뀐 고객 정보로 다시 조립하지 않는다
