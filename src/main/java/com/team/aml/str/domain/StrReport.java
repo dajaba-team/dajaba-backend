@@ -13,6 +13,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
 import java.util.regex.Pattern;
@@ -65,7 +66,7 @@ public class StrReport extends BaseEntity {
     private Long reportedBy;
 
     @Column(name = "late")
-    private Boolean late;                    // reported_at > report_due_at
+    private Boolean late;                    // 마감일 다음 날 00:00 KST 이후 제출 (ReportDeadline.isLate)
 
     @JdbcTypeCode(SqlTypes.ARRAY)
     @Column(name = "suspicion_types", nullable = false, updatable = false)
@@ -186,8 +187,10 @@ public class StrReport extends BaseEntity {
             throw new IllegalStateException("이미 모의 제출한 보고서다: " + reportNo);
         }
         this.reportedBy = reportedBy;
-        this.reportedAt = reportedAt;
-        this.late = reportedAt.isAfter(reportDueAt);
+        // DB(timestamptz)는 마이크로초까지라 같은 정밀도로 자른다 — 저장값과 late 판단이 어긋나지 않게
+        Instant atMicros = reportedAt.truncatedTo(ChronoUnit.MICROS);
+        this.reportedAt = atMicros;
+        this.late = ReportDeadline.isLate(reportDueAt, atMicros);
         this.pdfStatus = ReportPdfStatus.PENDING;
     }
 

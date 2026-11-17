@@ -22,7 +22,7 @@ create table ops.str_reports (
     report_due_at           timestamptz not null,                  -- 승인일 다음 영업일부터 3번째 영업일 23:59 KST, 토·일만 제외. 승인 때 계산해 고정
     reported_at             timestamptz,                           -- 모의 제출 시각 = 표제부 2 보고일자
     reported_by             bigint references ops.users(id),       -- 모의 제출한 승인자
-    late                    boolean,                               -- reported_at > report_due_at. 제출 때 판정해 저장
+    late                    boolean,                               -- 마감일 다음 날 00:00 KST 이후 제출이면 true (23:59 분 전체 인정). 제출 때 판정해 저장
     -- 5-3. 의심 유형·정도 — 승인 때 str_drafts 에서 복사해 고정
     suspicion_types         varchar(16)[] not null,                -- 서식 VI 유형 번호
     suspicion_level_branch  smallint not null check (suspicion_level_branch between 1 and 5),  -- 지점용, 조사역

@@ -208,9 +208,34 @@ class StrReportTest {
     void 정상_마감_뒤_제출은_late_true() {
         StrReport r = approvedReport();
 
-        r.markReported(3L, DUE_AT.plusSeconds(1));
+        r.markReported(3L, DUE_AT.plusSeconds(1));   // 다음 날 00:00:00 KST
 
         assertThat(r.getLate()).isTrue();
+    }
+
+    // 10-1
+    @Test
+    void 경계_23시59분59초_소수초_제출은_late_false() {
+        StrReport half = approvedReport();
+        StrReport lastMicro = approvedReport();
+
+        half.markReported(3L, DUE_AT.plusMillis(500));          // 23:59:59.500
+        lastMicro.markReported(3L, DUE_AT.plusNanos(999_999_000)); // 23:59:59.999999 (DB 최대 정밀도)
+
+        assertThat(half.getLate()).isFalse();
+        assertThat(lastMicro.getLate()).isFalse();
+        assertThat(lastMicro.getReportedAt()).isEqualTo(Instant.parse("2026-11-20T14:59:59.999999Z"));
+    }
+
+    // 10-2
+    @Test
+    void 경계_나노초는_DB처럼_마이크로초로_잘라_저장값과_late가_같다() {
+        StrReport r = approvedReport();
+
+        r.markReported(3L, DUE_AT.plusNanos(999_999_999));      // 23:59:59.999999999 → .999999
+
+        assertThat(r.getReportedAt()).isEqualTo(Instant.parse("2026-11-20T14:59:59.999999Z"));
+        assertThat(r.getLate()).isFalse();
     }
 
     // 11
