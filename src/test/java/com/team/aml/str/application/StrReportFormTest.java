@@ -14,6 +14,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -48,7 +49,8 @@ class StrReportFormTest {
     }
 
     private static StrReportForm.Input input(JsonNode facts, List<CaseTransaction> txs) {
-        return new StrReportForm.Input("CASE-2026-000010", "ALT-20220903-000142", 123L, CASE_ACCOUNT, facts,
+        return new StrReportForm.Input("CASE-2026-000010", "ALT-20220903-000142", 123L, CASE_ACCOUNT,
+                Map.of(CASE_ACCOUNT, "First Bank of Dallas", "20_AAA", "Canada Bank #26"), facts,
                 "김조사", "박승인", txs, List.of("VI-2-9", "VI-4-26"), 3, 4, body(),
                 Instant.parse("2026-11-17T05:00:00.123456Z"), "a".repeat(64), "gen-1", "narrative_v4", "v-1",
                 "verify_v1");
@@ -67,7 +69,10 @@ class StrReportFormTest {
         assertThat(s.path("subject").path("entity_name").asText()).isEqualTo("Sole Proprietorship #50438");
         assertThat(s.path("subject").path("entity_id").asText()).isEqualTo("80062E240");
         assertThat(s.path("account").path("account_key").asText()).isEqualTo(CASE_ACCOUNT);
-        assertThat(s.path("account").path("onboarded_at").asText()).isEqualTo("2021-03-14");
+        assertThat(s.path("account").path("opened_at").isNull()).isTrue();              // IV-84 원천 미제공 (#123 리뷰)
+        assertThat(s.toString()).doesNotContain("2021-03-14");                          // 고객 등록일을 개설일로 쓰지 않음
+        assertThat(s.path("account").path("institution").asText()).isEqualTo("First Bank of Dallas");   // IV-85 계좌 은행
+        assertThat(s.path("institution").path("name").asText()).isNotEqualTo("First Bank of Dallas");    // I-1 과 다를 수 있다
         assertThat(s.path("account").path("holder_country_code").asText()).isEqualTo("PT");
         assertThat(s.path("suspicion").path("types")).extracting(JsonNode::asText).containsExactly("VI-2-9", "VI-4-26");
         assertThat(s.path("suspicion").path("level_branch").asInt()).isEqualTo(3);
@@ -131,7 +136,8 @@ class StrReportFormTest {
         assertThat(cps.get(0).path("same_bank").asBoolean()).isFalse();   // V-2 타행
         assertThat(cps.get(1).path("account_key").asText()).isEqualTo("10_BBB");
         assertThat(cps.get(1).path("same_bank").asBoolean()).isTrue();    // V-1 자행
-        assertThat(cps.get(0).path("bank_name").isNull()).isTrue();
+        assertThat(cps.get(0).path("bank_name").asText()).isEqualTo("Canada Bank #26");   // V-133 accounts.bank_name
+        assertThat(cps.get(1).path("bank_name").isNull()).isTrue();                      // 원천에 은행명 없음 → null
     }
 
     // 5
@@ -156,6 +162,7 @@ class StrReportFormTest {
         assertThat(s.path("subject").path("entity_name").isNull()).isTrue();
         assertThat(s.path("subject").path("country_code").isNull()).isTrue();
         assertThat(s.path("account").path("account_key").asText()).isEqualTo(CASE_ACCOUNT);   // 케이스 값은 있음
+        assertThat(s.path("account").path("opened_at").isNull()).isTrue();
         assertThat(s.path("transactions")).isEmpty();
     }
 
@@ -169,6 +176,33 @@ class StrReportFormTest {
     }
 
     // 8
+    @Test
+    void 경계_요청때_근거거래중_지금_근거범위에_없는_번호는_빠지고_missing으로_센다() {   // #123 리뷰
+        List<CaseTransaction> all = List.of(
+                tx(1, "20_AAA", CASE_ACCOUNT, TransactionDirection.INBOUND, "ACH", "US Dollar", "1", "US Dollar", "1"),
+                tx(2, "20_AAA", CASE_ACCOUNT, TransactionDirection.INBOUND, "ACH", "US Dollar", "1", "US Dollar", "1"),
+                tx(3, "20_AAA", CASE_ACCOUNT, TransactionDirection.INBOUND, "ACH", "US Dollar", "1", "US Dollar", "1"));
+
+        StrReportForm.EvidenceSelection sel = StrReportForm.selectEvidence(all, List.of(1L, 3L, 999L, 3L));
+
+        assertThat(sel.rows()).extracting(CaseTransaction::transactionId).containsExactly(1L, 3L);   // 2 는 요청에 없음
+        assertThat(sel.expected()).isEqualTo(3);   // 중복 제거
+        assertThat(sel.missing()).isEqualTo(1);    // 999 — 지금 근거 범위 밖
+    }
+
+    // 9
+    @Test
+    void 경계_요청_근거번호가_없으면_전부이고_missing_0() {
+        List<CaseTransaction> all = List.of(
+                tx(1, "20_AAA", CASE_ACCOUNT, TransactionDirection.INBOUND, "ACH", "US Dollar", "1", "US Dollar", "1"));
+
+        StrReportForm.EvidenceSelection sel = StrReportForm.selectEvidence(all, List.of());
+
+        assertThat(sel.rows()).hasSize(1);
+        assertThat(sel.missing()).isZero();
+    }
+
+    // 10
     @Test
     void 경계_요청_스냅샷의_근거_거래_번호만_읽는다() throws Exception {
         assertThat(StrReportForm.evidenceIds(OM.readTree("{\"evidence_transaction_ids\":[104221,104233]}")))

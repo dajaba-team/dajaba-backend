@@ -14,10 +14,13 @@ import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * 확정 보고서 서식 스냅샷 (str_reports.form_snapshot) — 별지 제1호 표제부~VII + 내부 결재 정보.
@@ -53,12 +56,16 @@ final class StrReportForm {
 
     private StrReportForm() {}
 
-    /** 조립 재료. 사람 이름은 users.display_name, 계좌는 내부 키(가리지 않음 — 보고서 본문은 담당·승인자만 본다, 결정 4). */
+    /**
+     * 조립 재료. 사람 이름은 users.display_name, 계좌는 내부 키(가리지 않음 — 보고서 본문은 담당·승인자만 본다, 결정 4).
+     * bankNames = 원천 ops.accounts.bank_name (계좌 키 → 은행명). 케이스 계좌(IV-85)와 상대 계좌(V-133). 없는 키·null 은 null.
+     */
     record Input(
             String caseNo,
             String alertNo,
             long draftId,
             String caseAccountKey,
+            Map<String, String> bankNames,
             JsonNode facts,
             String investigatorName,
             String approverName,
@@ -78,6 +85,7 @@ final class StrReportForm {
             Objects.requireNonNull(caseNo, "caseNo");
             Objects.requireNonNull(approvedAt, "approvedAt");
             facts = facts == null ? F.objectNode() : facts;
+            bankNames = bankNames == null ? Map.of() : Map.copyOf(bankNames);
             evidenceTransactions = evidenceTransactions == null ? List.of() : List.copyOf(evidenceTransactions);
             suspicionTypes = List.copyOf(suspicionTypes);
             narrative = List.copyOf(narrative);
@@ -136,8 +144,8 @@ final class StrReportForm {
         // IV. 관련계좌
         ObjectNode iv = root.putObject("account");
         iv.put("account_key", in.caseAccountKey());              // IV-83
-        iv.put("onboarded_at", text(customer, "onboarded_at")); // IV-84
-        iv.put("institution", institution);                     // IV-85
+        iv.putNull("opened_at");                                // IV-84 원천 미제공 — customer.onboarded_at 은 고객 등록일이라 쓰지 않는다 (#123 리뷰)
+        iv.put("institution", in.bankNames().get(in.caseAccountKey()));   // IV-85 그 계좌의 개설 은행(accounts.bank_name) — 보고기관과 다를 수 있다 (#123 리뷰)
         iv.put("account_purpose", text(customer, "account_purpose"));   // IV-88
         iv.put("holder_name", text(subject, "entity_name"));    // IV-90
         iv.put("holder_country_code", text(customer, "country_code"));  // IV-94
@@ -151,7 +159,7 @@ final class StrReportForm {
             } else {
                 c.put("same_bank", same);                       // true = V-1 자행, false = V-2 타행
             }
-            c.putNull("bank_name");                             // V-133 〔확인 필요〕 은행명 공개 조회가 생기면
+            c.put("bank_name", in.bankNames().get(key));          // V-133 accounts.bank_name, 없으면 null
         });
 
         // VI. 의심 유형·정도
@@ -226,6 +234,28 @@ final class StrReportForm {
     private static String text(JsonNode node, String field) {
         JsonNode v = node == null ? null : node.get(field);
         return v == null || v.isNull() || !v.isValueNode() ? null : v.asText();
+    }
+
+    /**
+     * 근거 거래 고르기. wantedIds(요청 스냅샷) 가 비면 전부. 요청 때 번호 중 지금 근거 범위에 없는 것은 missing 으로 센다
+     * — 스냅샷은 승인 뒤 못 고치므로 호출 쪽이 경고를 남긴다(#123 리뷰). 순서는 all 그대로.
+     */
+    static EvidenceSelection selectEvidence(List<CaseTransaction> all, List<Long> wantedIds) {
+        if (wantedIds.isEmpty()) {
+            return new EvidenceSelection(List.copyOf(all), 0, 0);
+        }
+        Set<Long> wanted = new LinkedHashSet<>(wantedIds);
+        List<CaseTransaction> rows = all.stream().filter(t -> wanted.contains(t.transactionId())).toList();
+        Set<Long> found = new HashSet<>();
+        rows.forEach(t -> found.add(t.transactionId()));
+        return new EvidenceSelection(rows, wanted.size(), (int) wanted.stream().filter(id -> !found.contains(id)).count());
+    }
+
+    /** expected = 요청 때 근거 거래 번호 수(중복 제거), missing = 그중 지금 근거 범위에서 못 찾은 수. */
+    record EvidenceSelection(List<CaseTransaction> rows, int expected, int missing) {
+        EvidenceSelection {
+            rows = List.copyOf(rows);
+        }
     }
 
     /** 요청 스냅샷의 evidence_transaction_ids. 없거나 비면 빈 목록 = 거르지 않음. */
