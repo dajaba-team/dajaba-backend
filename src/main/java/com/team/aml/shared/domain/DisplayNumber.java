@@ -23,6 +23,11 @@ public final class DisplayNumber {
         return "CASE-" + referenceYear + "-" + String.format("%06d", seq);
     }
 
+    /** STR-2026-000001 — 확정 보고서 문서번호(서식 표제부 1). 일련번호는 ops.str_report_no_seq (V015), 연도는 승인일(KST). */
+    public static String reportNo(int approvedYear, long seq) {
+        return "STR-" + approvedYear + "-" + String.format("%06d", seq);
+    }
+
     /** DRF-000123 — str_drafts.id(ops.str_draft_id_seq) 그대로 (계약서 v0.2 2.2). */
     public static String draftNo(long draftId) {
         return "DRF-" + String.format("%06d", draftId);
