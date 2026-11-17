@@ -163,7 +163,7 @@ public class GetStrDraft {
 
     /**
      * 조회 결과. META_ONLY 면 draftNo·access·caseNo·caseStatus·status·producedAt 만 채우고 나머지는 null
-     * (계약서 S2 제한 응답 — "상태·날짜만". 케이스 번호·상태는 C1 목록에서 세 역할 모두 보는 값).
+     * (계약서 S2 제한 응답 — "상태·날짜만". 케이스 번호·상태는 C1 목록에서 세 역할 모두 보는 값)
      *
      * @param suspicionTypes            조사역이 승인 요청(S6) 때 고른 의심 유형. 요청 전이면 [] — 반려 뒤 다시 열면 지난 값
      * @param suspicionTypesRecommended 룰이 추천한 유형. 룰 → 서식 VI 유형 표가 아직 없어 지금은 항상 [] (rules.md 미결 4)
