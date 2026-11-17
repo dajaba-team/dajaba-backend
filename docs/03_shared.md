@@ -288,3 +288,12 @@ docker exec -it -e PGOPTIONS='-c default_transaction_read_only=on' aml-db psql -
 # ai — app_backend 로는 못 봐서 슈퍼유저, 읽기 전용 세션
 docker exec -it -e PGOPTIONS='-c default_transaction_read_only=on' aml-db psql -U postgres -d aml
 ```
+
+## 12. 운영 도구 (ops 프로필) [운영·배포 구성안 3.1~3.4, 코드 `compose.yaml`·`ops/`, SCRUM-263]
+
+Prometheus·Grafana·Loki·Alloy·Redis·RabbitMQ·MinIO·Elasticsearch·Langfuse를 `compose.yaml`에 `profiles: [ops]`로 띄워요. 띄우는 법·도구별 표·`.env` 변수는 README "운영 도구"에 있어요. 규칙은 `ComposeStructureTest`가 CI에서 막아요: 도구는 전부 ops 프로필 · 호스트 포트 없음 · 이미지 태그(또는 digest) 고정 · healthcheck(Loki만 예외, distroless) · 메모리 상한 · app `depends_on`은 db뿐 · `${VAR:?}` 안 씀.
+
+- **원본은 PostgreSQL 하나.** Redis는 세션만(db 0), RabbitMQ는 작업 ID만, MinIO는 PDF 파일만, Elasticsearch는 검색 색인만. 예외는 Langfuse 내부 저장(Redis db 1·MinIO `langfuse` 버킷·db의 `langfuse` DB)뿐.
+- **도구가 죽어도 그 기능만 멈춰요.** 붙일 때도 지표·추적 연결은 실패를 무시(fail-open)하고, app·ai `depends_on`에 도구를 넣지 않아요.
+- 로그·지표·추적에 계좌번호·금액·본문·프롬프트 전문을 넣지 않아요(NFR-COM-04, §8). Alloy는 표준출력을 그대로 옮겨요.
+- 자기 기능을 붙일 곳: 노션 「운영 도구 붙이기 — 팀원별 담당」 2절. 11/24에 고정해요.
