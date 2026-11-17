@@ -5,6 +5,9 @@ import com.team.aml.detection.domain.FanEvidence;
 import com.team.aml.detection.domain.FanInRule;
 import com.team.aml.detection.domain.FanMinute;
 import com.team.aml.detection.domain.FanOutRule;
+import com.team.aml.detection.domain.GatherScatterEvidence;
+import com.team.aml.detection.domain.GatherScatterMinute;
+import com.team.aml.detection.domain.GatherScatterRule;
 import com.team.aml.detection.domain.NewAlert;
 import com.team.aml.detection.domain.RuleScanRepository;
 import org.slf4j.Logger;
@@ -29,9 +32,10 @@ public class RuleScanner {
 
     /**
      * 임시 (SCRUM-260): V016 으로 다섯 룰을 구현 전에 먼저 켰다. 여기 없는 룰은 경고만 남기고 건너뛰며 alerts_by_rule 에도 넣지 않는다.
-     * 룰 PR 마다 ID 를 여기와 switch 에 추가하고, 마지막 룰(R03, SCRUM-193) PR 에서 이 목록과 건너뛰기를 지운다.
+     * 룰 PR 마다 ID 를 여기와 switch 에 추가하고, 남은 룰 중 마지막으로 머지되는 룰 PR 에서 이 목록과 건너뛰기를 지운다.
      */
-    private static final Set<String> IMPLEMENTED = Set.of(FanOutRule.RULE_ID, FanInRule.RULE_ID);
+    private static final Set<String> IMPLEMENTED =
+            Set.of(FanOutRule.RULE_ID, FanInRule.RULE_ID, GatherScatterRule.RULE_ID);
 
     private final RuleScanRepository scans;
     private final RuleScanRecorder recorder;
@@ -52,6 +56,7 @@ public class RuleScanner {
             int created = switch (rule.ruleId()) {
                 case FanOutRule.RULE_ID -> scanFanOut(batchRunId, date, rule);
                 case FanInRule.RULE_ID -> scanFanIn(batchRunId, date, rule);
+                case GatherScatterRule.RULE_ID -> scanGatherScatter(batchRunId, date, rule);
                 default -> throw new IllegalStateException("구현되지 않은 룰이 켜져 있습니다: " + rule.ruleId());
             };
             counts.add(new RuleAlertCount(rule.ruleId(), rule.version(), created));
@@ -91,6 +96,25 @@ public class RuleScanner {
             FanEvidence evidence = scans.fanOutEvidence(m.accountKey(), start, end);
             scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), m.accountKey(), evidence.entityId(),
                     start, end, end, evidence.toRuleFacts("distinct_receivers", m.countNow()), evidence.transactionIds()));
+            created++;
+        }
+        return created;
+    }
+
+    /** R06 — 입금·출금 상대 수가 둘 다 하한~상한 안이 되는 분에 경보. 근거는 창 안 입금(받은 쪽)·출금(보낸 쪽) 전부. */
+    private int scanGatherScatter(long batchRunId, LocalDate date, ActiveRule rule) {
+        GatherScatterRule gs = GatherScatterRule.from(rule.params());
+        int created = 0;
+        for (GatherScatterMinute m : scans.gatherScatterMinutes(date, gs)) {
+            if (!gs.fires(m)) {
+                continue;
+            }
+            LocalDateTime start = gs.windowStart(m.minute());
+            LocalDateTime end = gs.windowEnd(m.minute());
+            GatherScatterEvidence evidence = new GatherScatterEvidence(
+                    scans.fanInEvidence(m.accountKey(), start, end), scans.fanOutEvidence(m.accountKey(), start, end));
+            scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), m.accountKey(), evidence.entityId(),
+                    start, end, end, evidence.toRuleFacts(m.sendersNow(), m.receiversNow()), evidence.transactionIds()));
             created++;
         }
         return created;
