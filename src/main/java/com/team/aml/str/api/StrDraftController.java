@@ -1,5 +1,6 @@
 package com.team.aml.str.api;
 
+import com.team.aml.str.application.CloseCaseWithStrDraft;
 import com.team.aml.str.application.GetStrDraft;
 import com.team.aml.str.application.ListStrRevisions;
 import com.team.aml.str.application.RequestStrDraft;
@@ -27,16 +28,19 @@ public class StrDraftController {
     private final ListStrRevisions listStrRevisions;
     private final VerifyStrDraft verifyStrDraft;
     private final SubmitStrDraft submitStrDraft;
+    private final CloseCaseWithStrDraft closeCaseWithStrDraft;
 
     public StrDraftController(RequestStrDraft requestStrDraft, GetStrDraft getStrDraft,
                               ReviseStrDraft reviseStrDraft, ListStrRevisions listStrRevisions,
-                              VerifyStrDraft verifyStrDraft, SubmitStrDraft submitStrDraft) {
+                              VerifyStrDraft verifyStrDraft, SubmitStrDraft submitStrDraft,
+                              CloseCaseWithStrDraft closeCaseWithStrDraft) {
         this.requestStrDraft = requestStrDraft;
         this.getStrDraft = getStrDraft;
         this.reviseStrDraft = reviseStrDraft;
         this.listStrRevisions = listStrRevisions;
         this.verifyStrDraft = verifyStrDraft;
         this.submitStrDraft = submitStrDraft;
+        this.closeCaseWithStrDraft = closeCaseWithStrDraft;
     }
 
     @Operation(summary = "STR 초안 생성·재생성 (최대 90초)",
@@ -109,5 +113,17 @@ public class StrDraftController {
                                         @Valid @RequestBody SubmitStrDraftRequest request) {
         return StrCaseChangeResponse.from(submitStrDraft.execute(draftNo, request.caseVersion(),
                 request.verificationId(), request.suspicionTypes(), request.suspicionLevelBranch()));
+    }
+
+    @Operation(summary = "초안 있는 케이스 종결",
+            description = "담당만(403 NOT_ASSIGNEE). 케이스 DRAFTED 또는 보고 안 함 반려(REJECTED+NOT_REPORTABLE)에서만 — 보완 요청 반려·승인 대기 이후·"
+                    + "초안 없는 케이스는 409 INVALID_CASE_TRANSITION(초안 없으면 A5 /close). version 다르면 409 CONCURRENT_UPDATE. "
+                    + "close_reason FALSE_POSITIVE·DUPLICATE·NO_ACTION, comment 1~2,000자 둘 다 필수(400). "
+                    + "케이스 CLOSED 와 현재 초안 SUPERSEDED 가 한 번에. 응답은 케이스 공통 변경 응답")
+    @PostMapping("/cases/{caseNo}/close-with-draft")
+    public StrCaseChangeResponse closeWithDraft(@PathVariable String caseNo,
+                                                @Valid @RequestBody CloseCaseWithDraftRequest request) {
+        return StrCaseChangeResponse.from(closeCaseWithStrDraft.execute(caseNo, request.closeReason(),
+                request.comment(), request.version()));
     }
 }
