@@ -10,7 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * str 에 주는 공개 유스케이스 — 초안이 있는 케이스 종결 → CLOSED (CASES 명세 §2.2·§6.2·SEQ-09, API A6, SCRUM-235).
- * str 종결 유스케이스(POST /cases/{case_no}/close-with-draft, SCRUM-186)와 같은 트랜잭션에서만 부른다(MANDATORY) —
+ * str 종결 유스케이스(POST /cases/{case_no}/close-with-draft, SCRUM-278)와 같은 트랜잭션에서만 부른다(MANDATORY) —
  * 케이스 CLOSED·CLOSE 이력과 str 의 현재 초안 SUPERSEDED 가 함께 성공하거나 롤백된다.
  * 초안이 없는 종결은 화면용 {@link CloseCase}(API-06)다 — 이름이 겹치지 않게 WithDraft 를 붙였다.
  *
