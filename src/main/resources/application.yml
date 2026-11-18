@@ -66,6 +66,8 @@ management:
   # 8080 GET /actuator/health 는 프론트 연결 확인용 호환 컨트롤러(MainPortHealthController)가 상태만 돌려준다 (SCRUM-271, 03_shared §13)
   server:
     port: 8081
+    # 듣는 주소 — bootRun·IDE 는 이 기계 안에서만. compose app 컨테이너만 0.0.0.0 을 넘긴다(Prometheus 가 app:8081 로 들어와야 함, SCRUM-271 후속)
+    address: ${MANAGEMENT_SERVER_ADDRESS:127.0.0.1}
   endpoints:
     web:
       exposure:

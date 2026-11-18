@@ -327,12 +327,17 @@ Prometheus가 15초마다 앱의 지표를 **가져가요**(pull). Prometheus가
 
 | 포트 | 경로 | 누가 | 호스트에서 |
 |---|---|---|---|
-| **8081** (관리 포트) | `/actuator/prometheus`, `/actuator/health` | Prometheus(`app:8081`), 로그인 없이 | **안 열림** — compose `ports`에 8081을 넣지 않아요 |
+| **8081** (관리 포트) | `/actuator/prometheus`, `/actuator/health` | Prometheus(`app:8081`), 로그인 없이 | **안 열림** — compose `ports`에 8081을 넣지 않아요. 듣는 주소는 기본 `127.0.0.1`(bootRun·IDE는 이 기계 안에서만), compose app 컨테이너만 `MANAGEMENT_SERVER_ADDRESS: 0.0.0.0`(같은 Docker 네트워크의 Prometheus가 들어와야 해서) |
 | 8080 | `/actuator/health` | 프론트 연결 확인 화면·누구나 | 열림 — 응답은 전과 같음(UP 200 `{"status":"UP"}`, 그 밖 503 `{"status":"DOWN"}` 등, `components`·`details` 없음) |
 | 8080 | `/actuator/prometheus` | — | **비로그인 401 `UNAUTHENTICATED`·로그인 403 `FORBIDDEN`** (8080에는 지표 끝점이 없고 `denyAll`에 걸림) |
 
 - 관리 포트를 나누면 actuator가 통째로 8081로 옮겨 가요. 8080 `/actuator/health`는 **관리 포트를 8081로 나누면서 프론트 연결 확인·docs/09·권한 표 25번을 지키려고 남긴 호환용** 컨트롤러(`MainPortHealthController`)예요 — `HealthEndpoint`의 상태만 돌려줘요. Boot의 health 그룹 `additional-path`는 경로가 한 단계(`/health`)만 돼서 못 썼어요.
-- **8081을 compose `ports`·nginx에 넣지 마세요.** 밖으로 여는 건 nginx 하나예요. `./gradlew bootRun`으로 호스트에서 띄우면 8081이 호스트에 열리니 공용 와이파이에서는 조심하세요.
+- **8081을 compose `ports`·nginx에 넣지 마세요.** 밖으로 여는 건 nginx 하나예요. 듣는 주소는 `application.yml`의 `${MANAGEMENT_SERVER_ADDRESS:127.0.0.1}`라 `./gradlew bootRun`이어도 공용 와이파이의 다른 기계에서 못 들어와요. compose에서 app을 띄울 땐 `MANAGEMENT_SERVER_ADDRESS: 0.0.0.0`을 같이 넣어요. 리포의 `compose.yaml`에서 빠지면 `ComposeStructureTest`가 잡아요. 리포 밖 배포 구성은 사람이 챙겨야 해요(빠지면 Prometheus Targets에서 app이 DOWN으로 보여요).
+- **`MANAGEMENT_SERVER_ADDRESS`가 빈 값·공백이면 앱이 뜨지 않아요.** 환경 변수는 yml 기본값(`127.0.0.1`)을 거치지 않고 바로 덮어서, 비어 있으면 모든 주소에 열리기 때문이에요. 변수를 지우거나(기본 127.0.0.1) `127.0.0.1`·`0.0.0.0`처럼 값을 넣어요. 조용히 127.0.0.1로 바꾸지 않아요 — 잘못 넣은 설정을 사람이 보게. 이 검사(`ManagementAddressCheck`)는 `@Lazy(false)`라 `spring.main.lazy-initialization=true`여도 돌아요.
+- compose의 app은 `extends`와 `network_mode`를 쓰지 않아요. 테스트가 상속·보간(`${X:-host}`)을 풀기 전 정의만 읽어서, 값이 아니라 **키가 있는지**로 막아요(`bridge`도 위반). 목록 모양 `environment`에서는 `MANAGEMENT_SERVER_ADDRESS`를 **값과 함께 한 번만** 써요(`"MANAGEMENT_SERVER_ADDRESS"`처럼 값 없이 쓰면 호스트 값으로 덮여요).
+- **`.env`·`compose.override.yml`에 `MANAGEMENT_SERVER_ADDRESS`나 app 8081 포트를 넣지 않아요.** `.env`는 `application.yml`이 읽어서 bootRun 기본값(127.0.0.1)을 덮고, override는 `ComposeStructureTest`가 안 봐요(리포의 `compose.yaml`은 app `ports`의 8081·`network_mode: host`까지 테스트가 막아요).
+- **관리 포트와 앱 포트 합치기(`SERVER_PORT=8081`·`MANAGEMENT_SERVER_PORT=8080` 등)는 지원 안 해요 — Boot가 기동을 거부해요.** 포트가 같으면 Boot는 관리 전용 주소(`management.server.address`)가 있는 것 자체를 거부하는데, 우리는 기본값 127.0.0.1을 늘 넣어 두기 때문이에요.
+- **bootRun에서 지표를 볼 때는 `localhost` 말고 `http://127.0.0.1:8081/actuator/prometheus`**로 열어요. 맥은 `localhost`가 IPv6 `::1`로 먼저 풀려서 연결이 안 될 수 있어요.
 - env·beans 같은 다른 actuator 끝점은 열지 않아요(`exposure.include: health,info,prometheus` — `info`는 전부터 있었고 8081에서도 막혀 있어요).
 
 ### 공통 지표 두 개 (진희)
