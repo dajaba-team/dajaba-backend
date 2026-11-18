@@ -12,8 +12,10 @@ import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.config.ContainerCustomizer;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
+import org.springframework.amqp.rabbit.retry.MessageRecoverer;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -28,7 +30,7 @@ import java.util.List;
  *
  * <p>ACK·재시도·DLQ 기본값(application.yml {@code spring.rabbitmq.listener.simple}) — 진희 공통 정책 확정 전 초안:
  * 처리 메서드가 정상 반환하면 ACK, 예외면 1s·2s 간격으로 총 3번 시도 후 재큐 없이 거절 → {@code <큐>.dlq}.
- * 메시지 형식이 틀리면(변환 실패) 재시도 없이 바로 DLQ.
+ * 메시지 형식이 틀리면(변환 실패) 재시도 없이 바로 DLQ. DLQ 로 보내기 직전에 그 큐의 {@link JobGiveUpHandler}를 부른다.
  */
 @Configuration
 @ConditionalOnProperty(name = "aml.messaging.enabled", havingValue = "true")
@@ -68,6 +70,12 @@ public class RabbitMessagingConfig {
     @Bean
     ContainerCustomizer<SimpleMessageListenerContainer> jobListenerContainerCustomizer() {
         return container -> container.setPossibleAuthenticationFailureFatal(false);
+    }
+
+    /** 재시도를 다 쓴 메시지 — 큐의 포기 처리(작업 행 FAILED 등) 후 DLQ. Spring Boot 가 리스너 재시도에 끼운다. */
+    @Bean
+    MessageRecoverer jobMessageRecoverer(ObjectProvider<JobGiveUpHandler<?>> giveUpHandlers, ObjectMapper objectMapper) {
+        return new JobMessageRecoverer(giveUpHandlers.orderedStream().toList(), objectMapper);
     }
 
     @Bean

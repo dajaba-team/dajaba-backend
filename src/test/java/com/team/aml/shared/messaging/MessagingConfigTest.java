@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Declarables;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.rabbit.retry.MessageRecoverer;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -37,6 +38,7 @@ class MessagingConfigTest {
     void 정상_켜면_큐마다_DLQ를_달아_선언한다() {
         runner.withPropertyValues("aml.messaging.enabled=true").run(ctx -> {
             assertThat(ctx.getBean(JobPublisher.class)).isInstanceOf(RabbitJobPublisher.class);
+            assertThat(ctx.getBean(MessageRecoverer.class)).isInstanceOf(JobMessageRecoverer.class);
             Declarables topology = ctx.getBean(Declarables.class);
             for (String name : JobQueues.ALL) {
                 Queue queue = topology.getDeclarablesByType(Queue.class).stream()

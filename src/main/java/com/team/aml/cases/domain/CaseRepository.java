@@ -42,6 +42,15 @@ public interface CaseRepository {
      * RUNNING 두 행이 생기지 않게 OpenCasesRecorder.start 가 RUNNING 확인 전에 부른다 (SCRUM-238).
      */
     void lockOpenCasesStart();
+
+    /**
+     * 케이스 생성 배치 한 건(batch_run_id)을 "지금 내가 돌린다"고 잡는다 — 기다리지 않는 advisory lock, 트랜잭션 끝에 풀림.
+     * 큐 리스너와 앱 안 실행기가 같은 실행을 동시에 돌지 않게 RunOpenCasesOnce 가 부른다(SCRUM-276, #130 리뷰).
+     * 실행하던 앱이 죽으면 연결이 끊기며 같이 풀려서 브로커 재전달 때 다시 잡을 수 있다.
+     *
+     * @return 잡았으면 true, 다른 트랜잭션이 이미 잡고 있으면 false
+     */
+    boolean tryLockOpenCasesRun(long batchRunId);
     Optional<Case> findByCaseNo(String caseNo);
     boolean existsByAlertId(Long alertId);
 

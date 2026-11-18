@@ -13,6 +13,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -65,9 +67,13 @@ public class OpenCasesFromAlerts {
 
     /**
      * 예외를 던지지 않는다. 결과는 batch_runs 에 남는다.
+     * NOT_SUPPORTED — 배치 전체에 트랜잭션을 걸지 않는다는 위 원칙을, 부르는 쪽이 트랜잭션 안이어도 지킨다.
+     * RunOpenCasesOnce 가 실행 잠금용 트랜잭션 안에서 부르는데, 그 트랜잭션에 경보 조회 등이 끼면 한 군데 예외로
+     * 바깥 트랜잭션이 rollback-only 가 되어 버린다. 부르는 쪽 트랜잭션은 잠시 멈췄다가(잠금은 그대로) 끝나면 이어진다.
      *
      * @return 경보 단위 집계. 대상 조회처럼 경보 단위가 아닌 곳에서 실패하면 빈 값(batch_runs 는 FAILED)
      */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public Optional<OpenCasesSummary> run(long batchRunId, LocalDate batchDate) {
         try {
             OpenCasesSummary summary = openAll(batchDate);

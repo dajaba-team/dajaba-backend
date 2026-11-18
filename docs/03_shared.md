@@ -307,7 +307,8 @@ Prometheus·Grafana·Loki·Alloy·Redis·RabbitMQ·MinIO·Elasticsearch·Langfus
 - **메시지에는 작업 ID만** — `{"batch_run_id": 123}`·`{"draft_id": 45}`. 날짜·대상·상태는 받는 쪽이 DB에서 읽어요. 원본은 PostgreSQL 하나.
 - 메시지·로그에 계좌번호·금액·본문·프롬프트 전문 없음(NFR-COM-04). `RabbitJobPublisher`도 큐 이름·예외 종류만 남겨요.
 - **기본은 꺼짐** — `AML_RABBITMQ_ENABLED=false`면 앱이 브로커에 연결하지 않아요(리스너 빈도 안 생김). 켜도 브로커가 죽으면 `JobPublisher.publish()`가 `false` → **부르는 쪽이 기존 동기 경로로** 돌려요(fail-open). app `depends_on`에 rabbitmq를 넣지 않아요. 앱 health에도 RabbitMQ를 넣지 않아요(`management.health.rabbit.enabled: false`). 계정이 틀려도 앱 기동은 막지 않아요(리스너 인증 실패를 치명 오류로 안 봄, `RabbitAuthFailOpenDbTest`).
-- **받는 쪽은 같은 메시지가 두 번 와도 안전해야 해요.** 확인(confirm)이 늦으면 보낸 쪽은 `false`(동기 경로로 실행)인데 브로커는 실제로 받았을 수 있고, 처리 중 앱이 죽으면 브로커가 다시 보내요. 예: 케이스 생성은 행이 `RUNNING`이 아니면 건너뛰고, `alert_id` UNIQUE라 다시 돌아도 중복 케이스가 없어요.
+- **받는 쪽은 같은 메시지가 두 번 와도 안전해야 해요.** 처리 중 앱이 죽으면 브로커가 다시 보내요. 예: 케이스 생성은 행이 `RUNNING`이 아니면 건너뛰고, `alert_id` UNIQUE라 다시 돌아도 중복 케이스가 없어요.
+- **큐 경로와 동기 경로가 같은 작업을 동시에 돌지 않게 해요.** 확인(confirm)이 늦으면 보낸 쪽은 `false`(동기 경로로 실행)인데 브로커는 실제로 받았을 수 있어요. 결과 중복은 UNIQUE로 막혀도 `batch_runs` 건수는 나중에 끝난 쪽 값으로 덮여요. 그래서 **두 경로 모두 같은 유스케이스를 거치고, 실행 전에 작업 ID별 advisory lock을 기다리지 않고(`pg_try_advisory_xact_lock`) 잡아요.** 못 잡으면 건너뛰고(ACK), 잡은 *뒤에* 상태를 읽어요. 예: `RunOpenCasesOnce` — 리스너와 `RequestOpenCases`의 실행기 둘 다 이걸 불러요. 앱이 죽으면 연결과 함께 잠금도 풀려 재전달 때 다시 잡혀요.
 
 **구조**
 
@@ -317,11 +318,12 @@ Prometheus·Grafana·Loki·Alloy·Redis·RabbitMQ·MinIO·Elasticsearch·Langfus
 | `aml.jobs.dlx` (direct 교환기) | 재시도를 다 쓴 메시지 → `<큐>.dlq` |
 | `JobQueues` | 큐 이름 한곳. `ALL`에 있는 큐마다 앱이 큐·`<큐>.dlq`·바인딩을 **처음 연결할 때 선언**해요(있으면 그대로) |
 | `JobPublisher` | 보내기. 브로커 확인까지 기다려 `true`/`false`, 예외 안 던짐 |
+| `JobGiveUpHandler` | (선택) 큐마다 하나. 재시도를 다 써서 DLQ로 가기 직전에 불림 — 작업 행 `FAILED` 등 |
 | `BatchRunMessage` | `{"batch_run_id": …}` — 배치 단계가 같이 씀. 다른 ID는 자기 기능에 같은 모양 record |
 
 | 큐 | 메시지 | 보내는 곳 → 받는 곳 | 담당 |
 |---|---|---|---|
-| `case.open-cases` | `BatchRunMessage`(OPEN_CASES `batch_run_id`, `RUNNING` 커밋 뒤) | `RequestOpenCases` → `OpenCasesMessageListener` → `RunQueuedOpenCases` | 지윤 |
+| `case.open-cases` | `BatchRunMessage`(OPEN_CASES `batch_run_id`, `RUNNING` 커밋 뒤) | `RequestOpenCases` → `OpenCasesMessageListener` → `RunOpenCasesOnce` | 지윤 |
 | `batch.*` | 〔협의〕 | 배치 단계 잇기 | 준혁 |
 | `str.pdf.*` | 〔협의〕 `draft_id` | 확정본 PDF 생성 | 채영 |
 
@@ -331,7 +333,13 @@ Prometheus·Grafana·Loki·Alloy·Redis·RabbitMQ·MinIO·Elasticsearch·Langfus
 - 메시지 형식이 틀리면(JSON 변환 실패) 재시도 없이 바로 DLQ.
 - `prefetch 1`·소비자 1개 — 배치처럼 무거운 작업을 한 번에 하나씩. 바꿀 큐는 `@RabbitListener(concurrency = …)`로 따로.
 - 그러니 **다시 해도 소용없는 경우(없는 id·이미 끝난 작업)는 예외 대신 로그 남기고 정상 반환**해서 ACK로 버려요. 예외는 "잠깐 뒤 다시 하면 될 수 있는" 실패(DB 연결 등)에만.
+- **DLQ로 보내기 직전에 그 큐의 `JobGiveUpHandler`를 한 번 불러요**(`JobMessageRecoverer`). 작업 행이 `RUNNING`으로 남으면 같은 날짜 재요청이 409 `BATCH_RUNNING`으로 막히니, 여기서 행을 `FAILED`로 바꿔요(다른 곳에서 실행 중이면 잠금을 못 잡아 안 건드림). 배치 단계 큐는 같은 모양으로 붙이면 돼요.
 - DLQ에 쌓인 메시지는 자동으로 다시 돌지 않아요. 관리 UI에서 보고, 원인을 고친 뒤 API로 다시 요청해요.
+- **복구 절차** — 재시도가 DB 장애 때문이었다면 포기 처리(`FAILED` 기록)도 실패할 수 있어요(로그 `작업 포기 처리 실패`). 그때는 DB가 돌아온 뒤 DLQ 메시지의 `batch_run_id` 행이 아직 `RUNNING`인지 보고, 맞으면 `FAILED`로 바꾼 다음 같은 날짜로 다시 요청해요. 형식이 틀린 메시지는 ID를 못 읽어 포기 처리를 못 하니 같은 방법으로요.
+  ```sql
+  update ops.batch_runs set status = 'FAILED', finished_at = now(), error_message = '큐 DLQ — 손으로 정리'
+   where id = :batch_run_id and status = 'RUNNING';
+  ```
 
 **자기 큐 붙이는 법** (케이스 생성 `case.open-cases`가 예시)
 
@@ -339,18 +347,23 @@ Prometheus·Grafana·Loki·Alloy·Redis·RabbitMQ·MinIO·Elasticsearch·Langfus
 2. 보내는 쪽(application): 작업 행(`batch_runs` 등)을 **먼저 커밋**하고 ID만 보내요. `false`면 기존 동기 경로로.
    ```java
    if (!publisher.publish(JobQueues.CASE_OPEN_CASES, new BatchRunMessage(batchRunId))) {
-       executor.execute(() -> openCases.run(batchRunId, batchDate));   // 꺼짐·브로커 죽음 → 지금처럼
+       executor.execute(() -> runOnce.execute(batchRunId));   // 꺼짐·브로커 죽음 → 지금처럼. 리스너와 같은 유스케이스(잠금)
    }
    ```
 3. 받는 쪽: **자기 기능 `api` 폴더**에 리스너(바깥에서 들어오는 입구라 컨트롤러와 같은 계층 — `ArchitectureTest` 계층 규칙). `@ConditionalOnProperty(name = "aml.messaging.enabled", havingValue = "true")`를 꼭 붙여요. 리스너는 ID만 넘기고, 상태 확인·실행은 application 유스케이스에서.
+   리스너가 `JobGiveUpHandler`도 구현하면 재시도를 다 썼을 때 작업 행을 `FAILED`로 바꿀 수 있어요.
    ```java
    @Component
    @ConditionalOnProperty(name = "aml.messaging.enabled", havingValue = "true")
-   public class OpenCasesMessageListener {
+   public class OpenCasesMessageListener implements JobGiveUpHandler<BatchRunMessage> {
        @RabbitListener(queues = JobQueues.CASE_OPEN_CASES)
-       public void onMessage(BatchRunMessage message) { runQueued.execute(message.batchRunId()); }
+       public void onMessage(BatchRunMessage message) { runOnce.execute(message.batchRunId()); }
+
+       public String queue() { return JobQueues.CASE_OPEN_CASES; }
+       public Class<BatchRunMessage> messageType() { return BatchRunMessage.class; }
+       public void onGiveUp(BatchRunMessage message) { runOnce.giveUp(message.batchRunId()); }
    }
    ```
-4. 테스트: 브로커 없는 단위 테스트(`RunQueuedOpenCasesTest`처럼 건너뛰기 조건) + 진짜 브로커 통합 테스트(`OpenCasesQueueDbTest` — compose와 같은 `rabbitmq:4.4.0-management-alpine`를 `GenericContainer`로, vhost `aml`, `aml.messaging.enabled=true`). `RabbitMQContainer`는 계정을 guest로 덮어써서 안 써요. `test` 프로필은 기본 꺼짐이라 다른 테스트에는 영향이 없어요.
+4. 테스트: 브로커 없는 단위 테스트(`RunOpenCasesOnceTest`처럼 건너뛰기·잠금·포기 조건) + 진짜 브로커 통합 테스트(`OpenCasesQueueDbTest` — compose와 같은 `rabbitmq:4.4.0-management-alpine`를 `GenericContainer`로, vhost `aml`, `aml.messaging.enabled=true`). `RabbitMQContainer`는 계정을 guest로 덮어써서 안 써요. `test` 프로필은 기본 꺼짐이라 다른 테스트에는 영향이 없어요.
 
 **띄우기·확인** — README "RabbitMQ 켜고 띄우기". IDE에서 띄운 앱은 `compose.override.yml`로 `127.0.0.1:5672`를 열고 `.env`에 `AML_RABBITMQ_ENABLED=true`(호스트 기본 `localhost`).

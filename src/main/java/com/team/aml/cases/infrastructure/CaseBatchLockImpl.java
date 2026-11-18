@@ -10,6 +10,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 class CaseBatchLockImpl implements CaseBatchLock {
 
     private static final long OPEN_CASES_START_LOCK = 6_006_001L;
+    /**
+     * 실행 잠금은 두 칸짜리 키(분류, batch_run_id). PostgreSQL 에서 두 칸 키와 한 칸 키는 서로 겹치지 않아 위 키들과 안 부딪힌다.
+     * batch_run_id 는 int 범위로 접는다 — 21억 차이 나는 두 실행이 같은 키가 될 뿐이라(서로 기다리지 않고 한쪽이 건너뜀) 실제로는 문제없다.
+     */
+    private static final int OPEN_CASES_RUN_LOCK_CLASS = 6_006;
 
     private final JdbcTemplate jdbc;
 
@@ -20,5 +25,12 @@ class CaseBatchLockImpl implements CaseBatchLock {
     @Override
     public void lockOpenCasesStart() {
         jdbc.query("select pg_advisory_xact_lock(?)", rs -> null, OPEN_CASES_START_LOCK);
+    }
+
+    @Override
+    public boolean tryLockOpenCasesRun(long batchRunId) {
+        Boolean locked = jdbc.queryForObject("select pg_try_advisory_xact_lock(?, (? % 2147483647)::int)",
+                Boolean.class, OPEN_CASES_RUN_LOCK_CLASS, batchRunId);
+        return Boolean.TRUE.equals(locked);
     }
 }
