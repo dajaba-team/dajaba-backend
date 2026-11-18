@@ -130,6 +130,12 @@ services:
 
 **문제 해결** — elasticsearch가 unhealthy이고 로그에 `flood stage disk watermark [95%] exceeded`가 보이면 Docker 디스크가 찬 거예요(ES가 `elastic` 계정 인증까지 못 해요). `docker system df`로 확인하고 `docker builder prune`(빌드 캐시)로 비우거나 Docker Desktop 설정의 디스크 한도를 늘린 뒤 `docker compose restart elasticsearch`.
 
+**ClickHouse 예전 로그 테이블 정리 — 11/18(SCRUM-287) 전에 ops를 띄운 적 있으면 한 번만** — 메모리를 아끼려고 Langfuse가 읽지 않는 시스템 로그 7개를 `ops/clickhouse/low-memory.xml`에서 껐어요. 그런데 그전에 만들어진 테이블은 볼륨에 남아서, ClickHouse가 예전 파트를 계속 합치느라 메모리를 써요(그러면 `memory limit exceeded`가 나고 Langfuse 기록이 버려져요). clickhouse를 띄운 상태에서 아래를 한 번 실행해요. 비밀번호는 컨테이너 환경 변수를 읽어서 화면에 찍히지 않아요. **새 볼륨으로 처음 띄우는 사람은 이 테이블이 생기지 않으니 필요 없어요.**
+
+```bash
+docker compose --profile ops exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery -q "DROP TABLE IF EXISTS system.trace_log SYNC; DROP TABLE IF EXISTS system.text_log SYNC; DROP TABLE IF EXISTS system.opentelemetry_span_log SYNC; DROP TABLE IF EXISTS system.asynchronous_metric_log SYNC; DROP TABLE IF EXISTS system.metric_log SYNC; DROP TABLE IF EXISTS system.latency_log SYNC; DROP TABLE IF EXISTS system.processors_profile_log SYNC"'
+```
+
 ## 지금 들어 있는 것 (W1 뼈대, 10/26)
 
 | 묶음 | 파일 | 상태 |
