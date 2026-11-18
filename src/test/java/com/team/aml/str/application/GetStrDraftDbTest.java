@@ -81,6 +81,8 @@ class GetStrDraftDbTest {
     @Autowired ObjectMapper om;
     @Autowired ApprovalRepository approvals;
     @Autowired ReviseStrDraft reviseDraft;
+    @Autowired SubmitStrDraft submitDraft;
+    @Autowired ApproveStrDraft approveDraft;
 
     long investigator;
     long otherInvestigator;
@@ -523,6 +525,26 @@ class GetStrDraftDbTest {
         assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).references()).isNull();   // META_ONLY 는 그대로 null
     }
 
+    // 21
+    @Test
+    void 버튼_승인된_잠긴_초안이면_승인한_사람에게만_모의_제출_REPORT() {   // P4 (SCRUM-240, 11/17 결정)
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        approve(caseId, draftId);                             // S6 → P2 실제로 — 확정 보고서 created_by = approver
+        long otherApprover = user("get-apr-other-r" + SEQ.incrementAndGet(), "APPROVER");
+
+        login(approver, "APPROVER");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("REPORT");
+        login(otherApprover, "APPROVER");                     // 승인하지 않은 승인자 — 서버도 403 NOT_DRAFT_APPROVER
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
+        login(investigator, "INVESTIGATOR");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
+
+        caseState(caseId, "REPORTED", null);                  // 제출 뒤 — 끝 상태
+        login(approver, "APPROVER");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
+    }
+
     // ---- 도우미 ----
 
     private void assertMetaOnly(GetStrDraft.Result r, long draftId, long caseId) {
@@ -554,6 +576,21 @@ class GetStrDraftDbTest {
     private void rejected(long draftId, RejectionReasonCode code, String comment) {
         login(approver, "APPROVER");
         tx.executeWithoutResult(s -> approvals.save(Approval.rejected(drafts.findById(draftId).orElseThrow(), code, comment)));
+        SecurityContextHolder.clearContext();
+    }
+
+    /** 지금 본문으로 검증 통과 한 줄 → 담당이 승인 요청(S6) → approver 가 승인(P2). 케이스 APPROVED, 초안 LOCKED, 확정 보고서. */
+    private void approve(long caseId, long draftId) {
+        String hash = tx.execute(st -> NarrativeHash.of(drafts.findById(draftId).orElseThrow().currentBody()));
+        String verificationId = "v-" + draftId + "-" + SEQ.incrementAndGet();
+        jdbc.update("insert into ops.verification_results(verification_id, draft_id, generation_id, revision_no, "
+                        + "narrative_sha256, status, verifier_version, produced_at, payload, created_by) "
+                        + "values (?, ?, ?, 1, ?, 'PASSED', 'verify_v1', now(), '{}'::jsonb, ?)",
+                verificationId, draftId, "g-" + draftId, hash, investigator);
+        login(investigator, "INVESTIGATOR");
+        submitDraft.execute(DisplayNumber.draftNo(draftId), caseVersion(caseId), verificationId, List.of("VI-1"), 3);
+        login(approver, "APPROVER");
+        approveDraft.execute(DisplayNumber.draftNo(draftId), caseVersion(caseId), 4);
         SecurityContextHolder.clearContext();
     }
 
