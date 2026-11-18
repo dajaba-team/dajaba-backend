@@ -13,7 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 초안이 있는 케이스 종결 (계약서 A6 POST /cases/{case_no}/close-with-draft, SCRUM-186). 컨트롤러·유스케이스는 str (str.md API 9번).
+ * 초안이 있는 케이스 종결 (계약서 A6 POST /cases/{case_no}/close-with-draft, SCRUM-278). 컨트롤러·유스케이스는 str (str.md API 9번).
  * 한 트랜잭션 — 케이스 CLOSED·CLOSE 이력(cases CloseCaseWithDraft, #111) + 현재 초안 SUPERSEDED. 따로 성공하면
  * "닫힌 케이스에 사용 중 초안"이 남는다.
  *

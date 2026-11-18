@@ -177,7 +177,7 @@
 - JPQL에서 `CASE`가 예약어라 엔티티 이름은 `InvestigationCase`예요(`select c from InvestigationCase c`).
 - `case_history.case_version_before`는 **그 변경 직전**의 `cases.version`이에요. `@Version`은 flush 때 올라가서, 한 트랜잭션에서 전이가 두 번 일어나면 두 행에 같은 번호가 남아요.
 
-**str에 주는 공개 기능 — 초안 있는 종결 (SCRUM-235)** `CloseCaseWithDraft.execute(caseId, draftId, expectedVersion, closeReason, comment)` → 새 `cases.version`, `Propagation.MANDATORY`. str `close-with-draft`(A6, SCRUM-186)가 현재 초안을 SUPERSEDED로 바꾸기 **전에** 불러요(케이스 먼저 잠금). 명세 이름은 `CloseCase`였지만 화면용 `CloseCase`(API-06)와 겹쳐 `WithDraft`를 붙였어요.
+**str에 주는 공개 기능 — 초안 있는 종결 (SCRUM-235)** `CloseCaseWithDraft.execute(caseId, draftId, expectedVersion, closeReason, comment)` → 새 `cases.version`, `Propagation.MANDATORY`. str `close-with-draft`(A6, SCRUM-278)가 현재 초안을 SUPERSEDED로 바꾸기 **전에** 불러요(케이스 먼저 잠금). 명세 이름은 `CloseCase`였지만 화면용 `CloseCase`(API-06)와 겹쳐 `WithDraft`를 붙였어요.
 - 검사 순서: 케이스 잠금 404 → version 409 → 담당자 403 `NOT_ASSIGNEE` → 현재 초안(다른 초안 409 `DRAFT_SUPERSEDED`, 초안 없음 409 `INVALID_CASE_TRANSITION` — 그건 화면용 `close`로) → 상태 409(DRAFTED, REJECTED+NOT_REPORTABLE만) → 사유(`COMMENT_REQUIRED`, 형식 400은 str DTO).
 - CLOSED·`close_reason`·`CLOSE` 이력(`reason_code`=종결 사유), 반려 코드 지움. `current_draft_id`는 남겨요(V006 — CLOSED는 둘 다 허용).
 
