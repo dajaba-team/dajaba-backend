@@ -280,7 +280,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:26.3.62.3
     profiles: [ops]
-    mem_limit: 1g
+    mem_limit: 2g
     depends_on:
       ops-env-check:
         condition: service_completed_successfully
