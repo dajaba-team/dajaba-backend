@@ -65,7 +65,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      SPRING_PROFILES_ACTIVE: local
+      SPRING_PROFILES_ACTIVE: local,json
       DB_HOST: db
       DB_PORT: "5432"
       DB_NAME: aml

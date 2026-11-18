@@ -140,7 +140,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | `health()` | `GET /v1/health` — 기동 시 1회, 실패해도 기동은 함. 응답 `status·db·llm·server_version·model_version·feature_version·retrieval_version` 을 info 한 줄로 찍고, `status`·`db`·`llm` 중 하나라도 `ok` 가 아니면(null 포함) warn 한 줄 더 (SCRUM-22) | `AiHealthCheck` |
 
 **공통 동작**
-- 헤더 `X-Internal-Key`(32자 이상 난수, 환경변수), `X-Request-Id`(UUID, `ai_call_logs.request_id`와 같은 값), `X-Budget-Ms`(그 시도를 보낼 때 남은 시간 한도, ms 정수 — 재시도면 줄어든 값. health 포함 모든 시도. AI가 읽어 재생성 판단에 쓰는 건 AI 쪽 작업) [SCRUM-128].
+- 헤더 `X-Internal-Key`(32자 이상 난수, 환경변수), `X-Request-Id`(HTTP 요청 안이면 그 요청의 MDC `request_id`, 배치처럼 MDC가 없으면 호출마다 새 UUID — 재시도해도 같은 값, `ai_call_logs.request_id`와 같은 값 [SCRUM-272]), `X-Budget-Ms`(그 시도를 보낼 때 남은 시간 한도, ms 정수 — 재시도면 줄어든 값. health 포함 모든 시도. AI가 읽어 재생성 판단에 쓰는 건 AI 쪽 작업) [SCRUM-128].
 - **시간 한도** — 초안·검증·요약처럼 **화면에서 부르는 요청은 전체 90초**(재시도 포함, 호출마다 90초가 아님). 점수 배치는 **500건 묶음 호출 하나마다** 같은 규칙이에요(배치 전체가 90초가 아님). MVP는 **동기**(`@Async`·큐·폴링은 고도화). [10/29]
 - 4xx는 재시도 없이 `AiClientException` → 502. 단 409 `GENERATION_IN_PROGRESS`는 409 `DRAFT_IN_PROGRESS`로. [10/29]
 - **재시도** — 최대 **1회**, 그리고 **위 시간 한도 안에 남은 시간이 있을 때만**. [10/29]
@@ -151,7 +151,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   - 대상 코드는 규약 v0.2 §6.2 그대로이고, "남은 시간 안에서만"과 "백엔드 타임아웃은 제외"를 10/29에 더했어요. 규약 문구도 다음 규약 변경 때 맞출게요. 〔레퍼런스 §8.5·SD 명세의 "5xx·타임아웃 1회"는 그 전 표기〕
 - AI 쪽 중첩 재시도 금지. [안건 21]
 - **AI 주소·연결 기억** — 백엔드는 AI 서버 이름 조회 결과를 **최대 5초**만 기억하고(조회 실패는 기억 안 함), AI 전용 연결 풀에서 **4초 넘게 놀던 연결은 다시 쓰지 않아요**(AI uvicorn 기본 keep-alive 5초보다 짧게). 그래서 AI 컨테이너를 다시 만들어도 백엔드는 재시작 없이 몇 초 안에 새 주소로 붙어요. 풀의 다른 값(최대 연결 500·연결 대기 45초 등)은 라이브러리 공용 기본값 그대로. 설정은 `AiClientConfig`. [SCRUM-255]
-- 모든 호출은 `ai_call_logs`에 **시도마다 한 줄**(재시도하면 같은 `request_id`로 `attempt` 1·2) — **메타데이터만**: 엔드포인트, `request_id`, 상태 코드(AI가 준 HTTP 상태, 타임아웃·연결 실패는 null — 단 2xx 본문을 받는 중 끊긴 경우는 실제 2xx, 아래 "2xx인데 응답 확인" 줄의 예외 [SCRUM-229]), 에러 코드, 소요 ms, 재시도 회차, 버전, `generation_id`, 대상(`target_type`·`target_id`). **요청·응답 본문은 실패해도 저장하지 않아요.** 실패 요청에 조사 메모·보고서 본문이 들어갈 수 있어서예요. 전문은 **AI가 그 요청을 저장했을 때만** AI 쪽 `ai.generations`에서 `request_id`로 찾을 수 있어요(연결 실패·인증 거부처럼 AI가 기록 전에 끝난 요청은 전문이 없어요). [규약 v0.2 §6.4, 10/29] 〔레퍼런스 §3.4의 "실패한 호출만 본문 저장"은 그 전 안〕
+- 모든 호출은 `ai_call_logs`에 **시도마다 한 줄**(재시도하면 같은 `request_id`로 `attempt` 1·2. 한 HTTP 요청이 AI를 두 번 부르면 두 호출도 같은 `request_id` — `endpoint`·`attempt`로 구분 [SCRUM-272]) — **메타데이터만**: 엔드포인트, `request_id`, 상태 코드(AI가 준 HTTP 상태, 타임아웃·연결 실패는 null — 단 2xx 본문을 받는 중 끊긴 경우는 실제 2xx, 아래 "2xx인데 응답 확인" 줄의 예외 [SCRUM-229]), 에러 코드, 소요 ms, 재시도 회차, 버전, `generation_id`, 대상(`target_type`·`target_id`). **요청·응답 본문은 실패해도 저장하지 않아요.** 실패 요청에 조사 메모·보고서 본문이 들어갈 수 있어서예요. 전문은 **AI가 그 요청을 저장했을 때만** AI 쪽 `ai.generations`에서 `request_id`로 찾을 수 있어요(연결 실패·인증 거부처럼 AI가 기록 전에 끝난 요청은 전문이 없어요). [규약 v0.2 §6.4, 10/29] 〔레퍼런스 §3.4의 "실패한 호출만 본문 저장"은 그 전 안〕
 - `ai_call_logs`의 대상·버전은 엔드포인트별로 고정이에요. 버전·`generation_id`는 **2xx 응답 본문이 있을 때만** 채워요(4xx·5xx·타임아웃·연결 실패는 null). [SCRUM-18]
 - **2xx인데 `AiClient`의 응답 확인(필수 칸·칸 타입·점수 묶음 `batch_run_id`·`alert_id` 대조)이 실패하면** 그 시도는 실패 행이에요 — `status_code`=실제 2xx, `error_code`=`AI_BAD_RESPONSE`, 버전·`generation_id`는 본문에서 읽은 값. 재시도 안 함(형식 오류는 재시도 대상 아님). 대상: 점수·초안·검증·요약(health 제외). [SCRUM-128]
   - 예외: 2xx 본문을 **받는 중 연결이 끊기면** 형식 오류가 아니라 연결 실패예요 — `error_code`=`AI_UNAVAILABLE`, `status_code`=실제 2xx, 버전·`generation_id`는 null(본문을 못 받음), 재시도 안 함 — 위 `ai_call_logs` 상태 코드 칸의 예외와 같은 경우. [SCRUM-229]
@@ -224,8 +224,29 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 ## 8. 로깅·요청 추적 [레퍼런스 §8.6, 코드 `RequestIdFilter`·`UserIdMdcFilter`]
 
 - `request_id`·`user_id`를 MDC에 넣어 모든 로그에 붙여요. AI 호출 땐 같은 값을 `X-Request-Id`로 보내서 AI 로그와 짝을 맞춰요.
+- **받는 `X-Request-Id`** — 1~64자이고 `[A-Za-z0-9._-]`만이면 그대로 써요(AI와 같은 64). 헤더가 없거나 빈 값이면 새 UUID를 만들어요. 그 밖(65자 이상·줄바꿈·공백·허용 밖 문자)은 새 UUID로 바꾸고 WARN `request_id_replaced received_len={길이}` 한 줄 — 원래 값은 안 찍어요. 응답 헤더·로그·AI 호출 헤더는 모두 바꾼 뒤 값 하나예요. [SCRUM-272]
 - 로그 금지 항목은 `01_code_rules.md` §6.
 - **403 거부 로그** — URL 역할·CSRF·도메인(`ForbiddenException` 하위)·MVC 안 `AccessDeniedException` 모두 WARN `access denied code={코드} method={메서드} uri={경로}` 한 줄이에요. 쿼리스트링·요청 본문·토큰·쿠키 값·예외 메시지는 안 찍어요. request_id가 붙고, 로그인 상태면 user_id도 붙어요. CSRF는 `UserIdMdcFilter`보다 앞에서 막혀서 핸들러가 `CurrentUser`로 user_id를 넣어요. 로그인 전이거나 세션이 끊긴 요청은 user_id가 없어요. [미결 30, SCRUM-74]
+
+### 로그 형식 [SCRUM-272, AI와 같은 표]
+
+compose로 띄우면(`SPRING_PROFILES_ACTIVE: local,json`) JSON 한 줄, IDE로 `local`만 띄우면 읽기 쉬운 텍스트 그대로예요. `prod`도 `json`과 같은 형식이에요.
+
+| 칸 | 뜻 | 예 |
+|---|---|---|
+| `ts` | UTC ISO-8601, 밀리초 | `2026-11-19T01:02:03.456Z` |
+| `level` | `INFO`·`WARN`·`ERROR` (AI는 `WARNING` — 언어 기본값 그대로) | |
+| `service` | `backend` 고정 (AI는 `ai`) | |
+| `logger` | 로거 이름 | `com.team.aml.shared.ai.WebClientAiClient` |
+| `msg` | 사건 이름(짧은 영문) 또는 `key=value` 한 줄 | `request_id_replaced received_len=80` |
+| `request_id` | `X-Request-Id` (위 규칙) | |
+| `user_id` | 로그인 뒤에만 | |
+| 선택 칸 | `target`(화면 번호 `CASE-`·`DRF-`·`ALT-`) · `error_code` · `latency_ms` · `*_count` | |
+
+- **남기지 않는 것** — 계좌번호(원본·가린 값 모두) · 금액 · STR 본문·요약 본문 · 메모 · 비밀번호 · 세션 ID · 내부 키 · 쿼리스트링·요청 본문. 테스트(`SensitiveLogDbTest`)가 상세 조회·초안 저장·수정·검증·AI 실패·DB 제약 위반 경로에서 확인해요.
+- **DB 오류는 클래스·SQLState·제약 이름만** — 500 처리기에 온 `DataAccessException` 계열(`DataIntegrityViolationException` 포함)은 메시지·스택 대신 ERROR `unhandled exception error_type={클래스} sql_state={SQLState} constraint={제약 이름}` 한 줄(없는 칸은 빼요). Postgres 메시지의 `Detail: Key (…)=(값)`에 계좌가 들어갈 수 있어서예요. 다른 예외는 지금처럼 스택, 응답은 그대로 `INTERNAL_ERROR`. [SCRUM-272]
+- **팀원은 자기 기능 로그만 이 형식에 맞춰요** — 새 칸이 필요하면 선택 칸 이름 규칙(`*_count`·`*_ms`)으로. MDC 키는 `request_id`·`user_id`·`target`만 JSON에 나가요.
+- Loki 조회(Grafana Explore): `{compose_service=~"app|ai"} | json | request_id="<값>"` — 한 요청의 백엔드·AI 줄이 같이 나와요.
 
 ## 9. 열람 기록 (`access_logs`) [레퍼런스 §3.4, 계정·권한 §1, 코드 `shared/audit`·`V004_3`, SCRUM-19]
 

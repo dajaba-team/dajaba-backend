@@ -8,9 +8,11 @@ import com.team.aml.shared.domain.ForbiddenException;
 import com.team.aml.shared.domain.NotFoundException;
 import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
+import org.postgresql.util.PSQLException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.MethodParameter;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -29,6 +31,9 @@ import org.springframework.web.method.annotation.HandlerMethodValidationExceptio
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import java.sql.SQLException;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -46,7 +51,7 @@ import java.util.Set;
  *  AccessDenied (403)              → 403 FORBIDDEN
  *  NoResourceFoundException        → 404 NOT_FOUND (없는 경로, details {}, 경고 한 줄 — SCRUM-157)
  *  HttpRequestMethodNotSupported   → 405 METHOD_NOT_ALLOWED (Allow 헤더, 모르면 없음, 경고 한 줄 — SCRUM-157)
- *  그 외                            → 500 INTERNAL_ERROR (진짜 처리 안 된 것만. 메시지 고정, 스택은 로그에만)
+ *  그 외                            → 500 INTERNAL_ERROR (진짜 처리 안 된 것만. 메시지 고정, 스택은 로그에만). DB 오류는 클래스·SQLState·제약 이름만 (SCRUM-272)
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -166,9 +171,39 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> unknown(Exception e) {
-        log.error("unhandled exception", e);
+        if (e instanceof DataAccessException dbError) {
+            log.error("{}", databaseErrorSummary(dbError));
+        } else {
+            log.error("unhandled exception", e);
+        }
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ErrorResponse.of("INTERNAL_ERROR", "알 수 없는 오류"));
+    }
+
+    private static String databaseErrorSummary(DataAccessException e) {
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        SQLException sqlException = null;
+        PSQLException pgException = null;
+        for (Throwable cause = e; cause != null && seen.add(cause); cause = cause.getCause()) {
+            if (sqlException == null && cause instanceof SQLException sql) {
+                sqlException = sql;
+            }
+            if (pgException == null && cause instanceof PSQLException pg) {
+                pgException = pg;
+            }
+        }
+        StringBuilder summary = new StringBuilder("unhandled exception error_type=")
+                .append(e.getClass().getSimpleName());
+        String sqlState = sqlException == null ? null : sqlException.getSQLState();
+        if (sqlState != null) {
+            summary.append(" sql_state=").append(sqlState);
+        }
+        String constraint = pgException == null || pgException.getServerErrorMessage() == null
+                ? null : pgException.getServerErrorMessage().getConstraint();
+        if (constraint != null) {
+            summary.append(" constraint=").append(constraint);
+        }
+        return summary.toString();
     }
 
     /** "items[0].transactionId" → "items[0].transaction_id". 조각("." 사이)마다 이름 부분만 바꾸고 "[...]" 는 그대로. */
