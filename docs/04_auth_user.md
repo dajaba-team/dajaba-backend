@@ -105,6 +105,7 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 | 23 | 계정 관리 | `/admin/users*` | — | — | ○ |
 | 24 | 접근 로그·AI 호출 로그 | `GET /admin/access-logs`, `/admin/ai-calls` | — | — | ○ |
 | 25 | swagger · health | `/swagger-ui.html`, `/actuator/health` | local에서만, 역할 무관 | | |
+| 26 | 지표 (Prometheus) | 관리 포트 8081 `/actuator/prometheus` (8080에는 없음 → 비로그인 401·로그인 403) | 사람은 못 씀 — Prometheus 컨테이너만(`app:8081`, 로그인 없음). 호스트·nginx에 8081을 열지 않아요 [03 §13, SCRUM-271] | | |
 
 - 5·8번 경로는 CASES 명세 v0.5, 9-1번은 계약서 A6(11/4 채영), 12·12-1·12-2·12-1a·12-3번 경로는 계약서 v0.2(11/4 채영), 경로 번호는 `draft_no`(`DRF-000123`, 계약서 2.2) — 10/30 미결 1은 '초안 기준'으로, 11/4에 이름이 `draft_no`로 정해졌어요.
 - 〔확인 필요: 7번 교체 본문 — 계정·권한 `{assignee_id}` vs CASES 명세 `{assignee: login_id, comment, version}`. 확정은 지윤님〕

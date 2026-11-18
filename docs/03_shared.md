@@ -318,3 +318,84 @@ Prometheus·Grafana·Loki·Alloy·Redis·RabbitMQ·MinIO·Elasticsearch·Langfus
 - **도구가 죽어도 그 기능만 멈춰요.** 붙일 때도 지표·추적 연결은 실패를 무시(fail-open)하고, app·ai `depends_on`에 도구를 넣지 않아요.
 - 로그·지표·추적에 계좌번호·금액·본문·프롬프트 전문을 넣지 않아요(NFR-COM-04, §8). Alloy는 표준출력을 그대로 옮겨요.
 - 자기 기능을 붙일 곳: 노션 「운영 도구 붙이기 — 팀원별 담당」 2절. 11/24에 고정해요.
+
+## 13. 지표 (Prometheus) [NFR-COM-04, 코드 `application.yml`·`ErrorMetrics`·`ops/prometheus`·`ops/grafana`, SCRUM-271]
+
+Prometheus가 15초마다 앱의 지표를 **가져가요**(pull). Prometheus가 꺼져 있어도 앱은 그대로 돌아요(fail-open, 따로 코드 없음).
+
+### 끝점 — 내부에서만
+
+| 포트 | 경로 | 누가 | 호스트에서 |
+|---|---|---|---|
+| **8081** (관리 포트) | `/actuator/prometheus`, `/actuator/health` | Prometheus(`app:8081`), 로그인 없이 | **안 열림** — compose `ports`에 8081을 넣지 않아요 |
+| 8080 | `/actuator/health` | 프론트 연결 확인 화면·누구나 | 열림 — 응답은 전과 같음(UP 200 `{"status":"UP"}`, 그 밖 503 `{"status":"DOWN"}` 등, `components`·`details` 없음) |
+| 8080 | `/actuator/prometheus` | — | **비로그인 401 `UNAUTHENTICATED`·로그인 403 `FORBIDDEN`** (8080에는 지표 끝점이 없고 `denyAll`에 걸림) |
+
+- 관리 포트를 나누면 actuator가 통째로 8081로 옮겨 가요. 8080 `/actuator/health`는 **관리 포트를 8081로 나누면서 프론트 연결 확인·docs/09·권한 표 25번을 지키려고 남긴 호환용** 컨트롤러(`MainPortHealthController`)예요 — `HealthEndpoint`의 상태만 돌려줘요. Boot의 health 그룹 `additional-path`는 경로가 한 단계(`/health`)만 돼서 못 썼어요.
+- **8081을 compose `ports`·nginx에 넣지 마세요.** 밖으로 여는 건 nginx 하나예요. `./gradlew bootRun`으로 호스트에서 띄우면 8081이 호스트에 열리니 공용 와이파이에서는 조심하세요.
+- env·beans 같은 다른 actuator 끝점은 열지 않아요(`exposure.include: health,info,prometheus` — `info`는 전부터 있었고 8081에서도 막혀 있어요).
+
+### 공통 지표 두 개 (진희)
+
+| 지표 | Prometheus 이름 | 태그 | 무엇을 봄 |
+|---|---|---|---|
+| HTTP 응답 시간 | `http_server_requests_seconds_{count,sum,bucket}` | `method`·`uri`(**템플릿**, 예 `/api/v1/cases/{caseNo}`)·`status`·`outcome`·`exception`·`error` | 요청 수, p50·p95·p99 (Grafana `histogram_quantile`) |
+| 에러 코드별 건수 | `aml_http_errors_total` | `code`·`status` **두 개만** | 어떤 에러가 몇 번 났나 |
+
+- 응답 시간 버킷은 **고정 10개**: 50ms·100ms·250ms·500ms·1s·2s·5s·10s·30s·90s (+`+Inf`). 기본 히스토그램(버킷 70여 개)은 끄고, Prometheus 메모리 상한(256m) 때문에 줄였어요. 90s는 AI 호출 경로를 보려고 넣었어요.
+- `uri`에 실제 경로는 안 들어가요: 매핑 없는 주소는 `uri="/**"`, 로그인처럼 컨트롤러 밖에서 끝나는 요청은 `uri="UNKNOWN"`, 보안에서 막힌 요청도 템플릿(`/api/v1/admin/alerts/{alertNo}`)이에요.
+- 에러 카운터는 **에러 응답을 쓰는 두 곳**에서 세요: `GlobalExceptionHandler`(컨트롤러 안 예외)와 `JsonAuthHandlers`(보안 필터의 401 `UNAUTHENTICATED`·`LOGIN_FAILED`, 403 `FORBIDDEN`·`CSRF_INVALID`, 로그인 400·500). 셀 때 예외가 나도 에러 응답은 그대로 나가요(fail-open). Tomcat이 직접 거절하는 요청(HTTP 형식 오류)은 안 세져요.
+- `code` 태그 값은 §2 표의 코드만이에요. 대문자·숫자·`_` 형식이 아니면 `OTHER`, AI가 준 코드(502)가 §2 표에 없으면 `AI_OTHER`로 세요 — AI가 새 코드를 보내도 태그 값이 늘지 않게요.
+
+### 이름·태그 규칙 (NFR-COM-04)
+
+- 이름: **`aml.<기능>.<무엇>`** (점으로, 소문자). Prometheus에서는 `aml_<기능>_<무엇>_total`(카운터)·`_seconds`(타이머)로 바뀌어요. 예 `aml.cases.transitions`, `aml.str.draft.generation`.
+- 태그 값은 **개수가 정해진 것만**: 코드·상태·결과·룰 ID·역할·배치 종류 같은 것.
+- **태그에 넣지 않아요**: 계좌번호·금액·본문·사유·`CASE-…`·`DRF-…`·`ALT-…` 같은 화면 번호·DB id·`login_id`·`user_id`·`request_id`·예외 메시지·실제 경로. 값이 계속 늘어나서 Prometheus 메모리가 터지고, 개인정보가 지표로 새요.
+- 태그는 지표 하나에 **3개 이하**, 값 조합은 **수십 개 이하**로요.
+
+### 각자 자기 지표 붙이는 법
+
+`MeterRegistry`를 생성자로 받아서 카운터·타이머를 만들어요. 의존성은 이미 들어 있어요(`micrometer-registry-prometheus`). 붙이는 곳은 `application` 유스케이스나 `infrastructure` 쪽이에요 — `domain`에는 넣지 않아요(`ArchitectureTest`).
+
+```java
+@Service
+class TransitionCase {
+    private final MeterRegistry meters;
+
+    TransitionCase(MeterRegistry meters /* , 다른 의존성 */) {
+        this.meters = meters;
+    }
+
+    void execute(CaseNo caseNo, CaseStatus to) {
+        CaseStatus from = /* ... */;
+        // 카운터 — 태그는 정해진 값(상태 이름)만. caseNo 는 넣지 않는다
+        meters.counter("aml.cases.transitions", "from", from.name(), "to", to.name()).increment();
+    }
+}
+
+// 타이머 — 걸린 시간. 결과(SUCCESS·FAILED)만 태그로
+Timer.Sample sample = Timer.start(meters);
+String result = "FAILED";
+try {
+    /* AI 호출 등 */
+    result = "SUCCESS";
+} finally {
+    sample.stop(meters.timer("aml.str.draft.generation", "result", result));
+}
+```
+
+| 허용 태그 예 | 금지 태그 예 |
+|---|---|
+| `status="ESCALATED"`, `result="SUCCESS"`, `rule="R01"`, `code="CASE_NOT_FOUND"`, `role="APPROVER"` | `case_no="CASE-2022-000057"`, `account="…"`, `amount="15000000"`, `login_id="kim"`, `request_id="…"`, `reason="고객 진술…"` |
+
+- 테스트에서 확인: `SimpleMeterRegistry`를 넣고 `registry.get("aml.cases.transitions").tag("to","ESCALATED").counter().count()`.
+- 붙인 뒤 `docker compose --profile ops up -d app prometheus grafana` → Prometheus(`localhost:9090`) 검색창에 `aml_cases_transitions_total`.
+
+### Grafana에서 보기
+
+- `ops/grafana/dashboards/`에 JSON을 넣으면 자동으로 등록돼요. 공통 대시보드 **「백엔드 공통」**(`backend-common.json`): 요청 수(초당)·p95 응답 시간·에러 코드별 건수.
+- 자기 대시보드는 같은 폴더에 `<기능>.json`으로 따로 만들어요(공통 파일은 고치지 않기).
+- 자주 쓰는 식:
+  - p95: `histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{job="app"}[5m])))`
+  - 에러 코드별: `sum by (code, status) (increase(aml_http_errors_total{job="app"}[5m]))`

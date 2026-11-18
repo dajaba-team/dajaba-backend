@@ -1,5 +1,7 @@
 package com.team.aml.shared.api;
 
+import com.team.aml.shared.metrics.ErrorMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.postgresql.util.PSQLException;
@@ -27,7 +29,7 @@ class UnhandledExceptionLogTest {
 
     private static final String ACCOUNT = "10_8000EBD30";
 
-    private final GlobalExceptionHandler handler = new GlobalExceptionHandler();
+    private final GlobalExceptionHandler handler = new GlobalExceptionHandler(new ErrorMetrics(new SimpleMeterRegistry()));
 
     // --- 정상 ---------------------------------------------------------------
 

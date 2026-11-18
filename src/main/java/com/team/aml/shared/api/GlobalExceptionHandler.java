@@ -6,6 +6,7 @@ import com.team.aml.shared.domain.DomainException;
 import com.team.aml.shared.domain.InvalidRequestException;
 import com.team.aml.shared.domain.ForbiddenException;
 import com.team.aml.shared.domain.NotFoundException;
+import com.team.aml.shared.metrics.ErrorMetrics;
 import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.postgresql.util.PSQLException;
@@ -52,6 +53,8 @@ import java.util.Set;
  *  NoResourceFoundException        → 404 NOT_FOUND (없는 경로, details {}, 경고 한 줄 — SCRUM-157)
  *  HttpRequestMethodNotSupported   → 405 METHOD_NOT_ALLOWED (Allow 헤더, 모르면 없음, 경고 한 줄 — SCRUM-157)
  *  그 외                            → 500 INTERNAL_ERROR (진짜 처리 안 된 것만. 메시지 고정, 스택은 로그에만). DB 오류는 클래스·SQLState·제약 이름만 (SCRUM-272)
+ *
+ * 응답마다 aml.http.errors{code, status} 를 1 센다(counted, SCRUM-271). 세다 실패해도 응답은 그대로(ErrorMetrics 가 삼킴).
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -61,6 +64,21 @@ public class GlobalExceptionHandler {
     /** application.yml property-naming-strategy: SNAKE_CASE 와 같은 규칙 — 요청·응답 직렬화와 이름이 어긋나지 않게. */
     private static final PropertyNamingStrategies.NamingBase SNAKE_CASE =
             (PropertyNamingStrategies.NamingBase) PropertyNamingStrategies.SNAKE_CASE;
+
+    private final ErrorMetrics metrics;
+
+    public GlobalExceptionHandler(ErrorMetrics metrics) {
+        this.metrics = metrics;
+    }
+
+    /** 에러 응답 하나 = 지표 1. 본문이 없을 일은 없지만 있으면 세지 않는다. */
+    private ResponseEntity<ErrorResponse> counted(ResponseEntity<ErrorResponse> res) {
+        ErrorResponse body = res.getBody();
+        if (body != null) {
+            metrics.record(body.error().code(), res.getStatusCode().value());
+        }
+        return res;
+    }
 
     /**
      * 본문·@ModelAttribute 쿼리의 @Valid 실패. details 키는 요청 JSON 이름(snake_case, 규약 0절) — 필드 경로를 조각마다
@@ -73,8 +91,8 @@ public class GlobalExceptionHandler {
         for (FieldError fe : e.getBindingResult().getFieldErrors()) {
             fields.putIfAbsent(toJsonPath(fe.getField()), fe.getDefaultMessage());
         }
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of("INVALID_REQUEST", "요청 값이 올바르지 않습니다", fields));
+        return counted(ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ErrorResponse.of("INVALID_REQUEST", "요청 값이 올바르지 않습니다", fields)));
     }
 
     /**
@@ -92,69 +110,69 @@ public class GlobalExceptionHandler {
                                 .map(r -> requestName(r.getMethodParameter())).orElse(null)
                 : null;
         Map<String, Object> details = parameter == null ? Map.of() : Map.of("parameter", parameter);
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of("INVALID_REQUEST", "요청 파라미터가 올바르지 않습니다", details));
+        return counted(ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ErrorResponse.of("INVALID_REQUEST", "요청 파라미터가 올바르지 않습니다", details)));
     }
 
     @ExceptionHandler(InvalidRequestException.class)
     public ResponseEntity<ErrorResponse> invalidRequest(InvalidRequestException e) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of("INVALID_REQUEST", "요청 값이 올바르지 않습니다", e.details()));
+        return counted(ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ErrorResponse.of("INVALID_REQUEST", "요청 값이 올바르지 않습니다", e.details())));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ErrorResponse> unreadable(HttpMessageNotReadableException e) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ErrorResponse.of("INVALID_REQUEST", "요청 본문을 읽을 수 없습니다"));
+        return counted(ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ErrorResponse.of("INVALID_REQUEST", "요청 본문을 읽을 수 없습니다")));
     }
 
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ErrorResponse> notFound(NotFoundException e) {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ErrorResponse.of(e.code(), e.getMessage(), e.details()));
+        return counted(ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of(e.code(), e.getMessage(), e.details())));
     }
 
     @ExceptionHandler(ForbiddenException.class)
     public ResponseEntity<ErrorResponse> domainForbidden(ForbiddenException e, HttpServletRequest req) {
         warnDenied(e.code(), req);   // 메시지는 찍지 않는다 — 번호·이름이 들어갈 수 있다
-        return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(ErrorResponse.of(e.code(), e.getMessage(), e.details()));
+        return counted(ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of(e.code(), e.getMessage(), e.details())));
     }
 
     @ExceptionHandler(DomainException.class)
     public ResponseEntity<ErrorResponse> domain(DomainException e) {
         log.warn("domain rule violated: {} - {}", e.code(), e.getMessage());
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(ErrorResponse.of(e.code(), e.getMessage(), e.details()));
+        return counted(ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(e.code(), e.getMessage(), e.details())));
     }
 
     @ExceptionHandler({OptimisticLockException.class, ObjectOptimisticLockingFailureException.class})
     public ResponseEntity<ErrorResponse> concurrent(Exception e) {
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(ErrorResponse.of("CONCURRENT_UPDATE", "다른 사용자가 먼저 수정했습니다. 새로 고침하세요"));
+        return counted(ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("CONCURRENT_UPDATE", "다른 사용자가 먼저 수정했습니다. 새로 고침하세요")));
     }
 
     @ExceptionHandler(AiClientException.class)
     public ResponseEntity<ErrorResponse> ai(AiClientException e) {
         log.warn("ai call failed: {} ({})", e.code(), e.httpStatus());   // D5: AI 응답 message 는 로그에 남기지 않는다
-        return ResponseEntity.status(e.httpStatus())
-                .body(ErrorResponse.of(e.code(), e.getMessage(), e.details()));
+        return counted(ResponseEntity.status(e.httpStatus())
+                .body(ErrorResponse.of(e.code(), e.getMessage(), e.details())));
     }
 
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ErrorResponse> forbidden(AccessDeniedException e, HttpServletRequest req) {
         String code = "FORBIDDEN";
         warnDenied(code, req);
-        return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(ErrorResponse.of(code, "권한이 없습니다"));
+        return counted(ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of(code, "권한이 없습니다")));
     }
 
     /** 없는 경로 — Spring 6.1 은 매핑이 없으면 정적 리소스로 찾다 이 예외를 던진다. 경로는 응답에 다시 넣지 않는다. */
     @ExceptionHandler(NoResourceFoundException.class)
     public ResponseEntity<ErrorResponse> noResource(NoResourceFoundException e, HttpServletRequest req) {
         log.warn("not found method={} uri={}", req.getMethod(), req.getRequestURI());   // 쿼리스트링은 찍지 않는다
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ErrorResponse.of("NOT_FOUND", "요청한 주소가 없습니다"));
+        return counted(ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of("NOT_FOUND", "요청한 주소가 없습니다")));
     }
 
     /** 경로는 있는데 메서드가 틀림. 허용 메서드를 Spring 이 알면 Allow 헤더로, 모르면(null) 헤더 없이. */
@@ -166,7 +184,7 @@ public class GlobalExceptionHandler {
         if (allowed != null) {
             res.allow(allowed.toArray(HttpMethod[]::new));
         }
-        return res.body(ErrorResponse.of("METHOD_NOT_ALLOWED", "지원하지 않는 요청 방식입니다"));
+        return counted(res.body(ErrorResponse.of("METHOD_NOT_ALLOWED", "지원하지 않는 요청 방식입니다")));
     }
 
     @ExceptionHandler(Exception.class)
@@ -176,8 +194,8 @@ public class GlobalExceptionHandler {
         } else {
             log.error("unhandled exception", e);
         }
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ErrorResponse.of("INTERNAL_ERROR", "알 수 없는 오류"));
+        return counted(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ErrorResponse.of("INTERNAL_ERROR", "알 수 없는 오류")));
     }
 
     private static String databaseErrorSummary(DataAccessException e) {
