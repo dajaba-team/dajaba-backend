@@ -297,3 +297,60 @@ Prometheus·Grafana·Loki·Alloy·Redis·RabbitMQ·MinIO·Elasticsearch·Langfus
 - **도구가 죽어도 그 기능만 멈춰요.** 붙일 때도 지표·추적 연결은 실패를 무시(fail-open)하고, app·ai `depends_on`에 도구를 넣지 않아요.
 - 로그·지표·추적에 계좌번호·금액·본문·프롬프트 전문을 넣지 않아요(NFR-COM-04, §8). Alloy는 표준출력을 그대로 옮겨요.
 - 자기 기능을 붙일 곳: 노션 「운영 도구 붙이기 — 팀원별 담당」 2절. 11/24에 고정해요.
+
+## 13. RabbitMQ 작업 큐 (`shared/messaging`) [SCRUM-276, 운영 도구 3절 11/17 결정 3, 코드 `shared/messaging`·`application.yml`]
+
+배치 잇기(준혁)·케이스 생성(지윤)·확정본 PDF(채영)가 **같이 쓰는 공통 설정**이에요. 브로커는 §12 ops 프로필의 `rabbitmq`(vhost `aml`). 〔ACK·재시도·DLQ 기본값은 진희 공통 정책 확정 전 초안 — 바꾸면 이 절과 `application.yml`을 같이 고쳐요〕
+
+**지킬 것**
+
+- **메시지에는 작업 ID만** — `{"batch_run_id": 123}`·`{"draft_id": 45}`. 날짜·대상·상태는 받는 쪽이 DB에서 읽어요. 원본은 PostgreSQL 하나.
+- 메시지·로그에 계좌번호·금액·본문·프롬프트 전문 없음(NFR-COM-04). `RabbitJobPublisher`도 큐 이름·예외 종류만 남겨요.
+- **기본은 꺼짐** — `AML_RABBITMQ_ENABLED=false`면 앱이 브로커에 연결하지 않아요(리스너 빈도 안 생김). 켜도 브로커가 죽으면 `JobPublisher.publish()`가 `false` → **부르는 쪽이 기존 동기 경로로** 돌려요(fail-open). app `depends_on`에 rabbitmq를 넣지 않아요. 앱 health에도 RabbitMQ를 넣지 않아요(`management.health.rabbit.enabled: false`).
+- **받는 쪽은 같은 메시지가 두 번 와도 안전해야 해요.** 확인(confirm)이 늦으면 보낸 쪽은 `false`(동기 경로로 실행)인데 브로커는 실제로 받았을 수 있고, 처리 중 앱이 죽으면 브로커가 다시 보내요. 예: 케이스 생성은 행이 `RUNNING`이 아니면 건너뛰고, `alert_id` UNIQUE라 다시 돌아도 중복 케이스가 없어요.
+
+**구조**
+
+| 이름 | 무엇 |
+|---|---|
+| `aml.jobs` (direct 교환기) | 작업 메시지를 받는 곳. 라우팅 키 = 큐 이름 |
+| `aml.jobs.dlx` (direct 교환기) | 재시도를 다 쓴 메시지 → `<큐>.dlq` |
+| `JobQueues` | 큐 이름 한곳. `ALL`에 있는 큐마다 앱이 큐·`<큐>.dlq`·바인딩을 **처음 연결할 때 선언**해요(있으면 그대로) |
+| `JobPublisher` | 보내기. 브로커 확인까지 기다려 `true`/`false`, 예외 안 던짐 |
+| `BatchRunMessage` | `{"batch_run_id": …}` — 배치 단계가 같이 씀. 다른 ID는 자기 기능에 같은 모양 record |
+
+| 큐 | 메시지 | 보내는 곳 → 받는 곳 | 담당 |
+|---|---|---|---|
+| `case.open-cases` | `BatchRunMessage`(OPEN_CASES `batch_run_id`, `RUNNING` 커밋 뒤) | `RequestOpenCases` → `OpenCasesMessageListener` → `RunQueuedOpenCases` | 지윤 |
+| `batch.*` | 〔협의〕 | 배치 단계 잇기 | 준혁 |
+| `str.pdf.*` | 〔협의〕 `draft_id` | 확정본 PDF 생성 | 채영 |
+
+**ACK·재시도·DLQ 기본값** (`spring.rabbitmq.listener.simple`)
+
+- 처리 메서드가 **정상 반환 = ACK**. 예외면 같은 소비자 안에서 **1s → 2s 간격, 총 3번** 시도 → 그래도 실패면 재큐 없이 거절 → `<큐>.dlq`.
+- 메시지 형식이 틀리면(JSON 변환 실패) 재시도 없이 바로 DLQ.
+- `prefetch 1`·소비자 1개 — 배치처럼 무거운 작업을 한 번에 하나씩. 바꿀 큐는 `@RabbitListener(concurrency = …)`로 따로.
+- 그러니 **다시 해도 소용없는 경우(없는 id·이미 끝난 작업)는 예외 대신 로그 남기고 정상 반환**해서 ACK로 버려요. 예외는 "잠깐 뒤 다시 하면 될 수 있는" 실패(DB 연결 등)에만.
+- DLQ에 쌓인 메시지는 자동으로 다시 돌지 않아요. 관리 UI에서 보고, 원인을 고친 뒤 API로 다시 요청해요.
+
+**자기 큐 붙이는 법** (케이스 생성 `case.open-cases`가 예시)
+
+1. `JobQueues`에 상수 + `ALL`에 한 줄. 이름 규칙 `batch.*`·`case.*`·`str.pdf.*` (`MessagingConfigTest`가 확인).
+2. 보내는 쪽(application): 작업 행(`batch_runs` 등)을 **먼저 커밋**하고 ID만 보내요. `false`면 기존 동기 경로로.
+   ```java
+   if (!publisher.publish(JobQueues.CASE_OPEN_CASES, new BatchRunMessage(batchRunId))) {
+       executor.execute(() -> openCases.run(batchRunId, batchDate));   // 꺼짐·브로커 죽음 → 지금처럼
+   }
+   ```
+3. 받는 쪽: **자기 기능 `api` 폴더**에 리스너(바깥에서 들어오는 입구라 컨트롤러와 같은 계층 — `ArchitectureTest` 계층 규칙). `@ConditionalOnProperty(name = "aml.messaging.enabled", havingValue = "true")`를 꼭 붙여요. 리스너는 ID만 넘기고, 상태 확인·실행은 application 유스케이스에서.
+   ```java
+   @Component
+   @ConditionalOnProperty(name = "aml.messaging.enabled", havingValue = "true")
+   public class OpenCasesMessageListener {
+       @RabbitListener(queues = JobQueues.CASE_OPEN_CASES)
+       public void onMessage(BatchRunMessage message) { runQueued.execute(message.batchRunId()); }
+   }
+   ```
+4. 테스트: 브로커 없는 단위 테스트(`RunQueuedOpenCasesTest`처럼 건너뛰기 조건) + 진짜 브로커 통합 테스트(`OpenCasesQueueDbTest` — Testcontainers `rabbitmq:4.4.0-management-alpine`, vhost `aml`, `aml.messaging.enabled=true`). `test` 프로필은 기본 꺼짐이라 다른 테스트에는 영향이 없어요.
+
+**띄우기·확인** — README "RabbitMQ 켜고 띄우기". IDE에서 띄운 앱은 `compose.override.yml`로 `127.0.0.1:5672`를 열고 `.env`에 `AML_RABBITMQ_ENABLED=true`(호스트 기본 `localhost`).

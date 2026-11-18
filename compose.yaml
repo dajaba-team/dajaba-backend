@@ -80,6 +80,11 @@ services:
       AML_CASE_POLICY_VERSION: ${AML_CASE_POLICY_VERSION:-}            # 비어 있으면 케이스 생성 배치가 POLICY_NOT_CONFIGURED
       AML_CASE_POLICY_LOW_TO_MEDIUM: ${AML_CASE_POLICY_LOW_TO_MEDIUM:-}
       AML_CASE_POLICY_MEDIUM_TO_HIGH: ${AML_CASE_POLICY_MEDIUM_TO_HIGH:-}
+      # RabbitMQ (SCRUM-276). 기본 꺼짐 — 켜려면 .env 에 AML_RABBITMQ_ENABLED=true + ops 프로필. depends_on 에 넣지 않음(fail-open)
+      AML_RABBITMQ_ENABLED: ${AML_RABBITMQ_ENABLED:-false}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-}
     ports:
       - "8080:8080"
     volumes:

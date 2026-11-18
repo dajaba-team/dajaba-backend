@@ -2,6 +2,9 @@ package com.team.aml.cases.application;
 
 import com.team.aml.shared.batch.BatchStatus;
 import com.team.aml.shared.batch.BatchType;
+import com.team.aml.shared.messaging.BatchRunMessage;
+import com.team.aml.shared.messaging.JobPublisher;
+import com.team.aml.shared.messaging.JobQueues;
 import com.team.aml.shared.security.CurrentUser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,6 +19,9 @@ import java.time.LocalDate;
  * RUNNING 을 커밋한 뒤 경보 처리는 뒤에서 돌리고 바로 돌아온다. 결과는 GET /admin/batches/{batch_run_id}(SCRUM-70).
  * 적재 요청(RequestIbmDatasetLoad, #56)과 같은 모양 — 비동기 스레드엔 세션이 없어 요청자 id 는 여기서 꺼내 넘긴다.
  * 케이스·이력의 작업자는 SYSTEM(OpenCaseForAlert), batch_runs.triggered_by 는 요청한 ADMIN.
+ *
+ * <p>RabbitMQ 를 켜면(SCRUM-276) {@code case.open-cases} 큐에 batch_run_id 만 보내고 RunQueuedOpenCases 가 받아서 돌린다.
+ * 꺼져 있거나 브로커가 받지 않으면(JobPublisher false) 지금처럼 이 앱의 작업 실행기로 돌린다(fail-open).
  */
 @Service
 public class RequestOpenCases {
@@ -31,14 +37,16 @@ public class RequestOpenCases {
     private final OpenCasesRecorder recorder;
     private final CurrentUser currentUser;
     private final TaskExecutor executor;
+    private final JobPublisher publisher;
 
     /** Spring Boot 기본 작업 실행기 — 적재와 같이 쓴다. */
     public RequestOpenCases(OpenCasesFromAlerts openCases, OpenCasesRecorder recorder, CurrentUser currentUser,
-                            @Qualifier("applicationTaskExecutor") TaskExecutor executor) {
+                            @Qualifier("applicationTaskExecutor") TaskExecutor executor, JobPublisher publisher) {
         this.openCases = openCases;
         this.recorder = recorder;
         this.currentUser = currentUser;
         this.executor = executor;
+        this.publisher = publisher;
     }
 
     /**
@@ -47,6 +55,10 @@ public class RequestOpenCases {
      */
     public Accepted execute(LocalDate batchDate) {
         long batchRunId = openCases.start(batchDate, currentUser.require().userId());
+        if (publisher.publish(JobQueues.CASE_OPEN_CASES, new BatchRunMessage(batchRunId))) {
+            log.info("케이스 생성 큐에 넣음 batch_run_id={}", batchRunId);
+            return new Accepted(batchRunId, BatchType.OPEN_CASES, batchDate, BatchStatus.RUNNING);
+        }
         try {
             executor.execute(() -> openCases.run(batchRunId, batchDate));
         } catch (RuntimeException e) {
