@@ -1,19 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- local: 읽기 쉬운 한 줄. prod: JSON 한 줄(logstash encoder). request_id·user_id 는 MDC 에서 자동으로 붙는다 (레퍼런스 8.6) -->
+<!-- local·test만: 텍스트 한 줄. json·prod: JSON 한 줄(service=backend), MDC는 request_id·user_id·target만 포함 (SCRUM-272). -->
 <configuration>
-    <springProfile name="local,test">
+    <springProfile name="(local | test) &amp; !(json | prod)">
         <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
             <encoder>
                 <pattern>%d{HH:mm:ss.SSS} %-5level [%X{request_id:-}] [%X{user_id:-}] %logger{30} - %msg%n</pattern>
             </encoder>
         </appender>
     </springProfile>
-    <springProfile name="prod">
+    <springProfile name="json | prod">
         <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
             <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <fieldNames>
+                    <timestamp>ts</timestamp>
+                    <logger>logger</logger>
+                    <message>msg</message>
+                    <levelValue>[ignore]</levelValue>
+                    <thread>[ignore]</thread>
+                    <version>[ignore]</version>
+                </fieldNames>
+                <timeZone>UTC</timeZone>
+                <timestampPattern>yyyy-MM-dd'T'HH:mm:ss.SSS'Z'</timestampPattern>
+                <customFields>{"service":"backend"}</customFields>
                 <includeMdcKeyName>request_id</includeMdcKeyName>
                 <includeMdcKeyName>user_id</includeMdcKeyName>
-                <includeMdcKeyName>case_no</includeMdcKeyName>
+                <includeMdcKeyName>target</includeMdcKeyName>
             </encoder>
         </appender>
     </springProfile>
