@@ -9,7 +9,9 @@ import org.springframework.amqp.core.DirectExchange;
 import org.springframework.amqp.core.ExchangeBuilder;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
+import org.springframework.amqp.rabbit.config.ContainerCustomizer;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -57,6 +59,15 @@ public class RabbitMessagingConfig {
             all.addAll(List.of(queue, dlq, bind, bindDlq));
         }
         return new Declarables(all);
+    }
+
+    /**
+     * 계정이 틀려도(인증 실패) 앱 기동을 막지 않는다 — 기본값은 리스너가 치명 오류로 보고 컨텍스트가 안 뜬다(fail-open 위반).
+     * 리스너는 뒤에서 계속 다시 붙어 보고, 보내기는 JobPublisher false → 동기 경로.
+     */
+    @Bean
+    ContainerCustomizer<SimpleMessageListenerContainer> jobListenerContainerCustomizer() {
+        return container -> container.setPossibleAuthenticationFailureFatal(false);
     }
 
     @Bean

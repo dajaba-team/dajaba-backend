@@ -37,7 +37,6 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:postgresql")
-    testImplementation("org.testcontainers:rabbitmq")                    // 케이스 생성 큐 통합 테스트 (SCRUM-276)
     testImplementation("com.tngtech.archunit:archunit-junit5:1.3.0")
     testImplementation("com.squareup.okhttp3:mockwebserver")   // AiClient 단위 테스트 (SCRUM-17 D4)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

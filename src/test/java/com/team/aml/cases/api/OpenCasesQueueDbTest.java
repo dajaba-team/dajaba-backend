@@ -17,7 +17,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.containers.RabbitMQContainer;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
@@ -59,15 +60,18 @@ class OpenCasesQueueDbTest {
                     "/docker-entrypoint-initdb.d/01_roles.sh");
 
     @Container
-    static RabbitMQContainer rabbit = new RabbitMQContainer("rabbitmq:4.4.0-management-alpine")
+    // compose 와 같은 환경변수로 띄운다 (RabbitMQContainer 는 계정을 guest 로 덮어써서 일반 컨테이너로)
+    static GenericContainer<?> rabbit = new GenericContainer<>("rabbitmq:4.4.0-management-alpine")
+            .withExposedPorts(5672)
             .withEnv("RABBITMQ_DEFAULT_USER", "aml")
             .withEnv("RABBITMQ_DEFAULT_PASS", "aml-test")
-            .withEnv("RABBITMQ_DEFAULT_VHOST", "aml");
+            .withEnv("RABBITMQ_DEFAULT_VHOST", "aml")
+            .waitingFor(Wait.forLogMessage(".*Server startup complete.*", 1).withStartupTimeout(Duration.ofMinutes(2)));
 
     @DynamicPropertySource
     static void rabbitProperties(DynamicPropertyRegistry r) {
         r.add("spring.rabbitmq.host", rabbit::getHost);
-        r.add("spring.rabbitmq.port", rabbit::getAmqpPort);
+        r.add("spring.rabbitmq.port", () -> rabbit.getMappedPort(5672));
         r.add("spring.rabbitmq.username", () -> "aml");
         r.add("spring.rabbitmq.password", () -> "aml-test");
     }

@@ -306,7 +306,7 @@ Prometheus·Grafana·Loki·Alloy·Redis·RabbitMQ·MinIO·Elasticsearch·Langfus
 
 - **메시지에는 작업 ID만** — `{"batch_run_id": 123}`·`{"draft_id": 45}`. 날짜·대상·상태는 받는 쪽이 DB에서 읽어요. 원본은 PostgreSQL 하나.
 - 메시지·로그에 계좌번호·금액·본문·프롬프트 전문 없음(NFR-COM-04). `RabbitJobPublisher`도 큐 이름·예외 종류만 남겨요.
-- **기본은 꺼짐** — `AML_RABBITMQ_ENABLED=false`면 앱이 브로커에 연결하지 않아요(리스너 빈도 안 생김). 켜도 브로커가 죽으면 `JobPublisher.publish()`가 `false` → **부르는 쪽이 기존 동기 경로로** 돌려요(fail-open). app `depends_on`에 rabbitmq를 넣지 않아요. 앱 health에도 RabbitMQ를 넣지 않아요(`management.health.rabbit.enabled: false`).
+- **기본은 꺼짐** — `AML_RABBITMQ_ENABLED=false`면 앱이 브로커에 연결하지 않아요(리스너 빈도 안 생김). 켜도 브로커가 죽으면 `JobPublisher.publish()`가 `false` → **부르는 쪽이 기존 동기 경로로** 돌려요(fail-open). app `depends_on`에 rabbitmq를 넣지 않아요. 앱 health에도 RabbitMQ를 넣지 않아요(`management.health.rabbit.enabled: false`). 계정이 틀려도 앱 기동은 막지 않아요(리스너 인증 실패를 치명 오류로 안 봄, `RabbitAuthFailOpenDbTest`).
 - **받는 쪽은 같은 메시지가 두 번 와도 안전해야 해요.** 확인(confirm)이 늦으면 보낸 쪽은 `false`(동기 경로로 실행)인데 브로커는 실제로 받았을 수 있고, 처리 중 앱이 죽으면 브로커가 다시 보내요. 예: 케이스 생성은 행이 `RUNNING`이 아니면 건너뛰고, `alert_id` UNIQUE라 다시 돌아도 중복 케이스가 없어요.
 
 **구조**
@@ -351,6 +351,6 @@ Prometheus·Grafana·Loki·Alloy·Redis·RabbitMQ·MinIO·Elasticsearch·Langfus
        public void onMessage(BatchRunMessage message) { runQueued.execute(message.batchRunId()); }
    }
    ```
-4. 테스트: 브로커 없는 단위 테스트(`RunQueuedOpenCasesTest`처럼 건너뛰기 조건) + 진짜 브로커 통합 테스트(`OpenCasesQueueDbTest` — Testcontainers `rabbitmq:4.4.0-management-alpine`, vhost `aml`, `aml.messaging.enabled=true`). `test` 프로필은 기본 꺼짐이라 다른 테스트에는 영향이 없어요.
+4. 테스트: 브로커 없는 단위 테스트(`RunQueuedOpenCasesTest`처럼 건너뛰기 조건) + 진짜 브로커 통합 테스트(`OpenCasesQueueDbTest` — compose와 같은 `rabbitmq:4.4.0-management-alpine`를 `GenericContainer`로, vhost `aml`, `aml.messaging.enabled=true`). `RabbitMQContainer`는 계정을 guest로 덮어써서 안 써요. `test` 프로필은 기본 꺼짐이라 다른 테스트에는 영향이 없어요.
 
 **띄우기·확인** — README "RabbitMQ 켜고 띄우기". IDE에서 띄운 앱은 `compose.override.yml`로 `127.0.0.1:5672`를 열고 `.env`에 `AML_RABBITMQ_ENABLED=true`(호스트 기본 `localhost`).
