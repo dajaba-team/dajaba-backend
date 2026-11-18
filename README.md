@@ -86,7 +86,7 @@ docker compose --profile ops down     # 도구까지 내리기 (볼륨은 남음
 
 | 도구 | 무엇 | 첫 사용처 · 붙이는 사람 | 메모리 상한 |
 |---|---|---|---|
-| prometheus | 지표 수집. 대상은 `app:8080/actuator/prometheus`·`ai:8000/metrics`(끝점이 생기기 전에는 DOWN) | 백엔드·AI 공통 지표 — 진희, 기능 지표 — 각자 | 256m |
+| prometheus | 지표 수집. 대상은 `app:8081/actuator/prometheus`(관리 포트, 호스트엔 안 열림 — `docs/03_shared.md` §13)·`ai:8000/metrics`(AI 끝점이 생기기 전에는 DOWN) | 백엔드·AI 공통 지표 — 진희, 기능 지표 — 각자 | 256m |
 | grafana | 지표·로그 화면. Prometheus·Loki 데이터 소스 자동 등록, 익명 접근 끔 | 대시보드 — 각자 | 384m |
 | loki · alloy | 컨테이너 표준출력 로그 모음(`dajaba_default` 네트워크 컨테이너만). Alloy는 Docker 소켓을 **읽기 전용**으로 붙여요 — 컨테이너 목록·로그를 읽는 공식 방법이 소켓뿐이라서, 그래서 ops 프로필에만 둬요 | 로그 형식 — 각자 | 256m · 256m |
 | redis | **db 0 = 로그인 세션, db 1 = Langfuse**. Langfuse 필수인 `noeviction`이 db 0에도 걸려서, 메모리가 차면 지우는 대신 **세션 쓰기까지 실패**(로그인 안 됨)해요. 그래서 컨테이너 상한 256m 안에서 `maxmemory 200mb`로 두고(강제 종료 대신 쓰기 거부), Grafana에서 Redis 메모리를 봐요 | 세션 — 진희·지윤 | 256m |
