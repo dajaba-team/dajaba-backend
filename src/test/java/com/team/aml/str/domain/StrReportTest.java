@@ -229,13 +229,27 @@ class StrReportTest {
 
     // 10-2
     @Test
-    void 경계_나노초는_DB처럼_마이크로초로_잘라_저장값과_late가_같다() {
+    void 경계_나노초는_DB처럼_마이크로초로_반올림해_저장값과_late가_같다() {   // pgjdbc·PostgreSQL 은 자르지 않고 반올림
+        StrReport under = approvedReport();
+        StrReport over = approvedReport();
+
+        under.markReported(3L, DUE_AT.plusNanos(999_999_499));  // 23:59:59.999999499 → .999999 (내림)
+        over.markReported(3L, DUE_AT.plusNanos(999_999_500));   // 23:59:59.9999995 → 다음 날 00:00:00.000000 (올림)
+
+        assertThat(under.getReportedAt()).isEqualTo(Instant.parse("2026-11-20T14:59:59.999999Z"));
+        assertThat(under.getLate()).isFalse();
+        assertThat(over.getReportedAt()).isEqualTo(Instant.parse("2026-11-20T15:00:00Z"));   // DB 에 이 값으로 남는다
+        assertThat(over.getLate()).isTrue();                                                 // 저장값 기준으로 늦음
+    }
+
+    // 10-3
+    @Test
+    void 경계_마이크로초_단위_값은_그대로() {
         StrReport r = approvedReport();
 
-        r.markReported(3L, DUE_AT.plusNanos(999_999_999));      // 23:59:59.999999999 → .999999
+        r.markReported(3L, Instant.parse("2026-11-18T02:00:00.123456Z"));
 
-        assertThat(r.getReportedAt()).isEqualTo(Instant.parse("2026-11-20T14:59:59.999999Z"));
-        assertThat(r.getLate()).isFalse();
+        assertThat(r.getReportedAt()).isEqualTo(Instant.parse("2026-11-18T02:00:00.123456Z"));
     }
 
     // 11
