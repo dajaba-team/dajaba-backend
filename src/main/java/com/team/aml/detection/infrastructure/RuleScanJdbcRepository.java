@@ -1,22 +1,29 @@
 package com.team.aml.detection.infrastructure;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.detection.domain.ActiveRule;
 import com.team.aml.detection.domain.DataRange;
 import com.team.aml.detection.domain.FanEvidence;
 import com.team.aml.detection.domain.FanInRule;
 import com.team.aml.detection.domain.FanMinute;
 import com.team.aml.detection.domain.FanOutRule;
+import com.team.aml.detection.domain.FxRelayEvidence;
+import com.team.aml.detection.domain.FxRelayMinute;
+import com.team.aml.detection.domain.FxRelayRule;
 import com.team.aml.detection.domain.GatherScatterMinute;
 import com.team.aml.detection.domain.GatherScatterRule;
 import com.team.aml.detection.domain.NewAlert;
+import com.team.aml.detection.domain.RelayPair;
 import com.team.aml.detection.domain.RuleScanRepository;
 import com.team.aml.shared.domain.DisplayNumber;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.sql.Array;
 import java.sql.SQLException;
 import java.time.LocalDate;
@@ -138,6 +145,71 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
             from minutes m
             order by m.account_key, m.e""";
 
+    /** 환율표 jsonb → (currency, rate). 표에 없는 통화는 join 에서 빠져 평가하지 않는다. */
+    private static final String RATES =
+            "rates as (select key as currency, value::numeric as rate from jsonb_each_text(?::jsonb))";
+
+    /** R03 쌍 조건 — b 금액 × rate[a] 가 a 금액 × rate[b] × (1 ± tolerance) 안(양 끝 포함). 나눗셈 없이 곱셈으로. */
+    private static final String RELAY_COND = """
+            a.amount_received > 0
+                  and (not ? or a.currency_received <> b.currency_paid)
+                  and b.amount_paid * ra.rate between (1 - ?) * a.amount_received * rb.rate
+                                                  and (1 + ?) * a.amount_received * rb.rate""";
+
+    /*
+     * R03 ① 그날 출금 b 마다 그 계좌가 창 [b분+1분-H, b분) 에 받은 거래 a 중 쌍이 되는 게 하나라도 있는지(EXISTS) → 쌍을 완성하는 (계좌, 분 E).
+     *    쌍 전부는 여기서 만들지 않는다 — 입금·출금이 많은 계좌에서 조합이 불어나지 않게. 쌍 전부는 경보를 만들 때 근거 조회(FX_RELAY_EVIDENCE)에서만.
+     *    a.ts < b분 = "a 가 b 보다 이른 분"(원천 시각이 분 단위). 받은 쪽은 transactions_to_ts_idx 를 탄다.
+     * ② 그 (계좌, E) 의 1분 전 창 [E-H, E) 에도 쌍(b < E, a ≥ E-H)이 있었는지.
+     */
+    private static final String FX_RELAY_MINUTES = """
+            with %1$s,
+            pairs_now as (
+                select distinct b.from_account_key as account_key, date_trunc('minute', b.ts) as e
+                from ops.transactions b
+                join rates rb on rb.currency = b.currency_paid
+                where b.ts >= ? and b.ts < ? and not b.is_self_transfer
+                  and exists (
+                      select 1
+                      from ops.transactions a
+                      join rates ra on ra.currency = a.currency_received
+                      where a.to_account_key = b.from_account_key and not a.is_self_transfer
+                        and a.ts >= date_trunc('minute', b.ts) + interval '1 minute' - make_interval(hours => ?)
+                        and a.ts < date_trunc('minute', b.ts)
+                        and %2$s
+                  )
+            )
+            select p.account_key, p.e,
+                   exists (
+                       select 1
+                       from ops.transactions b
+                       join rates rb on rb.currency = b.currency_paid
+                       join ops.transactions a on a.to_account_key = b.from_account_key and not a.is_self_transfer
+                            and a.ts >= p.e - make_interval(hours => ?) and a.ts < date_trunc('minute', b.ts)
+                       join rates ra on ra.currency = a.currency_received
+                       where b.from_account_key = p.account_key and not b.is_self_transfer
+                         and b.ts >= p.e - make_interval(hours => ?) and b.ts < p.e
+                         and %2$s
+                   ) as pair_before
+            from pairs_now p
+            order by p.account_key, p.e""".formatted(RATES, RELAY_COND);
+
+    /** R03 근거 — 창 안 모든 쌍, 받은 거래 시각순(rules.md 2.1 경로끼리 첫 거래 시각순). */
+    private static final String FX_RELAY_EVIDENCE = """
+            with %1$s
+            select a.transaction_id as in_id, a.ts as in_ts, a.to_account_key as in_account,
+                   a.currency_received as in_currency, a.amount_received as in_amount,
+                   b.transaction_id as out_id, b.ts as out_ts, b.from_account_key as out_account,
+                   b.currency_paid as out_currency, b.amount_paid as out_amount
+            from ops.transactions b
+            join rates rb on rb.currency = b.currency_paid
+            join ops.transactions a on a.to_account_key = b.from_account_key and not a.is_self_transfer
+                 and a.ts >= ? and a.ts < date_trunc('minute', b.ts)
+            join rates ra on ra.currency = a.currency_received
+            where b.from_account_key = ? and not b.is_self_transfer and b.ts >= ? and b.ts < ?
+              and %2$s
+            order by a.ts, a.transaction_id, b.ts, b.transaction_id""".formatted(RATES, RELAY_COND);
+
     private static final String INSERT_ALERT = """
             insert into ops.alerts(alert_no, batch_run_id, rule_ref_id, account_key, entity_id, window_start,
                                    window_end, reference_ts, rule_facts, batch_date)
@@ -231,9 +303,46 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
                 new FanEvidence.CurrencyTotal(rs.getString("currency"), rs.getBigDecimal("total_amount"),
                         rs.getInt("transaction_count"), ids(rs.getArray("transaction_ids"))),
                 accountKey, windowStart, windowEnd);
-        String entityId = jdbc.query("select entity_id from ops.accounts where account_key = ?",
+        return new FanEvidence(entityIdOf(accountKey), byCurrency);
+    }
+
+    @Override
+    public List<FxRelayMinute> fxRelayMinutes(LocalDate date, FxRelayRule rule) {
+        LocalDateTime dayStart = date.atStartOfDay();
+        int h = rule.windowHours();
+        BigDecimal tol = rule.amountTolerance();
+        boolean change = rule.requireCurrencyChange();
+        return jdbc.query(FX_RELAY_MINUTES, (rs, rowNum) -> new FxRelayMinute(rs.getString("account_key"),
+                        rs.getObject("e", LocalDateTime.class), rs.getBoolean("pair_before")),
+                ratesJson(rule), dayStart, dayStart.plusDays(1), h, change, tol, tol,
+                h, h, change, tol, tol);
+    }
+
+    @Override
+    public FxRelayEvidence fxRelayEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd,
+                                           FxRelayRule rule) {
+        BigDecimal tol = rule.amountTolerance();
+        List<RelayPair> pairs = jdbc.query(FX_RELAY_EVIDENCE, (rs, rowNum) -> new RelayPair(
+                        rs.getLong("in_id"), rs.getObject("in_ts", LocalDateTime.class), rs.getString("in_account"),
+                        rs.getString("in_currency"), rs.getBigDecimal("in_amount"),
+                        rs.getLong("out_id"), rs.getObject("out_ts", LocalDateTime.class), rs.getString("out_account"),
+                        rs.getString("out_currency"), rs.getBigDecimal("out_amount")),
+                ratesJson(rule), windowStart, accountKey, windowStart, windowEnd,
+                rule.requireCurrencyChange(), tol, tol);
+        return new FxRelayEvidence(entityIdOf(accountKey), accountKey, windowStart, windowEnd, pairs);
+    }
+
+    /** 환율표를 jsonb 로 — 숫자는 BigDecimal 그대로 (jsonb 가 numeric 으로 받는다). */
+    private String ratesJson(FxRelayRule rule) {
+        ObjectNode n = om.createObjectNode();
+        rule.usdRates().forEach(n::put);
+        return text(n);
+    }
+
+    @Override
+    public String entityIdOf(String accountKey) {
+        return jdbc.query("select entity_id from ops.accounts where account_key = ?",
                 (rs, rowNum) -> rs.getString(1), accountKey).stream().findFirst().orElse(null);
-        return new FanEvidence(entityId, byCurrency);
     }
 
     @Override
@@ -261,9 +370,10 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
         return Arrays.asList((Long[]) array.getArray());
     }
 
+    /** 룰 기준값은 소수를 BigDecimal 로 읽는다 — double 로 읽으면 17자리 넘는 소수(경계값)가 잘린다(#리뷰). */
     private JsonNode json(String text) {
         try {
-            return om.readTree(text);
+            return om.reader().with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(text);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("저장된 룰 기준값을 읽을 수 없습니다", e);
         }
