@@ -242,6 +242,44 @@ class ReportStrDraftDbTest {
                 .isInstanceOf(DraftNotFoundException.class);
     }
 
+    // 9
+    @Test
+    void 실패_다른_승인자는_사본이_오래됐어도_이미_제출됐어도_상태_오류가_아니라_403이_먼저() {   // #125 리뷰 — 권한 → 상태 순
+        long caseId = escalatedCase();
+        long draftId = approvedDraft(caseId);
+        long before = caseVersion(caseId);
+        long otherApprover = user("rpt-apr-stale" + SEQ.incrementAndGet(), "APPROVER");
+        login(otherApprover, "APPROVER");
+
+        assertThatThrownBy(() -> reportDraft.execute(DisplayNumber.draftNo(draftId), before - 1))   // 오래된 사본
+                .isInstanceOf(NotDraftApproverException.class);                                // 409 CONCURRENT_UPDATE 아님
+        assertNothingReported(caseId, draftId, before);
+
+        login(approver, "APPROVER");
+        reportDraft.execute(DisplayNumber.draftNo(draftId), before);                           // 승인한 사람이 제출
+        long reportedVersion = caseVersion(caseId);
+        login(otherApprover, "APPROVER");
+
+        assertThatThrownBy(() -> reportDraft.execute(DisplayNumber.draftNo(draftId), reportedVersion))
+                .isInstanceOf(NotDraftApproverException.class);                                // 409 INVALID_CASE_TRANSITION 아님
+    }
+
+    // 10
+    @Test
+    void 정상_제출_시각은_REPORT_이력_시각과_같은_값이다() {   // #125 리뷰 — late 가 이력 시각과 어긋나지 않게
+        long caseId = escalatedCase();
+        long draftId = approvedDraft(caseId);
+        login(approver, "APPROVER");
+
+        ReportStrDraft.Result r = reportDraft.execute(DisplayNumber.draftNo(draftId), caseVersion(caseId));
+
+        Boolean same = jdbc.queryForObject("select rep.reported_at = h.created_at from ops.str_reports rep "
+                + "join ops.case_history h on h.case_id = ? and h.action = 'REPORT' where rep.draft_id = ?",
+                Boolean.class, caseId, draftId);
+        assertThat(same).isTrue();                                       // DB 에 같은 값으로 남는다 (마이크로초까지)
+        assertThat(r.reportedAt()).isNotNull();
+    }
+
     // ---- 도우미 ----
 
     /** 케이스는 APPROVED 그대로, 보고서에는 제출 기록이 없다. */
