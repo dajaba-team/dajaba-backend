@@ -409,6 +409,36 @@ class RunRuleScanTest {
     }
 
     @Test
+    void R06_상한_후보_거르기는_공통_구간_시작_1분_전_상대를_세지_않는다() {
+        // #127 리뷰(채영). 공통 구간 = [d+1 00:00 - 96h, d 00:01) = [d-3 00:00, ...). 구간을 1분만 앞당겨도 101곳으로 걸러져 경보가 사라진다.
+        // 10/1~10/5 는 다른 테스트가 스캔하지 않는다.
+        LocalDate d = LocalDate.of(2022, 10, 5);
+        String hub = accountWithEntity();
+        transfer(newKey(), hub, d.minusDays(4).atTime(23, 59), "1", "US Dollar", "1", "US Dollar");   // 공통 구간 1분 전
+        List<String> senders = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {   // 공통 구간 안 100곳
+            String s = newKey();
+            senders.add(s);
+            transfer(s, hub, d.minusDays(2).atTime(12, 0), "1", "US Dollar", "1", "US Dollar");
+        }
+        for (int i = 0; i < 5; i++) {     // 공통 구간 안 출금 5곳
+            transfer(hub, newKey(), d.minusDays(2).atTime(13, i), "1", "US Dollar", "1", "US Dollar");
+        }
+        // d 23:59 기존 상대 재입금 — 지금 창 [d-3 00:00, d+1 00:00) 100곳·5곳(참), 1분 전 창 [d-4 23:59, d 23:59) 101곳(거짓)
+        transfer(senders.get(0), hub, d.atTime(23, 59), "1", "US Dollar", "1", "US Dollar");
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        List<Map<String, Object>> r06 = alertsOf(hub).stream()
+                .filter(a -> "R06_GATHER_SCATTER".equals(a.get("rule_id"))).toList();
+        assertThat(r06).singleElement().satisfies(a -> {
+            assertThat(ts(a.get("reference_ts"))).isEqualTo(d.plusDays(1).atStartOfDay());
+            assertThat(facts(a).get("distinct_senders").asInt()).isEqualTo(100);
+            assertThat(facts(a).get("distinct_receivers").asInt()).isEqualTo(5);
+        });
+    }
+
+    @Test
     void 기준값이_잘못되면_409_INVALID_RULE_PARAMS이고_경보는_롤백_배치는_FAILED() {
         LocalDate d = LocalDate.of(2022, 9, 12);
         String target = newKey();
