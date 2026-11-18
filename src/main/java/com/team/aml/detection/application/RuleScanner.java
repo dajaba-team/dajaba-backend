@@ -1,6 +1,10 @@
 package com.team.aml.detection.application;
 
 import com.team.aml.detection.domain.ActiveRule;
+import com.team.aml.detection.domain.CycleAlert;
+import com.team.aml.detection.domain.CycleMark;
+import com.team.aml.detection.domain.CyclePath;
+import com.team.aml.detection.domain.CycleRule;
 import com.team.aml.detection.domain.FanEvidence;
 import com.team.aml.detection.domain.FanInRule;
 import com.team.aml.detection.domain.FanMinute;
@@ -19,7 +23,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 /**
  * 켜진 룰 전부를 한 트랜잭션으로 스캔한다 (SD 명세 §5). 하나라도 실패하면 그 실행의 경보가 전부 롤백 →
@@ -35,7 +42,7 @@ public class RuleScanner {
      * 룰 PR 마다 ID 를 여기와 switch 에 추가하고, 남은 룰 중 마지막으로 머지되는 룰 PR 에서 이 목록과 건너뛰기를 지운다.
      */
     private static final Set<String> IMPLEMENTED =
-            Set.of(FanOutRule.RULE_ID, FanInRule.RULE_ID, GatherScatterRule.RULE_ID);
+            Set.of(FanOutRule.RULE_ID, FanInRule.RULE_ID, CycleRule.RULE_ID, GatherScatterRule.RULE_ID);
 
     private final RuleScanRepository scans;
     private final RuleScanRecorder recorder;
@@ -56,6 +63,7 @@ public class RuleScanner {
             int created = switch (rule.ruleId()) {
                 case FanOutRule.RULE_ID -> scanFanOut(batchRunId, date, rule);
                 case FanInRule.RULE_ID -> scanFanIn(batchRunId, date, rule);
+                case CycleRule.RULE_ID -> scanCycle(batchRunId, date, rule);
                 case GatherScatterRule.RULE_ID -> scanGatherScatter(batchRunId, date, rule);
                 default -> throw new IllegalStateException("구현되지 않은 룰이 켜져 있습니다: " + rule.ruleId());
             };
@@ -116,6 +124,36 @@ public class RuleScanner {
             scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), m.accountKey(), evidence.entityId(),
                     start, end, end, evidence.toRuleFacts(m.sendersNow(), m.receiversNow()), evidence.transactionIds()));
             created++;
+        }
+        return created;
+    }
+
+    /**
+     * R04 — 그날 닫힌 고리를 찾고, 그 대상 계좌들만 1분 전 창 판단용으로 그 전 H 안에 닫힌 고리 요약(CycleMark)을 더 가져온다.
+     * 판정은 CycleRule.alerts, 저장 전 경로 검사(rules.md 2.1)가 어긋나면 만들지 않는다.
+     */
+    private int scanCycle(long batchRunId, LocalDate date, ActiveRule rule) {
+        CycleRule cr = CycleRule.from(rule.params());
+        LocalDateTime dayStart = date.atStartOfDay();
+        Map<String, List<CyclePath>> today = scans.cyclesClosing(dayStart, dayStart.plusDays(1), cr).stream()
+                .collect(Collectors.groupingBy(CyclePath::accountKey, TreeMap::new, Collectors.toList()));
+        Map<String, List<CycleMark>> earlier = today.isEmpty() ? Map.of()
+                : scans.cycleMarksClosing(dayStart.minusHours(cr.windowHours()), dayStart, cr, today.keySet()).stream()
+                        .collect(Collectors.groupingBy(CycleMark::accountKey));
+        int created = 0;
+        for (Map.Entry<String, List<CyclePath>> entry : today.entrySet()) {
+            for (CycleAlert alert : cr.alerts(entry.getValue(), earlier.getOrDefault(entry.getKey(), List.of()), date)) {
+                LocalDateTime end = cr.windowEnd(alert.minute());
+                if (!alert.valid(cr)) {
+                    log.warn("rule scan dropped alert failing path check rule_id={} reference_ts={} paths={}",
+                            CycleRule.RULE_ID, end, alert.paths().size());
+                    continue;
+                }
+                scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), entry.getKey(),
+                        scans.entityIdOf(entry.getKey()), cr.windowStart(alert.minute()), end, end,
+                        alert.toRuleFacts(), alert.transactionIds()));
+                created++;
+            }
         }
         return created;
     }

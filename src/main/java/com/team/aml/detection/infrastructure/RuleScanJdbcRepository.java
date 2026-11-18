@@ -4,6 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.team.aml.detection.domain.ActiveRule;
+import com.team.aml.detection.domain.CycleMark;
+import com.team.aml.detection.domain.CyclePath;
+import com.team.aml.detection.domain.CycleRule;
 import com.team.aml.detection.domain.DataRange;
 import com.team.aml.detection.domain.FanEvidence;
 import com.team.aml.detection.domain.FanInRule;
@@ -19,9 +22,11 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.Array;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -138,6 +143,93 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
             from minutes m
             order by m.account_key, m.e""";
 
+    /*
+     * R04 ① 엣지: [closeFrom + 1분 - H, closeTo) 의 (보낸 계좌, 받은 계좌) 쌍 + 처음·마지막 거래 시각.
+     * ② 계좌 고리 후보: 돌아오는 엣지 z→a(그 구간에 거래)에서 출발, a→b 를 붙여 b=z(2홉)·b→z(3홉)·b→c→z(4홉).
+     *    앞 엣지의 첫 거래 분 < 다음 엣지의 마지막 거래 분인 것만 (시간순 가능성). 중간 계좌는 서로 다르고 a 가 아님.
+     * ③ 후보만 거래 단위로 펼친다: 돌아오는 거래 tk ∈ [closeFrom, closeTo), 앞 거래마다 창 시작(tk분+1분-H) 이상·다음 거래 분보다 이른 분.
+     * 9/5 측정(rules.md R04 구현 1단계 기준선): 엣지 55만, 후보 2홉 425·3홉 26·4홉 7, 4홉 후보 조인이 약 21초.
+     * %s = 대상 계좌 거르기(없음 또는 jsonb 배열 안의 계좌만).
+     */
+    private static final String CYCLES = """
+            with e as (
+                select from_account_key as src, to_account_key as dst, min(ts) as first_ts, max(ts) as last_ts
+                from ops.transactions
+                where ts >= ? and ts < ? and not is_self_transfer
+                group by from_account_key, to_account_key
+            ),
+            closing as (
+                select src as z, dst as a, last_ts as close_ts from e where last_ts >= ? %s
+            ),
+            start as (
+                select c.a, e1.dst as b, c.z, e1.first_ts as f1, c.close_ts
+                from closing c join e e1 on e1.src = c.a
+                where e1.first_ts < date_trunc('minute', c.close_ts)
+            ),
+            cand as (
+                select a, b, null::text as c, z, 2 as k from start where b = z
+                union all
+                select s.a, s.b, null, s.z, 3
+                from start s join e e2 on e2.src = s.b and e2.dst = s.z
+                where ? >= 3 and s.b <> s.z
+                  and s.f1 < date_trunc('minute', e2.last_ts) and e2.first_ts < date_trunc('minute', s.close_ts)
+                union all
+                select s.a, s.b, e2.dst, s.z, 4
+                from start s
+                join e e2 on e2.src = s.b and e2.dst not in (s.a, s.b, s.z)
+                join e e3 on e3.src = e2.dst and e3.dst = s.z
+                where ? >= 4 and s.b <> s.z
+                  and s.f1 < date_trunc('minute', e2.last_ts) and e2.first_ts < date_trunc('minute', e3.last_ts)
+                  and e3.first_ts < date_trunc('minute', s.close_ts)
+            ),
+            closes as (
+                select tk.transaction_id, tk.ts, tk.from_account_key, tk.to_account_key,
+                       date_trunc('minute', tk.ts) + interval '1 minute' - make_interval(hours => ?) as ws
+                from ops.transactions tk
+                join (select distinct a, z from cand) p on tk.from_account_key = p.z and tk.to_account_key = p.a
+                where tk.ts >= ? and tk.ts < ? and not tk.is_self_transfer
+            )
+            select array[t1.transaction_id, tk.transaction_id] as ids, array[t1.ts, tk.ts] as tss,
+                   array[t1.from_account_key, tk.from_account_key] as froms,
+                   array[t1.to_account_key, tk.to_account_key] as tos
+            from cand c
+            join closes tk on tk.from_account_key = c.z and tk.to_account_key = c.a
+            join ops.transactions t1 on t1.from_account_key = c.a and t1.to_account_key = c.b and not t1.is_self_transfer
+                 and t1.ts >= tk.ws and t1.ts < date_trunc('minute', tk.ts)
+            where c.k = 2
+            union all
+            select array[t1.transaction_id, t2.transaction_id, tk.transaction_id], array[t1.ts, t2.ts, tk.ts],
+                   array[t1.from_account_key, t2.from_account_key, tk.from_account_key],
+                   array[t1.to_account_key, t2.to_account_key, tk.to_account_key]
+            from cand c
+            join closes tk on tk.from_account_key = c.z and tk.to_account_key = c.a
+            join ops.transactions t2 on t2.from_account_key = c.b and t2.to_account_key = c.z and not t2.is_self_transfer
+                 and t2.ts >= tk.ws and t2.ts < date_trunc('minute', tk.ts)
+            join ops.transactions t1 on t1.from_account_key = c.a and t1.to_account_key = c.b and not t1.is_self_transfer
+                 and t1.ts >= tk.ws and t1.ts < date_trunc('minute', t2.ts)
+            where c.k = 3
+            union all
+            select array[t1.transaction_id, t2.transaction_id, t3.transaction_id, tk.transaction_id],
+                   array[t1.ts, t2.ts, t3.ts, tk.ts],
+                   array[t1.from_account_key, t2.from_account_key, t3.from_account_key, tk.from_account_key],
+                   array[t1.to_account_key, t2.to_account_key, t3.to_account_key, tk.to_account_key]
+            from cand c
+            join closes tk on tk.from_account_key = c.z and tk.to_account_key = c.a
+            join ops.transactions t3 on t3.from_account_key = c.c and t3.to_account_key = c.z and not t3.is_self_transfer
+                 and t3.ts >= tk.ws and t3.ts < date_trunc('minute', tk.ts)
+            join ops.transactions t2 on t2.from_account_key = c.b and t2.to_account_key = c.c and not t2.is_self_transfer
+                 and t2.ts >= tk.ws and t2.ts < date_trunc('minute', t3.ts)
+            join ops.transactions t1 on t1.from_account_key = c.a and t1.to_account_key = c.b and not t1.is_self_transfer
+                 and t1.ts >= tk.ws and t1.ts < date_trunc('minute', t2.ts)
+            where c.k = 4""";
+    private static final String CYCLES_ALL = CYCLES.formatted("");
+    /** 1분 전 창 판단용 — 정해진 계좌의 고리를 (계좌, 닫힌 분) 별 가장 늦은 첫 거래 시각으로만 줄여 보낸다 (CycleMark). */
+    private static final String CYCLE_MARKS = """
+            select q.froms[1] as account_key, date_trunc('minute', q.tss[array_length(q.tss, 1)]) as close_minute,
+                   max(q.tss[1]) as latest_first_ts
+            from (%s) q
+            group by 1, 2""".formatted(CYCLES.formatted("and dst in (select jsonb_array_elements_text(?::jsonb))"));
+
     private static final String INSERT_ALERT = """
             insert into ops.alerts(alert_no, batch_run_id, rule_ref_id, account_key, entity_id, window_start,
                                    window_end, reference_ts, rule_facts, batch_date)
@@ -231,9 +323,36 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
                 new FanEvidence.CurrencyTotal(rs.getString("currency"), rs.getBigDecimal("total_amount"),
                         rs.getInt("transaction_count"), ids(rs.getArray("transaction_ids"))),
                 accountKey, windowStart, windowEnd);
-        String entityId = jdbc.query("select entity_id from ops.accounts where account_key = ?",
+        return new FanEvidence(entityIdOf(accountKey), byCurrency);
+    }
+
+    @Override
+    public List<CyclePath> cyclesClosing(LocalDateTime closeFrom, LocalDateTime closeTo, CycleRule rule) {
+        int h = rule.windowHours();
+        return jdbc.query(CYCLES_ALL, (rs, rowNum) -> new CyclePath(
+                        List.of((Long[]) rs.getArray("ids").getArray()),
+                        Arrays.stream((Timestamp[]) rs.getArray("tss").getArray()).map(Timestamp::toLocalDateTime).toList(),
+                        List.of((String[]) rs.getArray("froms").getArray()),
+                        List.of((String[]) rs.getArray("tos").getArray())),
+                closeFrom.plusMinutes(1).minusHours(h), closeTo, closeFrom,
+                rule.maxHops(), rule.maxHops(), h, closeFrom, closeTo);
+    }
+
+    @Override
+    public List<CycleMark> cycleMarksClosing(LocalDateTime closeFrom, LocalDateTime closeTo, CycleRule rule,
+                                             Collection<String> accounts) {
+        int h = rule.windowHours();
+        return jdbc.query(CYCLE_MARKS, (rs, rowNum) -> new CycleMark(rs.getString("account_key"),
+                        rs.getObject("close_minute", LocalDateTime.class),
+                        rs.getObject("latest_first_ts", LocalDateTime.class)),
+                closeFrom.plusMinutes(1).minusHours(h), closeTo, closeFrom, text(om.valueToTree(accounts)),
+                rule.maxHops(), rule.maxHops(), h, closeFrom, closeTo);
+    }
+
+    @Override
+    public String entityIdOf(String accountKey) {
+        return jdbc.query("select entity_id from ops.accounts where account_key = ?",
                 (rs, rowNum) -> rs.getString(1), accountKey).stream().findFirst().orElse(null);
-        return new FanEvidence(entityId, byCurrency);
     }
 
     @Override

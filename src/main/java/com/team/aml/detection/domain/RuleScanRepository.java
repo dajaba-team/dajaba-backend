@@ -2,6 +2,7 @@ package com.team.aml.detection.domain;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -30,6 +31,19 @@ public interface RuleScanRepository {
 
     /** R06 집계 — 그날 입금·출금이 있었던 (계좌, 분) 마다 지금 창·1분 전 창의 송신·수신 계좌 수. 하한·상한은 후보 거르기에만. */
     List<GatherScatterMinute> gatherScatterMinutes(LocalDate date, GatherScatterRule rule);
+
+    /** R04 — 돌아오는 거래(→A)가 [closeFrom, closeTo) 에 있는 거래 단위 고리 전부. 각 고리는 자기 창(돌아오는 분 기준) 안. */
+    List<CyclePath> cyclesClosing(LocalDateTime closeFrom, LocalDateTime closeTo, CycleRule rule);
+
+    /**
+     * R04 1분 전 창 판단용 — accounts 의 고리 중 [closeFrom, closeTo) 에 닫힌 것을 (계좌, 닫힌 분) 별 가장 늦은 첫 거래 시각으로만.
+     * 경보에 담지 않는 과거 고리의 거래 조합은 가져오지 않는다.
+     */
+    List<CycleMark> cycleMarksClosing(LocalDateTime closeFrom, LocalDateTime closeTo, CycleRule rule,
+                                      Collection<String> accounts);
+
+    /** 계좌의 법인 (accounts 에 없으면 null). */
+    String entityIdOf(String accountKey);
 
     /** [windowStart, windowEnd) 의 입금 근거(자기 계좌 제외) + 계좌의 법인. */
     FanEvidence fanInEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd);
