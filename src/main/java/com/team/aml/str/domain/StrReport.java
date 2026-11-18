@@ -187,11 +187,18 @@ public class StrReport extends BaseEntity {
             throw new IllegalStateException("이미 모의 제출한 보고서다: " + reportNo);
         }
         this.reportedBy = reportedBy;
-        // DB(timestamptz)는 마이크로초까지라 같은 정밀도로 자른다 — 저장값과 late 판단이 어긋나지 않게
-        Instant atMicros = reportedAt.truncatedTo(ChronoUnit.MICROS);
+        // DB(timestamptz)는 마이크로초까지 — 드라이버(pgjdbc)·PostgreSQL 이 나노초를 마이크로초로 <b>반올림</b>해 저장한다.
+        // 같은 규칙으로 맞춰야 ① 저장값과 late 판단이 같고 ② 같은 Instant 를 저장한 REPORT 이력 created_at 과 값이 같다 (#125, CI 실패 원인).
+        // 자르면(truncate) 나노초 끝자리가 500 이상일 때 DB 값보다 1µs 작아진다.
+        Instant atMicros = roundToMicros(reportedAt);
         this.reportedAt = atMicros;
         this.late = ReportDeadline.isLate(reportDueAt, atMicros);
         this.pdfStatus = ReportPdfStatus.PENDING;
+    }
+
+    /** 나노초 → 마이크로초 반올림(0.5µs 올림) — DB 가 저장하는 값과 같게. 23:59:59.9999995 는 다음 초 00.000000 이 된다. */
+    static Instant roundToMicros(Instant t) {
+        return t.plusNanos(500).truncatedTo(ChronoUnit.MICROS);
     }
 
     /** PDF 생성 성공 (제출 커밋 뒤, 또는 다시 만들기 뒤). PENDING 일 때만. */
