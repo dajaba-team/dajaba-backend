@@ -18,6 +18,9 @@ tasks.withType<JavaCompile> {
 
 repositories { mavenCentral() }
 
+// Spring Boot 3.3.5 기본 1.19.8 은 Docker API 1.32 로 말을 걸어 GitHub 러너 Docker 29 가 거절한다 → 1.x 수정판 (08_decisions)
+extra["testcontainers.version"] = "1.21.4"
+
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-webflux")      // WebClient (AiClient)
