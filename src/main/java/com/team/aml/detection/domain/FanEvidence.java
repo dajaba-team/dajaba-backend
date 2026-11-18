@@ -35,9 +35,14 @@ public record FanEvidence(String entityId, List<CurrencyTotal> byCurrency) {
      * — countField 는 R01 distinct_receivers, R02 distinct_senders.
      */
     public ObjectNode toRuleFacts(String countField, int count) {
-        JsonNodeFactory f = JsonNodeFactory.instance;
-        ObjectNode facts = f.objectNode().put(countField, count);
-        ArrayNode amounts = facts.putArray("amounts_by_currency");
+        ObjectNode facts = JsonNodeFactory.instance.objectNode().put(countField, count);
+        facts.set("amounts_by_currency", amountsByCurrency());
+        return facts;
+    }
+
+    /** [{currency, total_amount, transaction_count, transaction_ids}] — R01·R02 amounts_by_currency, R06 inbound·outbound_by_currency. */
+    public ArrayNode amountsByCurrency() {
+        ArrayNode amounts = JsonNodeFactory.instance.arrayNode();
         for (CurrencyTotal c : byCurrency) {
             ObjectNode item = amounts.addObject()
                     .put("currency", c.currency())
@@ -46,7 +51,7 @@ public record FanEvidence(String entityId, List<CurrencyTotal> byCurrency) {
             ArrayNode ids = item.putArray("transaction_ids");
             c.transactionIds().forEach(ids::add);
         }
-        return facts;
+        return amounts;
     }
 
     /** numeric(20,6) 합계의 끝 0 을 떼되 지수 표기(1E+3)는 만들지 않는다. */

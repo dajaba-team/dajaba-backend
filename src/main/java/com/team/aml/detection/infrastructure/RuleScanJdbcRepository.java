@@ -9,6 +9,8 @@ import com.team.aml.detection.domain.FanEvidence;
 import com.team.aml.detection.domain.FanInRule;
 import com.team.aml.detection.domain.FanMinute;
 import com.team.aml.detection.domain.FanOutRule;
+import com.team.aml.detection.domain.GatherScatterMinute;
+import com.team.aml.detection.domain.GatherScatterRule;
 import com.team.aml.detection.domain.NewAlert;
 import com.team.aml.detection.domain.RuleScanRepository;
 import com.team.aml.shared.domain.DisplayNumber;
@@ -88,6 +90,54 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
     private static final String FAN_OUT_EVIDENCE =
             FAN_EVIDENCE.formatted("from_account_key", "currency_paid", "amount_paid");
 
+    /*
+     * R06 ① 후보: [D 00:01 - H, D+1 00:00) 에서 송신 계좌 ≥ 하한·수신 계좌 ≥ 하한이고 그날 입금·출금이 있는 계좌.
+     *    그중 그날 모든 분의 지금 창에 공통으로 들어가는 [D+1 00:00 - H, D 00:01) 에서 이미 상한을 넘는 계좌는 뺀다
+     *    — 그날 어느 분에도 지금 창이 참일 수 없다(결과는 같고 대형 계좌를 분마다 세지 않음). H < 24시간이면 구간이 비어 거르지 않는다.
+     * ② 그 계좌의 그날 거래 분 E(입금·출금) 마다 지금 창·1분 전 창의 송신·수신 계좌 수. 자기 계좌 거래는 모두 뺀다.
+     *    송신 수는 transactions_to_ts_idx, 수신 수는 transactions_from_ts_idx 를 탄다.
+     */
+    private static final String GATHER_SCATTER_MINUTES = """
+            with legs as (
+                select to_account_key as account_key, from_account_key as counterparty, true as inbound, ts
+                from ops.transactions where ts >= ? and ts < ? and not is_self_transfer
+                union all
+                select from_account_key, to_account_key, false, ts
+                from ops.transactions where ts >= ? and ts < ? and not is_self_transfer
+            ),
+            candidates as (
+                select account_key
+                from legs
+                group by account_key
+                having count(distinct counterparty) filter (where inbound) >= ?
+                   and count(distinct counterparty) filter (where not inbound) >= ?
+                   and max(ts) >= ?
+                   and count(distinct counterparty) filter (where inbound and ts >= ? and ts < ?) <= ?
+                   and count(distinct counterparty) filter (where not inbound and ts >= ? and ts < ?) <= ?
+            ),
+            minutes as (
+                select distinct l.account_key, date_trunc('minute', l.ts) as e
+                from legs l join candidates c on c.account_key = l.account_key
+                where l.ts >= ?
+            )
+            select m.account_key, m.e,
+                   (select count(distinct x.from_account_key) from ops.transactions x
+                     where x.to_account_key = m.account_key and not x.is_self_transfer
+                       and x.ts >= m.e + interval '1 minute' - make_interval(hours => ?)
+                       and x.ts < m.e + interval '1 minute') as senders_now,
+                   (select count(distinct x.to_account_key) from ops.transactions x
+                     where x.from_account_key = m.account_key and not x.is_self_transfer
+                       and x.ts >= m.e + interval '1 minute' - make_interval(hours => ?)
+                       and x.ts < m.e + interval '1 minute') as receivers_now,
+                   (select count(distinct x.from_account_key) from ops.transactions x
+                     where x.to_account_key = m.account_key and not x.is_self_transfer
+                       and x.ts >= m.e - make_interval(hours => ?) and x.ts < m.e) as senders_before,
+                   (select count(distinct x.to_account_key) from ops.transactions x
+                     where x.from_account_key = m.account_key and not x.is_self_transfer
+                       and x.ts >= m.e - make_interval(hours => ?) and x.ts < m.e) as receivers_before
+            from minutes m
+            order by m.account_key, m.e""";
+
     private static final String INSERT_ALERT = """
             insert into ops.alerts(alert_no, batch_run_id, rule_ref_id, account_key, entity_id, window_start,
                                    window_end, reference_ts, rule_facts, batch_date)
@@ -146,6 +196,24 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
                         rs.getObject("e", LocalDateTime.class), rs.getInt("count_now"), rs.getInt("count_before")),
                 candidatesFrom, dayEnd, minCount, dayStart, alwaysBeforeFrom, dayStart, minCount,
                 dayStart, dayEnd, windowHours, windowHours);
+    }
+
+    @Override
+    public List<GatherScatterMinute> gatherScatterMinutes(LocalDate date, GatherScatterRule rule) {
+        LocalDateTime dayStart = date.atStartOfDay();
+        LocalDateTime dayEnd = dayStart.plusDays(1);
+        int h = rule.windowHours();
+        LocalDateTime candidatesFrom = dayStart.plusMinutes(1).minusHours(h);   // 첫 분(00:00)의 지금 창 시작
+        LocalDateTime alwaysNowFrom = dayEnd.minusHours(h);                     // 마지막 분(23:59)의 지금 창 시작
+        LocalDateTime alwaysNowTo = dayStart.plusMinutes(1);                    // 첫 분(00:00)의 지금 창 끝
+        return jdbc.query(GATHER_SCATTER_MINUTES, (rs, rowNum) -> new GatherScatterMinute(rs.getString("account_key"),
+                        rs.getObject("e", LocalDateTime.class), rs.getInt("senders_now"), rs.getInt("receivers_now"),
+                        rs.getInt("senders_before"), rs.getInt("receivers_before")),
+                candidatesFrom, dayEnd, candidatesFrom, dayEnd,
+                rule.minSenders(), rule.minReceivers(), dayStart,
+                alwaysNowFrom, alwaysNowTo, rule.maxSenders(),
+                alwaysNowFrom, alwaysNowTo, rule.maxReceivers(),
+                dayStart, h, h, h, h);
     }
 
     @Override

@@ -17,7 +17,7 @@
 | `R03_FX_RELAY` | 환전 중계 | `FX_RELAY` (V016) | 받은 돈을 늦은 분에 **다른 통화로** 비슷한 금액(USD 환산 ±10%) 내보냄 | `window_hours` 96, `amount_tolerance` 0.1, `require_currency_change` true, `usd_rates` | 확정 · 시드 V016 | SCRUM-193 |
 | `R04_CYCLE` | 순환 거래 | `CYCLE` | 4홉 안에 시작 계좌로 돌아옴 | `window_hours` 96, `max_hops` 4 | 확정 · 시드 V016 | SCRUM-192 |
 | `R05_SCATTER_GATHER` | 흩었다 모으기 | `SCATTER_GATHER` | 한 계좌가 중간 계좌 N개 이상으로 흩은 돈이 한 계좌로 다시 모임 | `window_hours` 96, `min_intermediates` 3 | 확정 · 시드 V016 | SCRUM-194 |
-| `R06_GATHER_SCATTER` | 모았다 흩기 | `GATHER_SCATTER` | 같은 창에서 입금 상대·출금 상대가 **각각** 하한~상한 안 | `window_hours` 96, 입금 상대 5~100, 출금 상대 5~100 | 확정 · 시드 V016 | SCRUM-189 |
+| `R06_GATHER_SCATTER` | 모았다 흩기 | `GATHER_SCATTER` | 같은 창에서 입금 상대·출금 상대가 **각각** 하한~상한 안 | `window_hours` 96, 입금 상대 5~100, 출금 상대 5~100 | 확정 · 시드 V016 · **구현됨** | SCRUM-189 |
 
 - **R07·R08은 v2에서 뺐어요**(2.2). 번호와 ID는 다른 룰에 다시 쓰지 않아요.
 - 시연·목업도 이 6개 이름으로 맞춰요. 예전 이름(`*_24H`, `R03_PASS_THROUGH`, `R05_STACK`, `R06_BIPARTITE`, `R07_STRUCTURING`, `R08_*`)은 쓰지 않아요(6절).
@@ -62,7 +62,7 @@ H = `params.window_hours`(v2는 모두 96).
 | R04 | 고리를 닫는(A로 **돌아오는**) 거래의 분 |
 | R05 | 경로를 완성하는 T **입금**의 분 |
 
-- **만료만으로 생긴 거짓→참은 경보가 아니에요.** 예: R06 입금 상대가 101명 → 100명으로 줄어 조건이 참이 됐어도, 그 변화가 옛 거래가 창에서 빠져서 생긴 거면 경보를 만들지 않아요. 다음 관련 거래가 있는 분에 참이면 그때 경보예요.
+- **만료만으로 생긴 거짓→참은 경보가 아니에요.** 예: R06 입금 상대가 101명 → 100명으로 줄어 조건이 참이 됐어도, 그 변화가 옛 거래가 창에서 빠져서 생긴 거면 그 분은 거래가 없어 평가하지 않아요. 다음 관련 거래가 있는 분 E에서도 1.1대로 1분 전 창 `[E−H, E)`와 비교하므로, 그 창이 이미 참(100명)이면 참이 이어지는 것으로 보고 경보를 만들지 않아요. 경보는 그 뒤 다시 거짓이 됐다가 거래 분에 참이 될 때예요(노션 v2 3.1·오프라인 분석과 같음 — 9/1~9/10 R06 401건 일치, `RunRuleScanTest` 고정).
 - 오프라인 분석(9/1~9/10 수치)도 같은 방식이라 수치가 달라지지 않아요.
 
 ## 2. 룰별 명세
@@ -167,7 +167,7 @@ H = `params.window_hours`(v2는 모두 96).
 | `rule_facts` | `{source_account_key, intermediates, paths}` — `paths`는 [S→Mᵢ, Mᵢ→T] 쌍들, 창 안 **모든 유효 경로**(2.1) |
 | 근거 거래 | 모든 경로의 거래(합집합) |
 
-### R06_GATHER_SCATTER — 모았다 흩기 〔확정 — v1 `R06_BIPARTITE` 교체〕
+### R06_GATHER_SCATTER — 모았다 흩기 〔확정 — v1 `R06_BIPARTITE` 교체, V016, SCRUM-189〕
 
 **왜 BIPARTITE를 바꿨나**: 10/28에 교체로 정했어요. HI-Small의 BIPARTITE는 두 집단 사이 거래가 계좌마다 1건씩이라 계좌 단위 룰로는 잡을 수 없어요.
 
@@ -180,6 +180,7 @@ H = `params.window_hours`(v2는 모두 96).
 | `params` | `{"window_hours": 96, "min_distinct_senders": 5, "max_distinct_senders": 100, "min_distinct_receivers": 5, "max_distinct_receivers": 100}` |
 | `rule_facts` | `{distinct_senders, distinct_receivers, inbound_by_currency:[{currency, total_amount, transaction_count, transaction_ids}], outbound_by_currency:[…]}` |
 | 근거 거래 | 창 안의 입금·출금 전부 |
+| 구현 | 집계 SQL `RuleScanJdbcRepository.gatherScatterMinutes` → 판정 `GatherScatterRule.fires`. 근거는 R02·R01 쿼리(`fanInEvidence`·`fanOutEvidence`) 그대로. 그날 모든 분의 지금 창에 공통으로 들어가는 구간에서 이미 상한을 넘는 계좌는 먼저 걸러요(결과 같음) |
 
 ### 2.1 `paths` (R03·R04·R05) — 확정 (10/28, ML 규약 §2.4)
 
@@ -208,7 +209,7 @@ H = `params.window_hours`(v2는 모두 96).
 - 기준값을 바꾸면 기존 행을 고치지 않고 **새 버전 행**을 넣어요(`(rule_id, version)` unique). 같은 룰의 켜진 버전은 하나(`rules_active_uq`). 과거 경보는 옛 버전을 가리켜요(V005).
 - 앱은 `rules`의 `is_active`·`updated_*`만 바꿀 수 있어요. 새 룰·새 버전은 Flyway 시드(지금) 또는 룰 기준값 API(SD 명세 API 6, 나중).
 - 이미 성공한 날짜는 다시 스캔하지 않아요. 새 버전은 다음 스캔부터 적용돼요.
-- 켜진 룰에 구현이 없으면 스캔이 실패해요(500, 배치 FAILED). **임시(SCRUM-260)**: V016으로 다섯 룰을 먼저 켜 둬서, 구현 전 룰은 경고 로그만 남기고 건너뛰어요(`alerts_by_rule`에도 안 나와요). 마지막 룰(R03, SCRUM-193) PR에서 되돌려요.
+- 켜진 룰에 구현이 없으면 스캔이 실패해요(500, 배치 FAILED). **임시(SCRUM-260)**: V016으로 다섯 룰을 먼저 켜 둬서, 구현 전 룰은 경고 로그만 남기고 건너뛰어요(`alerts_by_rule`에도 안 나와요). 남은 룰 중 마지막으로 머지되는 룰 PR에서 되돌려요.
   - 건너뛰는 동안 스캔해 성공한 날짜는 다시 스캔하지 않아서, 나중에 그 룰이 구현돼도 그 날짜엔 그 룰 경보가 없어요(V016 전에도 같음). **시연·통합 테스트 데이터는 여섯 룰이 다 머지된 뒤 DB를 초기화(다시 적재)하고 스캔해요.**
 
 | 시드 | 내용 | 상태 |
