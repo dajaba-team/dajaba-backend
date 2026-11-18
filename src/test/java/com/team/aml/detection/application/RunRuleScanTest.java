@@ -37,8 +37,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 룰 스캔 R01·R02·R06 (SCRUM-188·99·189). V016 R01 v1(96시간, N=10)·V011 R02 v1(96시간, N=5)·V016 R06 v1(96시간, 각각 5~100)로 돈다.
- * V016 의 R03~R05 는 켜져 있지만 구현 전이라 건너뛴다 (SCRUM-260 임시).
+ * 룰 스캔 R01·R02·R03·R06 (SCRUM-188·99·193·189). V011·V016 각 룰 v1 (96시간, R01 N=10·R02 N=5·R03 ±10%·R06 각각 5~100)로 돈다.
+ * V016 의 R04·R05 는 켜져 있지만 구현 전이라 건너뛴다 (SCRUM-260 임시).
  * 경보는 지울 수 없고 같은 날짜는 한 번만 성공하므로 테스트마다 날짜·계좌를 따로 쓰고, 단언은 그 계좌의 경보만 본다.
  */
 @Testcontainers
@@ -119,7 +119,7 @@ class RunRuleScanTest {
         assertThat(result.run().rowsIn()).isEqualTo(count(
                 "select count(*) from ops.transactions where ts >= '2022-09-02' and ts < '2022-09-03'"));
         assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId)
-                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R06_GATHER_SCATTER");   // rule_id 순, R03~R05 는 건너뜀
+                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R03_FX_RELAY", "R06_GATHER_SCATTER");   // rule_id 순, R04·R05 는 건너뜀
         assertThat(result.alertsByRule()).allSatisfy(r -> assertThat(r.ruleVersion()).isEqualTo(1));
     }
 
@@ -246,7 +246,7 @@ class RunRuleScanTest {
 
         assertThat(result.run().status()).isEqualTo(BatchStatus.SUCCEEDED);
         assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId)
-                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R06_GATHER_SCATTER");
+                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R03_FX_RELAY", "R06_GATHER_SCATTER");
     }
 
     @Test
@@ -436,6 +436,90 @@ class RunRuleScanTest {
             assertThat(facts(a).get("distinct_senders").asInt()).isEqualTo(100);
             assertThat(facts(a).get("distinct_receivers").asInt()).isEqualTo(5);
         });
+    }
+
+    @Test
+    void R03_받은_돈을_늦은_분에_다른_통화로_같은_가치만큼_보내면_경보_1건() {
+        LocalDate d = LocalDate.of(2022, 9, 22);   // 9/18~9/22 에 스캔하는 다른 테스트 계좌와 섞이지 않게 새 계좌만 쓴다
+        String m = accountWithEntity();
+        long a = transfer(newKey(), m, d.atTime(10, 0), "100", "US Dollar", "100", "US Dollar");   // 받은 쪽 100 USD
+        long b = transfer(m, newKey(), d.atTime(11, 0), "85.34", "Euro", "85.34", "Euro");        // 보낸 쪽 85.34 EUR = 100 USD
+        transfer(m, newKey(), d.atTime(12, 0), "85", "Euro", "85", "Euro");                      // 두 번째 쌍 — 참 유지, 새 경보 없음
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        List<Map<String, Object>> r03 = alertsOf(m).stream()
+                .filter(x -> "R03_FX_RELAY".equals(x.get("rule_id"))).toList();
+        assertThat(r03).hasSize(1);
+        Map<String, Object> alert = r03.get(0);
+        assertThat(ts(alert.get("window_start"))).isEqualTo(d.minusDays(4).atTime(11, 1));
+        assertThat(ts(alert.get("reference_ts"))).isEqualTo(d.atTime(11, 1));
+        assertThat(alert.get("entity_id")).isEqualTo("E_" + m);
+        assertThat(linkedIds((Long) alert.get("id"))).containsExactly(a, b);
+
+        JsonNode facts = facts(alert);
+        assertThat(facts.get("paths").toString()).isEqualTo("[[" + a + "," + b + "]]");
+        JsonNode relay = facts.get("relays").get(0);
+        assertThat(relay.get("in_currency").asText()).isEqualTo("US Dollar");
+        assertThat(relay.get("in_amount").decimalValue()).isEqualByComparingTo("100");
+        assertThat(relay.get("out_currency").asText()).isEqualTo("Euro");
+        assertThat(relay.get("out_amount").decimalValue()).isEqualByComparingTo("85.34");
+        assertThat(relay.get("ratio").decimalValue()).isEqualByComparingTo("1");
+    }
+
+    @Test
+    void R03_비율_0_9는_경보_그_아래와_같은_분과_같은_통화와_표에_없는_통화는_경보_없음() {
+        LocalDate d = LocalDate.of(2022, 9, 23);
+        String edge = newKey();          // 100 USD → 76.806 EUR = 비율 0.9 (포함)
+        String low = newKey();           // 100 USD → 76.805 EUR
+        String sameMinute = newKey();    // 같은 분에 받고 보냄
+        String sameCurrency = newKey();  // USD → USD
+        String unknown = newKey();       // 표에 없는 통화
+        transfer(newKey(), edge, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(edge, newKey(), d.atTime(9, 1), "76.806", "Euro", "76.806", "Euro");
+        transfer(newKey(), low, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(low, newKey(), d.atTime(9, 1), "76.805", "Euro", "76.805", "Euro");
+        transfer(newKey(), sameMinute, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(sameMinute, newKey(), d.atTime(9, 0), "85.34", "Euro", "85.34", "Euro");
+        transfer(newKey(), sameCurrency, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(sameCurrency, newKey(), d.atTime(9, 1), "100", "US Dollar", "100", "US Dollar");
+        transfer(newKey(), unknown, d.atTime(9, 0), "100", "Dinar", "100", "Dinar");
+        transfer(unknown, newKey(), d.atTime(9, 1), "85.34", "Euro", "85.34", "Euro");
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        assertThat(alertsOf(edge)).anyMatch(x -> "R03_FX_RELAY".equals(x.get("rule_id")));
+        for (String k : List.of(low, sameMinute, sameCurrency, unknown)) {
+            assertThat(alertsOf(k)).noneMatch(x -> "R03_FX_RELAY".equals(x.get("rule_id")));
+        }
+    }
+
+    @Test
+    void R03_DB에_저장된_기준값의_소수_자리를_잃지_않는다() {
+        // #리뷰: 기준값을 double 로 읽으면 0.099999999999999999 가 0.1 이 돼 비율 정확히 1.1 인 쌍이 잘못 들어간다.
+        // 11/2 는 다른 테스트가 쓰지 않는다. R03 v2 행을 잠깐 켜고 끝나면 v1 로 돌린다.
+        LocalDate d = LocalDate.of(2022, 11, 2);
+        String exact = newKey();    // 100 USD → 93.874 EUR = 비율 정확히 1.1 → 허용 오차 0.0999…9 면 밖
+        String inside = newKey();   // 100 USD → 93.873 EUR = 비율 1.09998… → 안
+        transfer(newKey(), exact, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(exact, newKey(), d.atTime(9, 1), "93.874", "Euro", "93.874", "Euro");
+        transfer(newKey(), inside, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(inside, newKey(), d.atTime(9, 1), "93.873", "Euro", "93.873", "Euro");
+        setActive("R03_FX_RELAY", 1, false);
+        jdbc.update("""
+                insert into ops.rules(rule_id, version, name, typology_hint, params, is_active, created_by, updated_by)
+                select rule_id, 2, name, typology_hint,
+                       jsonb_set(params, '{amount_tolerance}', '0.099999999999999999'::jsonb), true, 1, 1
+                from ops.rules where rule_id = 'R03_FX_RELAY' and version = 1""");
+        try {
+            runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+            assertThat(alertsOf(exact)).noneMatch(x -> "R03_FX_RELAY".equals(x.get("rule_id")));
+            assertThat(alertsOf(inside)).anyMatch(x -> "R03_FX_RELAY".equals(x.get("rule_id")));
+        } finally {
+            setActive("R03_FX_RELAY", 2, false);
+            setActive("R03_FX_RELAY", 1, true);
+        }
     }
 
     @Test

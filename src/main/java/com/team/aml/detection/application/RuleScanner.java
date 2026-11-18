@@ -5,6 +5,9 @@ import com.team.aml.detection.domain.FanEvidence;
 import com.team.aml.detection.domain.FanInRule;
 import com.team.aml.detection.domain.FanMinute;
 import com.team.aml.detection.domain.FanOutRule;
+import com.team.aml.detection.domain.FxRelayEvidence;
+import com.team.aml.detection.domain.FxRelayMinute;
+import com.team.aml.detection.domain.FxRelayRule;
 import com.team.aml.detection.domain.GatherScatterEvidence;
 import com.team.aml.detection.domain.GatherScatterMinute;
 import com.team.aml.detection.domain.GatherScatterRule;
@@ -35,7 +38,7 @@ public class RuleScanner {
      * 룰 PR 마다 ID 를 여기와 switch 에 추가하고, 남은 룰 중 마지막으로 머지되는 룰 PR 에서 이 목록과 건너뛰기를 지운다.
      */
     private static final Set<String> IMPLEMENTED =
-            Set.of(FanOutRule.RULE_ID, FanInRule.RULE_ID, GatherScatterRule.RULE_ID);
+            Set.of(FanOutRule.RULE_ID, FanInRule.RULE_ID, FxRelayRule.RULE_ID, GatherScatterRule.RULE_ID);
 
     private final RuleScanRepository scans;
     private final RuleScanRecorder recorder;
@@ -56,6 +59,7 @@ public class RuleScanner {
             int created = switch (rule.ruleId()) {
                 case FanOutRule.RULE_ID -> scanFanOut(batchRunId, date, rule);
                 case FanInRule.RULE_ID -> scanFanIn(batchRunId, date, rule);
+                case FxRelayRule.RULE_ID -> scanFxRelay(batchRunId, date, rule);
                 case GatherScatterRule.RULE_ID -> scanGatherScatter(batchRunId, date, rule);
                 default -> throw new IllegalStateException("구현되지 않은 룰이 켜져 있습니다: " + rule.ruleId());
             };
@@ -115,6 +119,29 @@ public class RuleScanner {
                     scans.fanInEvidence(m.accountKey(), start, end), scans.fanOutEvidence(m.accountKey(), start, end));
             scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), m.accountKey(), evidence.entityId(),
                     start, end, end, evidence.toRuleFacts(m.sendersNow(), m.receiversNow()), evidence.transactionIds()));
+            created++;
+        }
+        return created;
+    }
+
+    /** R03 — 중계 쌍을 완성하는 출금 분에, 1분 전 창에 쌍이 없으면 경보. 저장 전 쌍 검사(rules.md 2.1)가 어긋나면 만들지 않는다. */
+    private int scanFxRelay(long batchRunId, LocalDate date, ActiveRule rule) {
+        FxRelayRule fx = FxRelayRule.from(rule.params());
+        int created = 0;
+        for (FxRelayMinute m : scans.fxRelayMinutes(date, fx)) {
+            if (!fx.fires(m)) {
+                continue;
+            }
+            LocalDateTime start = fx.windowStart(m.minute());
+            LocalDateTime end = fx.windowEnd(m.minute());
+            FxRelayEvidence evidence = scans.fxRelayEvidence(m.accountKey(), start, end, fx);
+            if (!evidence.valid(fx)) {
+                log.warn("rule scan dropped alert failing path check rule_id={} reference_ts={} pairs={}",
+                        FxRelayRule.RULE_ID, end, evidence.pairs().size());
+                continue;
+            }
+            scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), m.accountKey(), evidence.entityId(),
+                    start, end, end, evidence.toRuleFacts(fx), evidence.transactionIds()));
             created++;
         }
         return created;
