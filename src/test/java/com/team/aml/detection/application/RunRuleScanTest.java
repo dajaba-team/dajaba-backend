@@ -37,8 +37,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 룰 스캔 R01·R02·R03·R06 (SCRUM-188·99·193·189). V011·V016 각 룰 v1 (96시간, R01 N=10·R02 N=5·R03 ±10%·R06 각각 5~100)로 돈다.
- * V016 의 R04·R05 는 켜져 있지만 구현 전이라 건너뛴다 (SCRUM-260 임시).
+ * 룰 스캔 R01·R02·R03·R05·R06 (SCRUM-188·99·193·194·189). V011·V016 각 룰 v1 (96시간, R01 N=10·R02 N=5·R03 ±10%·R05 중간 3곳·R06 각각 5~100)로 돈다.
+ * V016 의 R04 는 켜져 있지만 구현 전이라 건너뛴다 (SCRUM-260 임시).
  * 경보는 지울 수 없고 같은 날짜는 한 번만 성공하므로 테스트마다 날짜·계좌를 따로 쓰고, 단언은 그 계좌의 경보만 본다.
  */
 @Testcontainers
@@ -119,7 +119,7 @@ class RunRuleScanTest {
         assertThat(result.run().rowsIn()).isEqualTo(count(
                 "select count(*) from ops.transactions where ts >= '2022-09-02' and ts < '2022-09-03'"));
         assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId)
-                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R03_FX_RELAY", "R06_GATHER_SCATTER");   // rule_id 순, R04·R05 는 건너뜀
+                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R03_FX_RELAY", "R05_SCATTER_GATHER", "R06_GATHER_SCATTER");   // rule_id 순, R04 는 건너뜀
         assertThat(result.alertsByRule()).allSatisfy(r -> assertThat(r.ruleVersion()).isEqualTo(1));
     }
 
@@ -246,7 +246,7 @@ class RunRuleScanTest {
 
         assertThat(result.run().status()).isEqualTo(BatchStatus.SUCCEEDED);
         assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId)
-                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R03_FX_RELAY", "R06_GATHER_SCATTER");
+                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R03_FX_RELAY", "R05_SCATTER_GATHER", "R06_GATHER_SCATTER");
     }
 
     @Test
@@ -519,6 +519,69 @@ class RunRuleScanTest {
         } finally {
             setActive("R03_FX_RELAY", 2, false);
             setActive("R03_FX_RELAY", 1, true);
+        }
+    }
+
+    @Test
+    void R05_흩은_돈이_중간_계좌_3곳을_거쳐_한_계좌로_모이면_경보_1건이고_대표_경로만_paths에() {
+        LocalDate d = LocalDate.of(2022, 11, 5);   // 11/1~11/5 에 스캔하는 다른 테스트 계좌와 섞이지 않게 새 계좌만 쓴다
+        String s = newKey();
+        String t = accountWithEntity();
+        List<String> m = List.of(newKey(), newKey(), newKey());
+        long a0 = transfer(s, m.get(0), d.atTime(8, 0), "1", "US Dollar", "1", "US Dollar");    // M1 대표
+        long a0b = transfer(s, m.get(0), d.atTime(8, 30), "1", "US Dollar", "1", "US Dollar");  // M1 유효하지만 대표 아님
+        long a1 = transfer(s, m.get(1), d.atTime(9, 0), "1", "US Dollar", "1", "US Dollar");
+        long a2 = transfer(s, m.get(2), d.atTime(9, 5), "1", "US Dollar", "1", "US Dollar");
+        long b0 = transfer(m.get(0), t, d.atTime(10, 0), "1", "US Dollar", "1", "US Dollar");
+        long b1 = transfer(m.get(1), t, d.atTime(10, 1), "1", "US Dollar", "1", "US Dollar");
+        long b2 = transfer(m.get(2), t, d.atTime(10, 2), "1", "US Dollar", "1", "US Dollar");   // 세 번째 — 경보
+        transfer(m.get(2), t, d.atTime(11, 0), "1", "US Dollar", "1", "US Dollar");             // 참 유지 — 새 경보 없음
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        List<Map<String, Object>> r05 = alertsOf(t).stream()
+                .filter(x -> "R05_SCATTER_GATHER".equals(x.get("rule_id"))).toList();
+        assertThat(r05).singleElement().satisfies(alert -> {
+            assertThat(ts(alert.get("reference_ts"))).isEqualTo(d.atTime(10, 3));
+            assertThat(ts(alert.get("window_start"))).isEqualTo(d.minusDays(4).atTime(10, 3));
+            assertThat(alert.get("entity_id")).isEqualTo("E_" + t);
+            assertThat(linkedIds((Long) alert.get("id"))).containsExactlyInAnyOrder(a0, a0b, a1, a2, b0, b1, b2);
+            JsonNode facts = facts(alert);
+            assertThat(facts.get("source_account_key").asText()).isEqualTo(s);
+            assertThat(facts.get("intermediates").asInt()).isEqualTo(3);
+            assertThat(facts.get("paths").toString())
+                    .isEqualTo("[[" + a0 + "," + b0 + "],[" + a1 + "," + b1 + "],[" + a2 + "," + b2 + "]]");
+        });
+    }
+
+    @Test
+    void R05는_중간_계좌가_2곳이거나_같은_분이거나_출발과_도착이_같으면_경보_없음() {
+        LocalDate d = LocalDate.of(2022, 11, 8);
+        String s1 = newKey();   // 중간 계좌 2곳
+        String t1 = newKey();
+        for (int i = 0; i < 2; i++) {
+            String mid = newKey();
+            transfer(s1, mid, d.atTime(9, i), "1", "US Dollar", "1", "US Dollar");
+            transfer(mid, t1, d.atTime(10, i), "1", "US Dollar", "1", "US Dollar");
+        }
+        String s2 = newKey();   // 세 번째 중간 계좌는 같은 분에 받고 보냄
+        String t2 = newKey();
+        for (int i = 0; i < 3; i++) {
+            String mid = newKey();
+            transfer(s2, mid, d.atTime(9, 0), "1", "US Dollar", "1", "US Dollar");
+            transfer(mid, t2, i < 2 ? d.atTime(10, i) : d.atTime(9, 0), "1", "US Dollar", "1", "US Dollar");
+        }
+        String s3 = newKey();   // S → M1·M2·M3 → S (도착 = 출발)
+        for (int i = 0; i < 3; i++) {
+            String mid = newKey();
+            transfer(s3, mid, d.atTime(9, i), "1", "US Dollar", "1", "US Dollar");
+            transfer(mid, s3, d.atTime(10, i), "1", "US Dollar", "1", "US Dollar");
+        }
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        for (String t : List.of(t1, t2, s3)) {
+            assertThat(alertsOf(t)).noneMatch(x -> "R05_SCATTER_GATHER".equals(x.get("rule_id")));
         }
     }
 
