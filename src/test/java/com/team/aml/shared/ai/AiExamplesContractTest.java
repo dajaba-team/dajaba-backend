@@ -184,6 +184,81 @@ class AiExamplesContractTest {
         assertThat(dto.raw().toString()).isEqualTo(original.toString());   // model_focus 등 안 쓰는 칸도 원문에
     }
 
+    // --- SCRUM-291 질문 답변 예시 (규약 5.4) ----------------------------------------
+
+    @Test
+    void ask_request_roundtrip_and_of_summary_request_is_same_body() throws Exception {
+        JsonNode original = readExample("ask_request.json");
+        AskRequest dto = om.treeToValue(original, AskRequest.class);
+        assertThat(om.valueToTree(dto).toString()).isEqualTo(original.toString());
+        assertThat(dto.question()).isEqualTo("입금 상대가 몇 곳이야?");
+
+        // 요약 요청 6칸 + question — 요약 조립을 그대로 쓰는 편의 생성
+        CaseSummaryRequest summary = om.treeToValue(readExample("summary_request.json"), CaseSummaryRequest.class);
+        JsonNode viaOf = om.valueToTree(AskRequest.of(summary, dto.question()));
+        ObjectNode expected = (ObjectNode) om.valueToTree(summary);
+        expected.put("question", dto.question());
+        assertThat(viaOf).isEqualTo(expected);
+    }
+
+    @Test
+    void ask_request_keeps_question_whitespace() throws Exception {
+        CaseSummaryRequest summary = om.treeToValue(readExample("summary_request.json"), CaseSummaryRequest.class);
+        JsonNode sent = om.valueToTree(AskRequest.of(summary, "  몇 곳이야? \n"));
+        assertThat(sent.get("question").textValue()).isEqualTo("  몇 곳이야? \n");   // 자르지 않음(규약 5.4)
+    }
+
+    @Test
+    void ask_response_answered_fields_populated_and_raw_has_original() throws Exception {
+        JsonNode original = readExample("ask_response_answered.json");
+        WebClientAiClient.requireAskResponse(om.treeToValue(readExample("ask_request.json"), AskRequest.class), original);
+        AskResponse dto = om.treeToValue(withRaw(original), AskResponse.class);
+        assertThat(dto.producedAt()).isEqualTo("2026-11-27T02:10:00Z");
+        assertThat(dto.caseNo()).isEqualTo("CASE-2022-000057");
+        assertThat(dto.generationId()).isEqualTo("g-91ab33c0");
+        assertThat(dto.status()).isEqualTo(AskStatus.ANSWERED);
+        assertThat(dto.kind()).isEqualTo(AskKind.FACT);
+        assertThat(dto.outOfScopeReason()).isNull();
+        assertThat(dto.answer()).isEqualTo("입금 상대 계좌는 3개예요.");
+        assertThat(dto.cites()).containsExactly("counterparties.count");
+        assertThat(dto.evidenceIds()).containsExactly(104221L, 104233L, 104301L);
+        assertThat(dto.codeChecks().get(0).get("match").asBoolean()).isTrue();
+        AskGenerationMeta meta = dto.generationMeta();
+        assertThat(meta.llmModel()).isEqualTo("(API가 돌려준 모델 ID)");
+        assertThat(meta.promptVersion()).isEqualTo("ask_answer_v1");
+        assertThat(meta.planPromptVersion()).isEqualTo("ask_plan_v1");
+        assertThat(meta.bundles()).containsExactly("counterparties");
+        assertThat(meta.serverVersion()).isEqualTo("a1b2c3d");
+        assertThat(meta.tokensIn()).isEqualTo(1450);
+        assertThat(meta.tokensOut()).isEqualTo(120);
+        assertThat(meta.latencyMs()).isEqualTo(6200);
+        assertThat((JsonNode) om.valueToTree(meta)).isEqualTo(original.get("generation_meta"));   // 8칸 빠짐·남음 없음
+        assertThat(dto.raw().toString()).isEqualTo(original.toString());
+    }
+
+    @Test
+    void ask_response_other_statuses_read_into_dto() throws Exception {
+        AskRequest sent = om.treeToValue(readExample("ask_request.json"), AskRequest.class);
+        record Want(String file, AskStatus status, AskKind kind, OutOfScopeReason reason, String promptVersion) {}
+        for (Want w : List.of(
+                new Want("ask_response_no_data.json", AskStatus.NO_DATA, AskKind.FACT, null, "ask_answer_v1"),
+                new Want("ask_response_unverified.json", AskStatus.UNVERIFIED, AskKind.FACT, null, "ask_answer_v1"),
+                new Want("ask_response_out_of_scope.json", AskStatus.OUT_OF_SCOPE, null, OutOfScopeReason.JUDGMENT, null))) {
+            JsonNode original = readExample(w.file());
+            WebClientAiClient.requireAskResponse(sent, original);
+            AskResponse dto = om.treeToValue(withRaw(original), AskResponse.class);
+            assertThat(dto.status()).as(w.file()).isEqualTo(w.status());
+            assertThat(dto.kind()).as(w.file()).isEqualTo(w.kind());
+            assertThat(dto.outOfScopeReason()).as(w.file()).isEqualTo(w.reason());
+            assertThat(dto.answer()).as(w.file()).isNull();
+            assertThat(dto.cites()).as(w.file()).isEmpty();
+            assertThat(dto.evidenceIds()).as(w.file()).isEmpty();
+            assertThat(dto.generationMeta().promptVersion()).as(w.file()).isEqualTo(w.promptVersion());
+            assertThat(dto.generationMeta().planPromptVersion()).as(w.file()).isEqualTo("ask_plan_v1");
+            assertThat(dto.raw().toString()).as(w.file()).isEqualTo(original.toString());
+        }
+    }
+
     /** contracts/MANIFEST.sha256 = AI 리포 기준 커밋의 해시. 사본이 몰래 바뀌거나 MANIFEST 에 빠진 예시가 있으면 깨진다. */
     @Test
     void manifest_hashes_match_copies_and_cover_every_example() throws Exception {

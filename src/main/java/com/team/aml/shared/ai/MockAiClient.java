@@ -147,6 +147,60 @@ public class MockAiClient implements AiClient {
                 raw.get("code_checks"), new StrDraftResponse.GenerationMetaView("mock-0.0.1"), raw);
     }
 
+    /**
+     * 질문 낱말 → (상태, kind, 사유). 위에서부터 처음 맞는 것, 없으면 ANSWERED·FACT (SCRUM-291 — 화면 4종을 목업으로 보게).
+     * 예시 JSON(`contracts/examples`)은 리포 루트라 실행 파일에 없어 읽지 않는다.
+     */
+    private record AskRule(String word, AskStatus status, AskKind kind, OutOfScopeReason reason) {}
+
+    private static final List<AskRule> ASK_RULES = List.of(
+            new AskRule("수정", AskStatus.OUT_OF_SCOPE, null, OutOfScopeReason.EDIT_REQUEST),
+            new AskRule("다른 케이스", AskStatus.OUT_OF_SCOPE, null, OutOfScopeReason.OUTSIDE_CASE),
+            new AskRule("판단", AskStatus.OUT_OF_SCOPE, null, OutOfScopeReason.JUDGMENT),
+            new AskRule("없는", AskStatus.NO_DATA, AskKind.FACT, null),
+            new AskRule("불일치", AskStatus.UNVERIFIED, AskKind.FACT, null),
+            new AskRule("왜", AskStatus.ANSWERED, AskKind.WHY, null));
+
+    @Override
+    public AskResponse ask(AskRequest request) {
+        String question = request.question() == null ? "" : request.question();
+        AskRule rule = ASK_RULES.stream().filter(r -> question.contains(r.word())).findFirst()
+                .orElse(new AskRule("", AskStatus.ANSWERED, AskKind.FACT, null));
+        boolean answered = rule.status() == AskStatus.ANSWERED;
+        boolean outOfScope = rule.status() == AskStatus.OUT_OF_SCOPE;
+
+        String producedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+        String generationId = "g-mock" + UUID.randomUUID().toString().substring(0, 4);
+        List<Long> sentEvidence = request.evidenceTransactionIds() == null ? List.of() : request.evidenceTransactionIds();
+        String answer = answered ? "(목업) 입금 상대 계좌는 3개예요." : null;
+        List<String> cites = answered ? List.of("counterparties.count") : List.of();
+        List<Long> evidenceIds = answered && !sentEvidence.isEmpty() ? List.of(sentEvidence.get(0)) : List.of();
+        String promptVersion = outOfScope ? null : "mock-ask-answer";
+        List<String> bundles = outOfScope ? List.of() : List.of("counterparties");
+
+        ObjectNode raw = om.createObjectNode()
+                .put("produced_at", producedAt)
+                .put("case_no", request.caseNo())
+                .put("generation_id", generationId)
+                .put("status", rule.status().name())
+                .put("kind", rule.kind() == null ? null : rule.kind().name())
+                .put("out_of_scope_reason", rule.reason() == null ? null : rule.reason().name())
+                .put("answer", answer);
+        cites.forEach(raw.putArray("cites")::add);
+        evidenceIds.forEach(raw.putArray("evidence_ids")::add);
+        com.fasterxml.jackson.databind.node.ArrayNode checks = raw.putArray("code_checks");
+        if (answered || rule.status() == AskStatus.UNVERIFIED) {
+            checks.addObject().put("check", "COUNT_MATCH").putNull("section")
+                    .put("draft_value", answered ? "3개" : "4개").put("source_value", "counterparties.count=3")
+                    .put("match", answered).put("reason", answered ? null : "MISMATCH");
+        }
+        AskGenerationMeta meta = new AskGenerationMeta("mock-0.0.1", promptVersion, "mock-ask-plan", bundles,
+                "mock", 0, 0, 0);
+        raw.set("generation_meta", om.valueToTree(meta));
+        return new AskResponse(producedAt, request.caseNo(), generationId, rule.status(), rule.kind(), rule.reason(),
+                answer, cites, evidenceIds, checks, meta, raw);
+    }
+
     @Override
     public HealthResponse health() {
         return new HealthResponse("ok", "ok", "ok", "mock", "mock-0.0.1", "mock-f0", "mock-r0");

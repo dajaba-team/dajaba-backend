@@ -26,6 +26,7 @@ class AiHealthCheckTest {
             @Override public StrDraftResponse createDraft(StrDraftRequest request) { throw new UnsupportedOperationException(); }
             @Override public VerifyResponse verify(String draftId, VerifyRequest request) { throw new UnsupportedOperationException(); }
             @Override public CaseSummaryResponse caseSummary(CaseSummaryRequest request) { throw new UnsupportedOperationException(); }
+            @Override public AskResponse ask(AskRequest request) { throw new UnsupportedOperationException(); }
             @Override public HealthResponse health() { return h; }
         };
         return new AiHealthCheck(new StaticListableBeanFactory(Map.of("aiClient", client)).getBeanProvider(AiClient.class));

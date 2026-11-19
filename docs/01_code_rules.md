@@ -82,7 +82,7 @@
 
 ## 8. 하드코딩 [PR 템플릿]
 
-비밀값은 `.env`·환경변수, 설정은 `application.yml`의 `aml.*`(`AmlProperties`). 코드에 매직 넘버·URL·키를 박지 않아요. 지금 있는 설정 키: `aml.ai.base-url`, `aml.ai.internal-key`, `aml.ai.timeout-seconds`(90), `aml.ai.max-batch`(500), `aml.dataset-dir`, `aml.case-policy.version`·`low-to-medium`·`medium-to-high`(기본값 없음 — 케이스 생성 경계값, SCRUM-105). [코드 `application.yml`]
+비밀값은 `.env`·환경변수, 설정은 `application.yml`의 `aml.*`(`AmlProperties`). 코드에 매직 넘버·URL·키를 박지 않아요. 지금 있는 설정 키: `aml.ai.base-url`, `aml.ai.internal-key`, `aml.ai.timeout-seconds`(90), `aml.ai.ask-timeout-seconds`(30 — 질문 답변만, SCRUM-291), `aml.ai.ask-enabled`(false, 환경 변수 `AML_AI_ASK_ENABLED`), `aml.ai.max-batch`(500), `aml.dataset-dir`, `aml.case-policy.version`·`low-to-medium`·`medium-to-high`(기본값 없음 — 케이스 생성 경계값, SCRUM-105). [코드 `application.yml`]
 
 ## 9. 테스트 [레퍼런스 §6, PR 템플릿]
 
