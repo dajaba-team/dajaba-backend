@@ -16,8 +16,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * 세션은 userId 와 login_id 를 둘 다 넣은 주체로 찾는다 — 메모리(SessionRegistryImpl)는 AppUserDetails.equals(userId)로,
  * Redis(SpringSessionBackedSessionRegistry)는 principal name(= login_id) 색인으로 찾기 때문 (SCRUM-273).
  * login_id 는 부르는 쪽 트랜잭션 안에서 읽고(대상 행이 잠긴 상태), 끊기만 커밋 뒤에 한다.
- * Redis 가 안 되면 커밋 뒤 끊기가 실패한다 → SessionStoreUnavailableException → 503 SESSION_STORE_UNAVAILABLE.
- * DB 변경은 이미 커밋됐다. 그 세션은 Redis 가 돌아오기 전엔 못 쓰지만 돌아오면 다시 쓰여서, 관리자가 한 번 더 바꿔 끊는다(08_decisions).
+ * Redis 가 안 되면 커밋 뒤 끊기가 실패한다 → SessionStoreUnavailableException.afterCommit → 503 SESSION_STORE_UNAVAILABLE,
+ * 메시지는 "변경은 저장됐지만 … 끊지 못했습니다", details.change_saved=true. DB 변경은 이미 커밋됐다.
+ * 그 세션은 Redis 가 돌아오면 다시 쓰인다. 같은 버튼을 다시 누르면 끊기지 않는다(같은 역할 400 · 이미 비활성 200) —
+ * 다른 값으로 바꿨다 되돌리거나 초기화를 한 번 더 해야 끊긴다(04 §7, 08_decisions 미결 34).
  */
 @Component
 public class UserSessions {
@@ -58,7 +60,7 @@ public class UserSessions {
             }
         } catch (RuntimeException e) {
             if (SessionStoreUnavailableException.isCausedBy(e)) {
-                throw new SessionStoreUnavailableException(e);
+                throw SessionStoreUnavailableException.afterCommit(e);
             }
             throw e;
         }

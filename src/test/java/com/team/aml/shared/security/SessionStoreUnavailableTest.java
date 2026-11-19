@@ -59,7 +59,22 @@ class SessionStoreUnavailableTest {
 
         assertThatThrownBy(TransactionSynchronizationUtils::triggerAfterCommit)
                 .isInstanceOf(SessionStoreUnavailableException.class)
-                .extracting(e -> ((SessionStoreUnavailableException) e).errorType())
-                .isEqualTo("RedisConnectionFailureException");
+                .satisfies(e -> {
+                    SessionStoreUnavailableException s = (SessionStoreUnavailableException) e;
+                    assertThat(s.errorType()).isEqualTo("RedisConnectionFailureException");
+                    assertThat(s.changeSaved()).as("DB 변경은 이미 커밋됨").isTrue();
+                    assertThat(s.getMessage()).isEqualTo(SessionStoreUnavailableException.MESSAGE_CHANGE_SAVED);
+                });
+    }
+
+    @Test
+    void 경계_원인_사슬이_A_B_A로_돌아도_끝난다() {
+        RuntimeException a = new RuntimeException("a");
+        RuntimeException b = new RuntimeException("b", a);
+        a.initCause(b);
+
+        assertThat(SessionStoreUnavailableException.isCausedBy(a)).isFalse();
+        assertThat(SessionStoreUnavailableException.find(a)).isNull();
+        assertThat(SessionStoreUnavailableException.errorTypeOf(a)).isEqualTo("RuntimeException");
     }
 }

@@ -62,7 +62,7 @@
 | 권한 없음 | 403 | `FORBIDDEN` |
 | 없는 경로 (`NoResourceFoundException`, 로그인한 `/api/**` 요청) | 404 | `NOT_FOUND` — "요청한 주소가 없습니다", `details` `{}`(경로를 다시 넣지 않음), 경고 한 줄(`not found method=… uri=…`) [SCRUM-157] |
 | 안 되는 메서드 (`HttpRequestMethodNotSupportedException`) | 405 | `METHOD_NOT_ALLOWED` — "지원하지 않는 요청 방식입니다", `details` `{}`, `Allow` 헤더에 허용 메서드(Spring이 모르면 헤더 없음), 경고 한 줄(`method not allowed method=… uri=…`) [SCRUM-157] |
-| 세션 저장소(Redis) 장애 — 연결 실패·시간 초과·쓰기 거부(maxmemory `noeviction` OOM). Redis 세션을 켰을 때만 | 503 | `SESSION_STORE_UNAVAILABLE` — "로그인 세션 저장소에 연결할 수 없습니다. 잠시 뒤 다시 시도하세요", `details` `{}`. Spring Session 필터 바깥의 `SessionStoreFailureFilter`가 내요(`GlobalExceptionHandler`는 다시 던짐 — 응답을 쓰면 세션 저장을 또 시도해서). 경고 한 줄 `session store unavailable error={오류 클래스} method=… uri=…` — 호스트·세션 ID·원인 메시지 없음 [SCRUM-273] |
+| 세션 저장소(Redis) 장애 — 연결 실패·시간 초과·쓰기 거부(maxmemory `noeviction` OOM). Redis 세션을 켰을 때만 | 503 | `SESSION_STORE_UNAVAILABLE` — "로그인 세션 저장소에 연결할 수 없습니다. 잠시 뒤 다시 시도하세요", `details` `{}`. 관리자 변경이 커밋된 뒤 세션 끊기만 실패했으면 메시지 "변경은 저장됐지만 세션 저장소에 연결할 수 없어 그 사용자의 로그인을 끊지 못했습니다", `details` `{"change_saved": true}`(04 §7). Spring Session 필터 바깥의 `SessionStoreFailureFilter`가 내요(`GlobalExceptionHandler`는 다시 던짐 — 응답을 쓰면 세션 저장을 또 시도해서). 응답을 비울 때 `X-Request-Id`·CORS 헤더(`Access-Control-*`·`Vary`)는 다시 붙여요(다른 출처 프론트가 본문을 읽게). 경고 한 줄 `session store unavailable error={오류 클래스} method=… uri=…` — 호스트·세션 ID·원인 메시지 없음 [SCRUM-273] |
 | 그 밖 (위 어디에도 안 걸린 진짜 처리 안 된 예외만) | 500 | `INTERNAL_ERROR`, 메시지는 "알 수 없는 오류" 고정, 스택은 로그에만 |
 
 `/api/**` 밖은 `denyAll`이라 없는 경로여도 로그인 403 `FORBIDDEN`·비로그인 401 `UNAUTHENTICATED`예요. `/api/**` 안에서도 비로그인이면 404보다 401이 먼저예요(없는 주소인지 알려 주지 않음). [SCRUM-157]
