@@ -2,10 +2,12 @@ package com.team.aml.detection.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.team.aml.detection.domain.CycleRule;
 import com.team.aml.detection.domain.DatasetNotLoadedException;
 import com.team.aml.detection.domain.DateOutOfRangeException;
 import com.team.aml.detection.domain.InvalidRuleParamsException;
 import com.team.aml.detection.domain.NoActiveRulesException;
+import com.team.aml.detection.domain.RuleScanRepository;
 import com.team.aml.shared.batch.BatchAlreadyDoneException;
 import com.team.aml.shared.batch.BatchRunningException;
 import com.team.aml.shared.batch.BatchStatus;
@@ -19,6 +21,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -71,6 +75,12 @@ class RunRuleScanTest {
 
     @Autowired
     ObjectMapper om;
+
+    @Autowired
+    RuleScanRepository scans;
+
+    @Autowired
+    PlatformTransactionManager transactionManager;
 
     private static Long sourceFileId;
 
@@ -730,6 +740,25 @@ class RunRuleScanTest {
             assertThat(facts(alert).get("paths")).hasSize(40);
             assertThat(linkedIds((Long) alert.get("id"))).hasSize(41);
         });
+    }
+
+    @Test
+    void R04_고리_조회_동안만_merge_join을_끄고_끝나면_되돌린다() {   // SCRUM-311 — 같은 스캔의 다른 룰 쿼리에 번지지 않게
+        LocalDate d = LocalDate.of(2022, 11, 14);
+        String a = newKey();
+        String b = newKey();
+        transfer(a, b, d.atTime(1, 0), "1", "US Dollar", "1", "US Dollar");
+        transfer(b, a, d.atTime(1, 5), "1", "US Dollar", "1", "US Dollar");
+        List<String> during = new ArrayList<>();
+
+        String after = new TransactionTemplate(transactionManager).execute(status -> {
+            scans.forEachCycleGroup(d.atStartOfDay(), d.plusDays(1).atStartOfDay(), new CycleRule(96, 4),
+                    group -> during.add(jdbc.queryForObject("show enable_mergejoin", String.class)));
+            return jdbc.queryForObject("show enable_mergejoin", String.class);
+        });
+
+        assertThat(during).containsExactly("off");   // 고리 1개 = 묶음 1개
+        assertThat(after).isEqualTo("on");
     }
 
     private List<Map<String, Object>> r04Of(String accountKey) {
