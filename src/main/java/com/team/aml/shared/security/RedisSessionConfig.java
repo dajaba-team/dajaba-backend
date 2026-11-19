@@ -35,6 +35,9 @@ import org.springframework.session.security.SpringSessionBackedSessionRegistry;
 @Import(RedisAutoConfiguration.class)
 public class RedisSessionConfig {
 
+    /** Spring Session(indexed)이 만드는 키 공간 이벤트 구독 컨테이너의 빈 이름. 이것만 비운다. */
+    static final String SESSION_LISTENER_CONTAINER = "springSessionRedisMessageListenerContainer";
+
     @Bean
     public SessionRegistry sessionRegistry(FindByIndexNameSessionRepository<? extends Session> sessions) {
         return new SpringSessionBackedSessionRegistry<>(sessions);
@@ -43,13 +46,15 @@ public class RedisSessionConfig {
     /**
      * Spring Session 이 만드는 키 공간 이벤트 구독 컨테이너를 구독 없는 빈 컨테이너로 바꾼다(위 이유).
      * 구독할 주제가 없으면 컨테이너는 시작해도 Redis 에 붙지 않는다. 시작 끄기 설정은 컨테이너에 없다.
+     * 빈 이름으로 Spring Session 것만 바꾼다 — 나중에 다른 Redis 구독을 더해도 그건 그대로 받는다.
      */
     @Bean
     static BeanPostProcessor sessionEventSubscriptionOff() {
         return new BeanPostProcessor() {
             @Override
             public Object postProcessBeforeInitialization(Object bean, String beanName) {
-                if (bean instanceof RedisMessageListenerContainer subscribing) {
+                if (SESSION_LISTENER_CONTAINER.equals(beanName)
+                        && bean instanceof RedisMessageListenerContainer subscribing) {
                     RedisMessageListenerContainer idle = new RedisMessageListenerContainer();
                     idle.setConnectionFactory(subscribing.getConnectionFactory());
                     idle.setBeanName(beanName);

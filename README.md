@@ -43,7 +43,7 @@ swagger에서 **`POST /api/v1/auth/login`** 본문 `{"login_id": "inv01", "passw
 | `AML_CASE_POLICY_MEDIUM_TO_HIGH` | 점수 경계 MEDIUM → HIGH | — | — | 위와 같음 |
 | `AML_RABBITMQ_ENABLED` | RabbitMQ 작업 큐 켜기(`true`)·끄기(`false`). 끄면 케이스 생성 등은 앱 안 실행기로 — 지금과 같아요 (SCRUM-276) | — | — | `false` |
 | `RABBITMQ_HOST` · `RABBITMQ_PORT` | RabbitMQ 주소 | — | — | compose 앱 `rabbitmq`(고정) · IDE `localhost`·`5672` |
-| `AML_SESSION_REDIS_ENABLED` | 로그인 세션을 Redis(db 0)에(`true`)·앱 메모리에(`false`). 끄면 지금과 같아요 — 앱을 다시 띄우면 모두 로그아웃 (SCRUM-273) | — | — | `false` |
+| `AML_SESSION_REDIS_ENABLED` | 로그인 세션을 Redis(db 0)에(`true`)·앱 메모리에(`false`). **`true`/`false`만** — 다른 값(오타 `ture` 등)이면 두 설정이 다 안 걸려 `SessionRegistry` 빈이 없다는 기동 실패가 나요. 끄면 지금과 같아요 — 앱을 다시 띄우면 모두 로그아웃 (SCRUM-273) | — | — | `false` |
 | `REDIS_HOST` · `REDIS_PORT` | Redis 주소(세션을 켰을 때만 씀) | — | — | compose 앱 `redis`(고정) · IDE `localhost`·`6379` |
 | 참고: `SPRING_PROFILES_ACTIVE` | 프로파일 | — | — | compose 앱은 `local` 고정 · IDE는 실행 설정에 `local` |
 
