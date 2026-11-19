@@ -1,5 +1,7 @@
 package com.team.aml.shared.security;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.core.session.SessionInformation;
 import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.stereotype.Component;
@@ -20,6 +22,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Component
 public class UserSessions {
 
+    private static final Logger log = LoggerFactory.getLogger(UserSessions.class);
+
     private final SessionRegistry registry;
     private final LoginIdLookup loginIds;
 
@@ -34,7 +38,9 @@ public class UserSessions {
         }
         String loginId = loginIds.loginIdOf(userId).orElse(null);
         if (loginId == null) {
-            return;   // 없는 사용자 — 로그인한 적도, 끊을 세션도 없다
+            // 부르는 쪽이 대상 행을 잠근 뒤라 사실상 안 생긴다. 생기면 "안 끊겼는데 흔적 없음"이 되지 않게 남긴다
+            log.warn("session expire skipped: user not found userId={}", userId);
+            return;
         }
         AppUserDetails principal = new AppUserDetails(userId, loginId, null, null);
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {

@@ -16,6 +16,8 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
+import org.springframework.context.ApplicationContext;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
@@ -92,6 +94,7 @@ class RedisSessionDbTest {
     @Autowired StringRedisTemplate redisTemplate;
     @Autowired RedisConnectionFactory connections;
     @Autowired FindByIndexNameSessionRepository<? extends Session> sessions;
+    @Autowired ApplicationContext context;
 
     // --- 저장 위치·쿠키 --------------------------------------------------------
 
@@ -111,6 +114,14 @@ class RedisSessionDbTest {
         assertThat(redisTemplate.getExpire("aml:session:sessions:" + sessionId)).isBetween(30 * 60L, 35 * 60L);   // 30m + 5분
         assertThat(redis.execInContainer("redis-cli", "-a", REDIS_PASSWORD, "--no-auth-warning", "-n", "1", "dbsize")
                 .getStdout().trim()).isEqualTo("0");   // db 1 은 Langfuse 몫 — 세션은 안 들어감
+    }
+
+    @Test
+    void 정상_Spring_Session_구독_컨테이너는_이름이_맞고_구독하지_않는다() {
+        // 빈 이름이 바뀌면 비우기가 조용히 안 걸린다 — 이름으로 찾아 확인 (#143 리뷰)
+        RedisMessageListenerContainer c = context.getBean(
+                RedisSessionConfig.SESSION_LISTENER_CONTAINER, RedisMessageListenerContainer.class);
+        assertThat(c.isListening()).isFalse();
     }
 
     @Test
