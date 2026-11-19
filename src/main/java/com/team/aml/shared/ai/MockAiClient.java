@@ -38,7 +38,7 @@ public class MockAiClient implements AiClient {
             "SUBJECT", "DATE", "PLACE", "INSTRUMENT", "METHOD", "GROUNDS", "OPINION");
     /** 해시용 기본 ObjectMapper — 앱 설정(들여쓰기 등)이 해시에 끼지 않게 NarrativeHash 처럼 새로 만든다. */
     private static final ObjectMapper HASH_JSON = new ObjectMapper();
-    /** 해시 단락 순서 — StrSection 선언 순서(V1 6섹션 → V2 7항목). 검증 목업 해시용. */
+    /** 해시 단락 순서 — StrSection 선언 순서(V1 6섹션 → V2 7항목). 검증 목업 해시용. StrSection 바꾸면 여기도 */
     private static final List<String> SECTION_ORDER = List.of(
             "SUMMARY", "WHO", "WHAT_WHEN_WHERE", "HOW", "WHY_SUSPICIOUS", "CONCLUSION",
             "SUBJECT", "DATE", "PLACE", "INSTRUMENT", "METHOD", "GROUNDS", "OPINION");
