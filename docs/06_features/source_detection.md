@@ -91,14 +91,14 @@
 룰 명세는 준혁이 관리해요. 준영의 학습용 경보와 `expected.json`으로 건수·거래 ID를 맞춰 봐요.
 
 **`rule_facts.paths` (R04·R05)** [ML 규약 §2.4] — 경로별 실제 거래 ID의 시간순 배열(`[[…],[…]]`)이에요.
-- 합집합 = `transaction_ids`예요.
+- 합집합 = `transaction_ids`예요(R04). R05는 합집합 ⊆ `transaction_ids`예요.
 - R04는 모든 고리가 대표 계좌에서 시작해 같은 계좌로 돌아와요.
-- 창 안의 **모든 유효 경로**를 담아요. 9/1~9/10 기준 경보당 최대 경로는 R04 16개, R05 106개예요.
+- R04는 창 안의 **모든 유효 경로**를 담아요(9/1~9/10 경보당 최대 16개). R05는 중간 계좌 Mᵢ마다 대표 경로 하나를 담고, 고른 출발 계좌의 모든 유효 경로 거래는 `transaction_ids`에 넣어요(`rules.md` R05).
 - 경로를 임의로 재배열·삭제하지 않아요.
 
 **룰 엔진 = 두 단계** [레퍼런스 §6.1 ③]
 1. **집계는 SQL**(`RuleScanJdbcRepository`): R02는 그날 입금이 있었던 (계좌, 분 E)마다 지금 창 `[E+1분-H, E+1분)`과 1분 전 창 `[E-H, E)`의 서로 다른 송금 계좌 수, R01은 그날 송금한 (계좌, 분 E)마다 같은 두 창의 서로 다른 수신 계좌 수(H = `params.window_hours`, 같은 SQL에 방향만 바꿔 씀). R06은 그날 입금이나 출금이 있었던 (계좌, 분 E)마다 같은 두 창의 송신·수신 계좌 수. R03은 그날 출금마다 그 계좌의 창 안 입금과 중계 쌍(늦은 분·다른 통화·USD 환산 ±10%)이 되는지 봐요. R05는 엣지에서 그날 받은 거래가 있는 T마다 S→M·M→T가 시간순으로 가능한 M이 N 이상인 (S, T) 후보를 찾아 그 거래를 가져와요. 하루 범위에서도 N이 안 되는 계좌, 그리고 그날 모든 분의 1분 전 창에 공통으로 들어가는 구간에서 이미 N 이상인 계좌(거짓→참이 될 수 없음)는 먼저 걸러요 — 결과는 같고 대형 계좌를 분마다 다시 세지 않아요(9/5 R01 6분 → 5초)
-2. **판정은 Java**: `FanInRule`·`FanOutRule.fires(FanMinute)` — 지금 ≥ N이고 1분 전 < N(거짓→참)일 때만 경보 1건. R06 `GatherScatterRule.fires(GatherScatterMinute)` — 송신·수신 계좌 수가 둘 다 하한~상한 안이 되는 거짓→참. R03 `FxRelayRule.fires(FxRelayMinute)` — 쌍을 완성하는 출금 분에 1분 전 창에 쌍이 없을 때만. R05 `ScatterGatherRule.alerts` — 그날 M→T가 있는 분 E마다 중간 계좌 N 이상인 S가 생길 때만(1분 전 창엔 없을 때), 대표 경로·근거 거래도 여기서. 기준값(`window_hours`·`min_distinct_senders`/`min_distinct_receivers`)이 없거나 정수가 아니거나 1 미만이면 409 `INVALID_RULE_PARAMS` — 기본값으로 조용히 돌지 않아요 [SCRUM-99]
+2. **판정은 Java**: `FanInRule`·`FanOutRule.fires(FanMinute)` — 지금 ≥ N이고 1분 전 < N(거짓→참)일 때만 경보 1건. R06 `GatherScatterRule.fires(GatherScatterMinute)` — 송신·수신 계좌 수가 둘 다 하한~상한 안이 되는 거짓→참. R03 `FxRelayRule.fires(FxRelayMinute)` — 쌍을 완성하는 출금 분에 1분 전 창에 쌍이 없을 때만. R05 `ScatterGatherRule.alerts` — 그날 M→T가 있는 분 E마다 중간 계좌 N 이상인 S가 생길 때만(1분 전 창엔 없을 때), 대표 경로·근거 거래도 여기서. 기준값(`window_hours`·`min_distinct_senders`/`min_distinct_receivers`·R05 `min_intermediates`)이 없거나 정수가 아니거나 1 미만이면 409 `INVALID_RULE_PARAMS` — 기본값으로 조용히 돌지 않아요 [SCRUM-99]
 - 룰별 조건·창·기준값·`rule_facts`는 룰 명세 `rules.md`(SCRUM-73)가 기준이에요.
 
 **룰 스캔 — 구현됨 (SCRUM-99 R02, SCRUM-188 R01, SCRUM-189 R06, SCRUM-193 R03, SCRUM-194 R05)** `POST /api/v1/admin/batches/rule-scan?date=` → 200 `{batch_run_id, batch_type, batch_date, status, rows_in(그날 거래 수), rows_out(경보 수), alerts_by_rule[{rule_id, rule_version, alert_count}], started_at, finished_at}`

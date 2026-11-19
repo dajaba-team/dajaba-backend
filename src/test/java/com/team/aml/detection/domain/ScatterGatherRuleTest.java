@@ -98,6 +98,16 @@ class ScatterGatherRuleTest {
     }
 
     @Test
+    void 중간_계좌_수가_같으면_계좌_키_순으로_앞_S() {   // #139 리뷰 — B 를 먼저 넣어도 A
+        List<ScatterGatherLeg> legs = new ArrayList<>(fan("B", 3, D));
+        legs.addAll(fan("A", 3, D));
+        assertThat(rule.alerts(legs, D)).singleElement().satisfies(a -> {
+            assertThat(a.source()).isEqualTo("A");
+            assertThat(a.paths()).allSatisfy(p -> assertThat(p.get(0).source()).isEqualTo("A"));
+        });
+    }
+
+    @Test
     void 출발과_도착이_같거나_경로가_끊기면_검사_실패() {
         ScatterGatherAlert ok = rule.alerts(fan("S", 3, D), D).get(0);
         ScatterGatherAlert sameEnds = new ScatterGatherAlert("S", ok.minute(), "S", ok.paths(), ok.transactionIds());
