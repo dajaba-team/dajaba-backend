@@ -130,10 +130,39 @@ services:
 
 **문제 해결** — elasticsearch가 unhealthy이고 로그에 `flood stage disk watermark [95%] exceeded`가 보이면 Docker 디스크가 찬 거예요(ES가 `elastic` 계정 인증까지 못 해요). `docker system df`로 확인하고 `docker builder prune`(빌드 캐시)로 비우거나 Docker Desktop 설정의 디스크 한도를 늘린 뒤 `docker compose restart elasticsearch`.
 
-**ClickHouse 예전 로그 테이블 정리 — 11/18(SCRUM-287) 전에 ops를 띄운 적 있으면 한 번만** — 메모리를 아끼려고 Langfuse가 읽지 않는 시스템 로그 7개를 `ops/clickhouse/low-memory.xml`에서 껐어요. 그런데 그전에 만들어진 테이블은 볼륨에 남아서, ClickHouse가 예전 파트를 계속 합치느라 메모리를 써요(그러면 `memory limit exceeded`가 나고 Langfuse 기록이 버려져요). clickhouse를 띄운 상태에서 아래를 한 번 실행해요. 비밀번호는 컨테이너 환경 변수를 읽어서 화면에 찍히지 않아요. **새 볼륨으로 처음 띄우는 사람은 이 테이블이 생기지 않으니 필요 없어요.**
+**ClickHouse 예전 로그 테이블 정리 — 11/18(SCRUM-287) 전에 ops를 띄운 적 있으면 한 번만** — 메모리를 아끼려고 Langfuse가 읽지 않는 시스템 로그 7개를 `ops/clickhouse/low-memory.xml`에서 껐어요. 그런데 그전에 만들어진 테이블은 볼륨에 남아서, ClickHouse가 예전 파트를 계속 합치느라 메모리를 써요(그러면 `memory limit exceeded`가 나고 Langfuse 기록이 버려져요). **새 볼륨으로 처음 띄우는 사람은 이 테이블이 생기지 않으니 필요 없어요.** 순서가 중요해요:
+
+1. develop을 받은 뒤 **먼저** 새 설정으로 ClickHouse를 다시 띄워요.
+2. **그다음** 아래 DROP 명령을 한 번 실행해요(두 번 돌려도 괜찮아요 — `IF EXISTS`). 비밀번호는 컨테이너 환경 변수를 읽어서 화면에 찍히지 않아요.
+
+거꾸로 하면(옛 설정으로 도는 서버에서 DROP) 아직 꺼지지 않은 로그가 다음 기록 때 테이블을 다시 만들어요.
+
+```bash
+docker compose --profile ops up -d --force-recreate clickhouse
+```
 
 ```bash
 docker compose --profile ops exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery -q "DROP TABLE IF EXISTS system.trace_log SYNC; DROP TABLE IF EXISTS system.text_log SYNC; DROP TABLE IF EXISTS system.opentelemetry_span_log SYNC; DROP TABLE IF EXISTS system.asynchronous_metric_log SYNC; DROP TABLE IF EXISTS system.metric_log SYNC; DROP TABLE IF EXISTS system.latency_log SYNC; DROP TABLE IF EXISTS system.processors_profile_log SYNC"'
+```
+
+확인 — ClickHouse는 로그를 **컨테이너 안 파일**에 써요. `docker compose logs clickhouse`에는 설정 파일 안내 몇 줄만 나와서, 거기서 `memory limit`을 grep하면 늘 0줄이에요(아무것도 확인하지 못해요). `--profile ops`를 빼도 서비스를 못 찾는 오류만 나고 grep 결과는 0이라 확인된 것처럼 보여요. 아래처럼 컨테이너 안 오류 로그를 봐요. 로그 폴더는 볼륨이 아니라 `--force-recreate`로 다시 띄우면 새로 시작해요. 옛 로그는 번호가 붙고 압축되기도 해서 `zcat -f`로 둘 다 읽고, 시각은 정렬해서 봐요(로그 줄이 날짜로 시작해서 파일 순서와 상관없어요). **명령이 오류(`No such file`·`Permission denied`·gzip 오류)를 내면 확인 실패예요 — 숫자나 "없음"·시각이 나올 때만 확인된 거예요.**
+
+- 다시 띄운 뒤 `memory limit` 줄 수 — 0이면 돼요:
+
+```bash
+docker compose --profile ops exec clickhouse sh -c "ls /var/log/clickhouse-server/clickhouse-server.err.log* && zcat -f /var/log/clickhouse-server/clickhouse-server.err.log* | grep -c 'memory limit'"
+```
+
+- 다시 만들지 않은 컨테이너라면 마지막 `memory limit` 줄 시각(UTC) — DROP 전이면 돼요(한 번도 없으면 "없음"):
+
+```bash
+docker compose --profile ops exec clickhouse sh -c "ls /var/log/clickhouse-server/clickhouse-server.err.log* && { zcat -f /var/log/clickhouse-server/clickhouse-server.err.log* | grep 'memory limit' | sort | tail -n 1 | cut -c1-30 | grep . || echo 없음; }"
+```
+
+- 서버가 언제 시작됐는지(UTC) — `uptime()`은 맥이 잠든 동안 늘지 않아 실제보다 짧게 나와서 이 줄로 봐요:
+
+```bash
+docker compose --profile ops exec clickhouse sh -c "ls /var/log/clickhouse-server/clickhouse-server.log* && zcat -f /var/log/clickhouse-server/clickhouse-server.log* | grep 'Starting ClickHouse' | sort | cut -c1-60"
 ```
 
 ## 지금 들어 있는 것 (W1 뼈대, 10/26)
