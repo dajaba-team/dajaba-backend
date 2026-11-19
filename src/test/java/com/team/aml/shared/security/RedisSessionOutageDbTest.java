@@ -116,8 +116,11 @@ class RedisSessionOutageDbTest {
     }
 
     private static void assertNoSecretsIn(CapturedOutput output) {
-        assertThat(output).doesNotContain(":" + DEAD_PORT).doesNotContain(REDIS_PASSWORD)
-                .doesNotContain("Unable to connect").doesNotContain("Exception:");   // 원인 메시지·스택 없음
+        assertThat(output).doesNotContain(":" + DEAD_PORT).doesNotContain(REDIS_PASSWORD).doesNotContain("Unable to connect");
+        // 원인 메시지·스택 없음 — 같은 JVM 의 다른 테스트 컨텍스트(예: RabbitMQ 재연결) 줄은 빼고 Redis·세션 줄만 본다
+        assertThat(output.getAll().lines()
+                .filter(l -> l.contains("redis") || l.contains("Redis") || l.contains("lettuce") || l.contains("session")))
+                .noneMatch(l -> l.contains("Exception:") || l.contains("\tat "));
     }
 
     private HttpResponse<String> login(String password) throws Exception {
