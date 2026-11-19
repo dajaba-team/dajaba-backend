@@ -1,13 +1,23 @@
 package com.team.aml.shared.ai;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.SerializableString;
+import com.fasterxml.jackson.core.io.CharacterEscapes;
+import com.fasterxml.jackson.core.io.SerializedString;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.shared.ai.AiDtos.*;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.text.Normalizer;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 
@@ -25,6 +35,12 @@ public class MockAiClient implements AiClient {
 
     /** v2 7항목 순서 — 규약 §5.2. shared 수준 String(StrSection enum 참조 금지, ArchitectureTest). */
     private static final List<String> V2_SECTIONS = List.of(
+            "SUBJECT", "DATE", "PLACE", "INSTRUMENT", "METHOD", "GROUNDS", "OPINION");
+    /** 해시용 기본 ObjectMapper — 앱 설정(들여쓰기 등)이 해시에 끼지 않게 NarrativeHash 처럼 새로 만든다. */
+    private static final ObjectMapper HASH_JSON = new ObjectMapper();
+    /** 해시 단락 순서 — StrSection 선언 순서(V1 6섹션 → V2 7항목). 검증 목업 해시용. StrSection 바꾸면 여기도 */
+    private static final List<String> SECTION_ORDER = List.of(
+            "SUMMARY", "WHO", "WHAT_WHEN_WHERE", "HOW", "WHY_SUSPICIOUS", "CONCLUSION",
             "SUBJECT", "DATE", "PLACE", "INSTRUMENT", "METHOD", "GROUNDS", "OPINION");
     /** 섹션마다 cites 1개 이상 — 채영 cites 저장 테스트 재료 (SCRUM-151). */
     private static final List<String> SECTION_CITES = List.of(
@@ -106,7 +122,7 @@ public class MockAiClient implements AiClient {
                 .put("verification_id", verificationId)
                 .put("generation_id", request.generationId())
                 .put("revision_no", request.revisionNo() == null ? 1 : request.revisionNo())
-                .put("narrative_sha256", "0".repeat(64))
+                .put("narrative_sha256", narrativeSha256(request.narrative()))
                 .put("passed", true)
                 .put("status", "PASSED")
                 .put("verifier_version", "mock-0.0.1")
@@ -119,7 +135,58 @@ public class MockAiClient implements AiClient {
         return new VerifyResponse(
                 verificationId, request.generationId(),
                 request.revisionNo() == null ? 1 : request.revisionNo(),
-                "0".repeat(64), true, "PASSED", "mock-0.0.1", producedAt, raw);
+                raw.path("narrative_sha256").asText(), true, "PASSED", "mock-0.0.1", producedAt, raw);
+    }
+
+    /**
+     * 진짜 AI 처럼 받은 본문의 해시를 돌려준다 — 고정값("0"×64)이면 GetStrDraft is_current·ApprovalGate 가 늘 "다른 본문"으로
+     * 봐서, 다시 검증해도 "이전 수정본을 검증한 결과"가 뜨고 승인 요청이 막혔다.
+     * 규칙은 str.domain.NarrativeHash 와 같다(단락 순서 = StrSection 선언 순서, section·text 만, NFC, 공백 없는 JSON,
+     * 제어문자 \\u 소문자, UTF-8 SHA-256). shared 는 str 을 모르니(ArchitectureTest) 여기 따로 두고, 같은 값인지는
+     * str 쪽 MockAiVerifyHashTest 가 확인한다. 목업이라 세트 검사(V1·V2 한 세트)는 하지 않는다.
+     */
+    String narrativeSha256(List<NarrativeSectionDto> narrative) {
+        ArrayNode array = HASH_JSON.createArrayNode();
+        narrative.stream()
+                .sorted(Comparator.comparingInt(MockAiClient::sectionOrder))
+                .forEach(n -> array.addObject()
+                        .put("section", n.section())
+                        .put("text", Normalizer.normalize(n.text(), Normalizer.Form.NFC)));
+        try {
+            byte[] json = HASH_JSON.writer().with(new LowercaseHexEscapes()).writeValueAsBytes(array);
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(json));
+        } catch (JsonProcessingException | NoSuchAlgorithmException e) {
+            throw new IllegalStateException("목업 본문 해시를 만들 수 없음", e);
+        }
+    }
+
+    /** StrSection 선언 순서(V1 6개 → V2 7개). 모르는 이름은 맨 뒤. */
+    private static int sectionOrder(NarrativeSectionDto n) {
+        int i = SECTION_ORDER.indexOf(n.section());
+        return i < 0 ? Integer.MAX_VALUE : i;
+    }
+
+    /** NarrativeHash.LowercaseHexEscapes 와 같다 — 제어문자를 \\u001f 처럼 소문자로(Python json.dumps 와 같게). */
+    private static final class LowercaseHexEscapes extends CharacterEscapes {
+        private final int[] asciiEscapes = standardAsciiEscapesForJSON();
+
+        LowercaseHexEscapes() {
+            for (int c = 0; c < 0x20; c++) {
+                if (asciiEscapes[c] == ESCAPE_STANDARD) {
+                    asciiEscapes[c] = ESCAPE_CUSTOM;
+                }
+            }
+        }
+
+        @Override
+        public int[] getEscapeCodesForAscii() {
+            return asciiEscapes;
+        }
+
+        @Override
+        public SerializableString getEscapeSequence(int ch) {
+            return ch >= 0x20 ? null : new SerializedString(String.format("\\u%04x", ch));
+        }
     }
 
     @Override
