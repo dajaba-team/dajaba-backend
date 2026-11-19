@@ -37,8 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 룰 스캔 R01·R02·R04·R06 (SCRUM-188·99·192·189). V011·V016 각 룰 v1 (96시간, R01 N=10·R02 N=5·R04 4홉·R06 각각 5~100)로 돈다.
- * V016 의 R03·R05 는 켜져 있지만 구현 전이라 건너뛴다 (SCRUM-260 임시).
+ * 룰 스캔 여섯 룰 R01~R06 (SCRUM-188·99·193·192·194·189). V011·V016 각 룰 v1 (96시간, R01 N=10·R02 N=5·R03 ±10%·R04 4홉·R05 중간 3곳·R06 각각 5~100)로 돈다.
  * 경보는 지울 수 없고 같은 날짜는 한 번만 성공하므로 테스트마다 날짜·계좌를 따로 쓰고, 단언은 그 계좌의 경보만 본다.
  */
 @Testcontainers
@@ -119,7 +118,7 @@ class RunRuleScanTest {
         assertThat(result.run().rowsIn()).isEqualTo(count(
                 "select count(*) from ops.transactions where ts >= '2022-09-02' and ts < '2022-09-03'"));
         assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId)
-                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R04_CYCLE", "R06_GATHER_SCATTER");   // rule_id 순, R03·R05 는 건너뜀
+                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R03_FX_RELAY", "R04_CYCLE", "R05_SCATTER_GATHER", "R06_GATHER_SCATTER");   // rule_id 순
         assertThat(result.alertsByRule()).allSatisfy(r -> assertThat(r.ruleVersion()).isEqualTo(1));
     }
 
@@ -232,7 +231,7 @@ class RunRuleScanTest {
     }
 
     @Test
-    void 시드로_여섯_룰이_켜져_있고_구현_전_룰은_건너뛰어_구현된_룰만_센다() {   // SCRUM-260 임시
+    void 시드로_여섯_룰이_켜져_있고_여섯_룰_모두_스캔해_센다() {
         LocalDate d = LocalDate.of(2022, 9, 13);
         inbound(newKey(), newKey(), d.atTime(1, 0), "1", "US Dollar");
 
@@ -246,7 +245,7 @@ class RunRuleScanTest {
 
         assertThat(result.run().status()).isEqualTo(BatchStatus.SUCCEEDED);
         assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId)
-                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R04_CYCLE", "R06_GATHER_SCATTER");
+                .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R03_FX_RELAY", "R04_CYCLE", "R05_SCATTER_GATHER", "R06_GATHER_SCATTER");
     }
 
     @Test
@@ -439,7 +438,154 @@ class RunRuleScanTest {
     }
 
     @Test
-    void R04_A로_돌아오는_3홉_고리에_경보_1건이고_남아_있는_동안_새_고리는_경보를_늘리지_않는다() {
+    void R03_받은_돈을_늦은_분에_다른_통화로_같은_가치만큼_보내면_경보_1건() {
+        LocalDate d = LocalDate.of(2022, 9, 22);   // 9/18~9/22 에 스캔하는 다른 테스트 계좌와 섞이지 않게 새 계좌만 쓴다
+        String m = accountWithEntity();
+        long a = transfer(newKey(), m, d.atTime(10, 0), "100", "US Dollar", "100", "US Dollar");   // 받은 쪽 100 USD
+        long b = transfer(m, newKey(), d.atTime(11, 0), "85.34", "Euro", "85.34", "Euro");        // 보낸 쪽 85.34 EUR = 100 USD
+        transfer(m, newKey(), d.atTime(12, 0), "85", "Euro", "85", "Euro");                      // 두 번째 쌍 — 참 유지, 새 경보 없음
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        List<Map<String, Object>> r03 = alertsOf(m).stream()
+                .filter(x -> "R03_FX_RELAY".equals(x.get("rule_id"))).toList();
+        assertThat(r03).hasSize(1);
+        Map<String, Object> alert = r03.get(0);
+        assertThat(ts(alert.get("window_start"))).isEqualTo(d.minusDays(4).atTime(11, 1));
+        assertThat(ts(alert.get("reference_ts"))).isEqualTo(d.atTime(11, 1));
+        assertThat(alert.get("entity_id")).isEqualTo("E_" + m);
+        assertThat(linkedIds((Long) alert.get("id"))).containsExactly(a, b);
+
+        JsonNode facts = facts(alert);
+        assertThat(facts.get("paths").toString()).isEqualTo("[[" + a + "," + b + "]]");
+        JsonNode relay = facts.get("relays").get(0);
+        assertThat(relay.get("in_currency").asText()).isEqualTo("US Dollar");
+        assertThat(relay.get("in_amount").decimalValue()).isEqualByComparingTo("100");
+        assertThat(relay.get("out_currency").asText()).isEqualTo("Euro");
+        assertThat(relay.get("out_amount").decimalValue()).isEqualByComparingTo("85.34");
+        assertThat(relay.get("ratio").decimalValue()).isEqualByComparingTo("1");
+    }
+
+    @Test
+    void R03_비율_0_9는_경보_그_아래와_같은_분과_같은_통화와_표에_없는_통화는_경보_없음() {
+        LocalDate d = LocalDate.of(2022, 9, 23);
+        String edge = newKey();          // 100 USD → 76.806 EUR = 비율 0.9 (포함)
+        String low = newKey();           // 100 USD → 76.805 EUR
+        String sameMinute = newKey();    // 같은 분에 받고 보냄
+        String sameCurrency = newKey();  // USD → USD
+        String unknown = newKey();       // 표에 없는 통화
+        transfer(newKey(), edge, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(edge, newKey(), d.atTime(9, 1), "76.806", "Euro", "76.806", "Euro");
+        transfer(newKey(), low, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(low, newKey(), d.atTime(9, 1), "76.805", "Euro", "76.805", "Euro");
+        transfer(newKey(), sameMinute, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(sameMinute, newKey(), d.atTime(9, 0), "85.34", "Euro", "85.34", "Euro");
+        transfer(newKey(), sameCurrency, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(sameCurrency, newKey(), d.atTime(9, 1), "100", "US Dollar", "100", "US Dollar");
+        transfer(newKey(), unknown, d.atTime(9, 0), "100", "Dinar", "100", "Dinar");
+        transfer(unknown, newKey(), d.atTime(9, 1), "85.34", "Euro", "85.34", "Euro");
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        assertThat(alertsOf(edge)).anyMatch(x -> "R03_FX_RELAY".equals(x.get("rule_id")));
+        for (String k : List.of(low, sameMinute, sameCurrency, unknown)) {
+            assertThat(alertsOf(k)).noneMatch(x -> "R03_FX_RELAY".equals(x.get("rule_id")));
+        }
+    }
+
+    @Test
+    void R03_DB에_저장된_기준값의_소수_자리를_잃지_않는다() {
+        // #리뷰: 기준값을 double 로 읽으면 0.099999999999999999 가 0.1 이 돼 비율 정확히 1.1 인 쌍이 잘못 들어간다.
+        // 11/2 는 다른 테스트가 쓰지 않는다. R03 v2 행을 잠깐 켜고 끝나면 v1 로 돌린다.
+        LocalDate d = LocalDate.of(2022, 11, 2);
+        String exact = newKey();    // 100 USD → 93.874 EUR = 비율 정확히 1.1 → 허용 오차 0.0999…9 면 밖
+        String inside = newKey();   // 100 USD → 93.873 EUR = 비율 1.09998… → 안
+        transfer(newKey(), exact, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(exact, newKey(), d.atTime(9, 1), "93.874", "Euro", "93.874", "Euro");
+        transfer(newKey(), inside, d.atTime(9, 0), "100", "US Dollar", "100", "US Dollar");
+        transfer(inside, newKey(), d.atTime(9, 1), "93.873", "Euro", "93.873", "Euro");
+        setActive("R03_FX_RELAY", 1, false);
+        jdbc.update("""
+                insert into ops.rules(rule_id, version, name, typology_hint, params, is_active, created_by, updated_by)
+                select rule_id, 2, name, typology_hint,
+                       jsonb_set(params, '{amount_tolerance}', '0.099999999999999999'::jsonb), true, 1, 1
+                from ops.rules where rule_id = 'R03_FX_RELAY' and version = 1""");
+        try {
+            runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+            assertThat(alertsOf(exact)).noneMatch(x -> "R03_FX_RELAY".equals(x.get("rule_id")));
+            assertThat(alertsOf(inside)).anyMatch(x -> "R03_FX_RELAY".equals(x.get("rule_id")));
+        } finally {
+            setActive("R03_FX_RELAY", 2, false);
+            setActive("R03_FX_RELAY", 1, true);
+        }
+    }
+
+    @Test
+    void R05_흩은_돈이_중간_계좌_3곳을_거쳐_한_계좌로_모이면_경보_1건이고_대표_경로만_paths에() {
+        LocalDate d = LocalDate.of(2022, 11, 5);   // 11/1~11/5 에 스캔하는 다른 테스트 계좌와 섞이지 않게 새 계좌만 쓴다
+        String s = newKey();
+        String t = accountWithEntity();
+        List<String> m = List.of(newKey(), newKey(), newKey());
+        long a0 = transfer(s, m.get(0), d.atTime(8, 0), "1", "US Dollar", "1", "US Dollar");    // M1 대표
+        long a0b = transfer(s, m.get(0), d.atTime(8, 30), "1", "US Dollar", "1", "US Dollar");  // M1 유효하지만 대표 아님
+        long a1 = transfer(s, m.get(1), d.atTime(9, 0), "1", "US Dollar", "1", "US Dollar");
+        long a2 = transfer(s, m.get(2), d.atTime(9, 5), "1", "US Dollar", "1", "US Dollar");
+        long b0 = transfer(m.get(0), t, d.atTime(10, 0), "1", "US Dollar", "1", "US Dollar");
+        long b1 = transfer(m.get(1), t, d.atTime(10, 1), "1", "US Dollar", "1", "US Dollar");
+        long b2 = transfer(m.get(2), t, d.atTime(10, 2), "1", "US Dollar", "1", "US Dollar");   // 세 번째 — 경보
+        transfer(m.get(2), t, d.atTime(11, 0), "1", "US Dollar", "1", "US Dollar");             // 참 유지 — 새 경보 없음
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        List<Map<String, Object>> r05 = alertsOf(t).stream()
+                .filter(x -> "R05_SCATTER_GATHER".equals(x.get("rule_id"))).toList();
+        assertThat(r05).singleElement().satisfies(alert -> {
+            assertThat(ts(alert.get("reference_ts"))).isEqualTo(d.atTime(10, 3));
+            assertThat(ts(alert.get("window_start"))).isEqualTo(d.minusDays(4).atTime(10, 3));
+            assertThat(alert.get("entity_id")).isEqualTo("E_" + t);
+            assertThat(linkedIds((Long) alert.get("id"))).containsExactlyInAnyOrder(a0, a0b, a1, a2, b0, b1, b2);
+            JsonNode facts = facts(alert);
+            assertThat(facts.get("source_account_key").asText()).isEqualTo(s);
+            assertThat(facts.get("intermediates").asInt()).isEqualTo(3);
+            assertThat(facts.get("paths").toString())
+                    .isEqualTo("[[" + a0 + "," + b0 + "],[" + a1 + "," + b1 + "],[" + a2 + "," + b2 + "]]");
+        });
+    }
+
+    @Test
+    void R05는_중간_계좌가_2곳이거나_같은_분이거나_출발과_도착이_같으면_경보_없음() {
+        LocalDate d = LocalDate.of(2022, 11, 8);
+        String s1 = newKey();   // 중간 계좌 2곳
+        String t1 = newKey();
+        for (int i = 0; i < 2; i++) {
+            String mid = newKey();
+            transfer(s1, mid, d.atTime(9, i), "1", "US Dollar", "1", "US Dollar");
+            transfer(mid, t1, d.atTime(10, i), "1", "US Dollar", "1", "US Dollar");
+        }
+        String s2 = newKey();   // 세 번째 중간 계좌는 같은 분에 받고 보냄
+        String t2 = newKey();
+        for (int i = 0; i < 3; i++) {
+            String mid = newKey();
+            transfer(s2, mid, d.atTime(9, 0), "1", "US Dollar", "1", "US Dollar");
+            transfer(mid, t2, i < 2 ? d.atTime(10, i) : d.atTime(9, 0), "1", "US Dollar", "1", "US Dollar");
+        }
+        String s3 = newKey();   // S → M1·M2·M3 → S (도착 = 출발)
+        for (int i = 0; i < 3; i++) {
+            String mid = newKey();
+            transfer(s3, mid, d.atTime(9, i), "1", "US Dollar", "1", "US Dollar");
+            transfer(mid, s3, d.atTime(10, i), "1", "US Dollar", "1", "US Dollar");
+        }
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        for (String t : List.of(t1, t2, s3)) {
+            assertThat(alertsOf(t)).noneMatch(x -> "R05_SCATTER_GATHER".equals(x.get("rule_id")));
+        }
+    }
+
+    @Test
+    void R04_A로_돌아오는_3홉_고리에_경보_1건이고_창에_남아_있어도_다른_분에_닫힌_고리는_새_경보() {
         LocalDate d = LocalDate.of(2022, 10, 12);   // 10/8~10/12 는 다른 테스트가 스캔하지 않는다
         String a = accountWithEntity();
         String b = newKey();
@@ -448,23 +594,28 @@ class RunRuleScanTest {
         long t2 = transfer(b, c, d.atTime(10, 5), "90", "Euro", "90", "Euro");   // 통화가 바뀌어도 금액 조건 없음
         long t3 = transfer(c, a, d.atTime(10, 10), "80", "Euro", "80", "Euro");
         String x = newKey();
-        transfer(a, x, d.atTime(11, 0), "1", "US Dollar", "1", "US Dollar");
-        transfer(x, a, d.atTime(11, 5), "1", "US Dollar", "1", "US Dollar");      // 2홉 고리 — 첫 고리가 창 안이라 새 경보 없음
+        long x1 = transfer(a, x, d.atTime(11, 0), "1", "US Dollar", "1", "US Dollar");
+        long x2 = transfer(x, a, d.atTime(11, 5), "1", "US Dollar", "1", "US Dollar");   // 첫 고리가 창 안이어도 새 경보 (사건형)
 
         runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
 
-        List<Map<String, Object>> r04 = alertsOf(a).stream()
-                .filter(r -> "R04_CYCLE".equals(r.get("rule_id"))).toList();
-        assertThat(r04).singleElement().satisfies(alert -> {
-            assertThat(ts(alert.get("reference_ts"))).isEqualTo(d.atTime(10, 11));
-            assertThat(ts(alert.get("window_start"))).isEqualTo(d.minusDays(4).atTime(10, 11));
-            assertThat(alert.get("entity_id")).isEqualTo("E_" + a);
-            assertThat(linkedIds((Long) alert.get("id"))).containsExactly(t1, t2, t3);
-            assertThat(facts(alert).toString())
-                    .isEqualTo("{\"paths\":[[" + t1 + "," + t2 + "," + t3 + "]],\"hops_by_path\":[3]}");
-        });
-        assertThat(alertsOf(b)).noneMatch(r -> "R04_CYCLE".equals(r.get("rule_id")));   // 같은 고리를 B·C 쪽에서 또 잡지 않음
-        assertThat(alertsOf(c)).noneMatch(r -> "R04_CYCLE".equals(r.get("rule_id")));
+        assertThat(r04Of(a)).satisfiesExactly(
+                alert -> {
+                    assertThat(ts(alert.get("reference_ts"))).isEqualTo(d.atTime(10, 11));
+                    assertThat(ts(alert.get("window_start"))).isEqualTo(d.minusDays(4).atTime(10, 11));
+                    assertThat(alert.get("entity_id")).isEqualTo("E_" + a);
+                    assertThat(linkedIds((Long) alert.get("id"))).containsExactly(t1, t2, t3);
+                    assertThat(facts(alert).toString())
+                            .isEqualTo("{\"paths\":[[" + t1 + "," + t2 + "," + t3 + "]],\"hops_by_path\":[3]}");
+                },
+                alert -> {
+                    assertThat(ts(alert.get("reference_ts"))).isEqualTo(d.atTime(11, 6));
+                    assertThat(linkedIds((Long) alert.get("id"))).containsExactly(x1, x2);
+                    assertThat(facts(alert).toString())
+                            .isEqualTo("{\"paths\":[[" + x1 + "," + x2 + "]],\"hops_by_path\":[2]}");
+                });
+        assertThat(r04Of(b)).isEmpty();   // 같은 고리를 B·C 쪽에서 또 잡지 않음
+        assertThat(r04Of(c)).isEmpty();
     }
 
     @Test
@@ -481,36 +632,108 @@ class RunRuleScanTest {
 
         runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
 
-        assertThat(alertsOf(sameMinute)).noneMatch(r -> "R04_CYCLE".equals(r.get("rule_id")));
-        assertThat(alertsOf(back)).noneMatch(r -> "R04_CYCLE".equals(r.get("rule_id")));
+        assertThat(r04Of(sameMinute)).isEmpty();
+        assertThat(r04Of(back)).isEmpty();
         for (String k : ring) {
-            assertThat(alertsOf(k)).noneMatch(r -> "R04_CYCLE".equals(r.get("rule_id")));
+            assertThat(r04Of(k)).isEmpty();
         }
     }
 
     @Test
-    void R04_전날_닫힌_4홉_고리는_자정_넘어_당일_경보를_막고_창에서_빠지면_새_4홉_고리가_경보() {
-        // #리뷰: 과거 계좌만 고르는 1분 전 창 조회(cycleMarksClosing)와 자정 경계, 4홉 저장을 함께 본다.
-        // 10/18~10/26 은 다른 테스트가 스캔하지 않는다.
-        LocalDate d1 = LocalDate.of(2022, 10, 22);
-        LocalDate d2 = LocalDate.of(2022, 10, 26);
+    void R04_이미_경보에_쓴_거래도_나중에_닫힌_고리의_일부로_다시_근거에_들어간다() {
+        // A→B 09:00, B→A 10:00, A→B 11:00, B→A 12:00 — 12:00 경보에 (09:00, 12:00)·(11:00, 12:00) 두 경로
+        LocalDate d = LocalDate.of(2022, 10, 17);
         String a = accountWithEntity();
-        fourHop(a, d1.minusDays(1).atTime(23, 56));   // 10/21 23:56~23:59 — 전날 닫힘 (스캔 안 한 날)
-        fourHop(a, d1.atTime(0, 0));                  // 10/22 00:00~00:03 — 1분 전 창에 전날 고리 → 경보 없음
-        List<Long> fresh = fourHop(a, d2.atTime(1, 0));   // 10/26 01:00~01:03 — 앞 두 고리는 창 밖
+        String b = newKey();
+        long ab9 = transfer(a, b, d.atTime(9, 0), "1", "US Dollar", "1", "US Dollar");
+        long ba10 = transfer(b, a, d.atTime(10, 0), "1", "US Dollar", "1", "US Dollar");
+        long ab11 = transfer(a, b, d.atTime(11, 0), "1", "US Dollar", "1", "US Dollar");
+        long ba12 = transfer(b, a, d.atTime(12, 0), "1", "US Dollar", "1", "US Dollar");
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        assertThat(r04Of(a)).satisfiesExactly(
+                alert -> {
+                    assertThat(ts(alert.get("reference_ts"))).isEqualTo(d.atTime(10, 1));
+                    assertThat(linkedIds((Long) alert.get("id"))).containsExactly(ab9, ba10);
+                    assertThat(facts(alert).toString())
+                            .isEqualTo("{\"paths\":[[" + ab9 + "," + ba10 + "]],\"hops_by_path\":[2]}");
+                },
+                alert -> {
+                    assertThat(ts(alert.get("reference_ts"))).isEqualTo(d.atTime(12, 1));
+                    assertThat(linkedIds((Long) alert.get("id"))).containsExactly(ab9, ab11, ba12);
+                    assertThat(facts(alert).toString()).isEqualTo("{\"paths\":[[" + ab9 + "," + ba12 + "],[" + ab11
+                            + "," + ba12 + "]],\"hops_by_path\":[2,2]}");
+                });
+        // B→A 10:00 → A→B 11:00 은 B 에서 시작해 B 로 돌아오는 고리라 대상 계좌 B 의 경보가 따로 생긴다
+        assertThat(r04Of(b)).singleElement()
+                .satisfies(alert -> assertThat(linkedIds((Long) alert.get("id"))).containsExactly(ba10, ab11));
+    }
+
+    @Test
+    void R04_같은_분에_닫힌_고리_여럿은_경보_1건이고_근거_거래는_한_번만() {
+        LocalDate d = LocalDate.of(2022, 10, 19);
+        String a = accountWithEntity();
+        String b = newKey();
+        long ab1 = transfer(a, b, d.atTime(10, 0), "1", "US Dollar", "1", "US Dollar");
+        long ab2 = transfer(a, b, d.atTime(10, 1), "1", "US Dollar", "1", "US Dollar");
+        long ba = transfer(b, a, d.atTime(10, 5), "1", "US Dollar", "1", "US Dollar");
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        assertThat(r04Of(a)).singleElement().satisfies(alert -> {
+            assertThat(linkedIds((Long) alert.get("id"))).containsExactly(ab1, ab2, ba);
+            assertThat(facts(alert).toString()).isEqualTo("{\"paths\":[[" + ab1 + "," + ba + "],[" + ab2 + ","
+                    + ba + "]],\"hops_by_path\":[2,2]}");
+        });
+    }
+
+    @Test
+    void R04_자정_넘어_닫힌_4홉_고리는_닫힌_날_경보이고_다음_날_스캔에서_다시_경보가_안_된다() {
+        LocalDate d1 = LocalDate.of(2022, 10, 22);   // 10/22·10/23 은 다른 테스트가 스캔하지 않는다
+        LocalDate d2 = d1.plusDays(1);
+        String a = accountWithEntity();
+        fourHop(a, d1.minusDays(1).atTime(23, 50));                        // 10/21 23:53 닫힘 — 10/22 스캔 대상 아님
+        List<Long> midnight = fourHop(a, d1.minusDays(1).atTime(23, 58));   // 23:58·23:59·00:00·00:01 — 10/22 닫힘
+        transfer(newKey(), newKey(), d2.atTime(12, 0), "1", "US Dollar", "1", "US Dollar");   // 고리와 무관한 10/23 거래 — 혼자 돌려도 10/23 이 데이터 범위 안 (#리뷰)
 
         runRuleScan.run(runRuleScan.start(d1, SYSTEM), d1);
-        assertThat(alertsOf(a)).noneMatch(r -> "R04_CYCLE".equals(r.get("rule_id")));
-
         runRuleScan.run(runRuleScan.start(d2, SYSTEM), d2);
-        List<Map<String, Object>> r04 = alertsOf(a).stream()
-                .filter(r -> "R04_CYCLE".equals(r.get("rule_id"))).toList();
-        assertThat(r04).singleElement().satisfies(alert -> {
-            assertThat(ts(alert.get("reference_ts"))).isEqualTo(d2.atTime(1, 4));
-            assertThat(linkedIds((Long) alert.get("id"))).containsExactlyElementsOf(fresh);
+
+        assertThat(r04Of(a)).singleElement().satisfies(alert -> {
+            assertThat(ts(alert.get("reference_ts"))).isEqualTo(d1.atTime(0, 2));
+            assertThat(alert.get("batch_date")).isEqualTo(Date.valueOf(d1));
+            assertThat(linkedIds((Long) alert.get("id"))).containsExactlyElementsOf(midnight);
             assertThat(facts(alert).toString())
-                    .isEqualTo(("{\"paths\":[" + fresh + "],\"hops_by_path\":[4]}").replace(" ", ""));
+                    .isEqualTo(("{\"paths\":[" + midnight + "],\"hops_by_path\":[4]}").replace(" ", ""));
         });
+    }
+
+    @Test
+    void R04_고리가_커서_한_번에_받는_1000행을_넘어도_받는_도중에_묶음마다_저장한다() {
+        // #리뷰: 하루치 경로를 한꺼번에 올리지 않고 커서로 나눠 받으며 같은 연결로 경보를 저장 — 둘째 묶음부터도 빠짐없이
+        LocalDate d = LocalDate.of(2022, 10, 25);
+        String a = accountWithEntity();
+        String b = newKey();
+        for (int i = 0; i < 40; i++) {
+            transfer(a, b, d.atTime(1, i), "1", "US Dollar", "1", "US Dollar");
+        }
+        for (int i = 0; i < 40; i++) {   // 돌아오는 거래마다 앞 A→B 40건과 고리 → 40 × 40 = 1,600 행
+            transfer(b, a, d.atTime(2, i), "1", "US Dollar", "1", "US Dollar");
+        }
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        List<Map<String, Object>> r04 = r04Of(a);
+        assertThat(r04).hasSize(40);
+        assertThat(r04).allSatisfy(alert -> {
+            assertThat(facts(alert).get("paths")).hasSize(40);
+            assertThat(linkedIds((Long) alert.get("id"))).hasSize(41);
+        });
+    }
+
+    private List<Map<String, Object>> r04Of(String accountKey) {
+        return alertsOf(accountKey).stream().filter(r -> "R04_CYCLE".equals(r.get("rule_id"))).toList();
     }
 
     /** a → x → y → z → a, start 부터 1분 간격. 거래 id 를 시간순으로. */

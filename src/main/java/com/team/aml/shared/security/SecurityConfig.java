@@ -5,8 +5,13 @@ import com.team.aml.shared.audit.LoginAccessLogWriter;
 import com.team.aml.shared.config.AmlProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.actuate.autoconfigure.security.servlet.EndpointRequest;
+import org.springframework.boot.actuate.autoconfigure.web.server.ManagementPortType;
+import org.springframework.boot.actuate.health.HealthEndpoint;
+import org.springframework.boot.actuate.metrics.export.prometheus.PrometheusScrapeEndpoint;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
@@ -39,7 +44,8 @@ import java.util.List;
  *  - 세션 쿠키, CSRF, 30분 만료, /auth/me, /auth/logout(204), 401/403 JSON.
  *
  * URL 규칙:
- *  /api/v1/auth/login, /actuator/health, swagger → 누구나
+ *  /api/v1/auth/login, /actuator/health, swagger → 누구나 (8080 /actuator/health 는 MainPortHealthController — 호환용)
+ *  관리 포트 8081 의 health·prometheus          → 누구나 (Prometheus 가 긁음. 8081 은 compose ports 에 없어 호스트로 안 나감, SCRUM-271)
  *  /api/v1/admin/**                              → ADMIN
  *  GET  /api/v1/approvals/**                     → ADMIN·APPROVER (10/29)
  *  POST /api/v1/approvals/**                     → APPROVER
@@ -91,7 +97,10 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http, UserDetailsService users, PasswordEncoder encoder,
-                                           SessionRegistry sessionRegistry) throws Exception {
+                                           SessionRegistry sessionRegistry, Environment env) throws Exception {
+        // 관리 포트가 따로일 때만 연다. EndpointRequest 는 그때 관리 포트 요청에만 맞는다(8080 의 같은 경로는 아래 denyAll).
+        // 누가 management.server.port 를 지워 포트가 같아지면 이 규칙이 빠져 막힌다(fail-closed) — 지표가 8080 으로 새지 않게.
+        boolean separateManagementPort = ManagementPortType.get(env) == ManagementPortType.DIFFERENT;
         CsrfTokenRequestAttributeHandler csrfHandler = new CsrfTokenRequestAttributeHandler();
         csrfHandler.setCsrfRequestAttributeName(null); // 토큰을 매 응답에 쿠키로 내보낸다 (axios 가 읽는다)
         AuthenticationManager login = new ProviderManager(new AppLoginProvider(users, encoder));
@@ -104,6 +113,9 @@ public class SecurityConfig {
                 .ignoringRequestMatchers(JsonLoginConfigurer.LOGIN_URL))   // 로그인 전에는 토큰이 없다
             .cors(c -> c.configurationSource(corsSource()))
             .authorizeHttpRequests(a -> a
+                .requestMatchers(separateManagementPort
+                        ? EndpointRequest.to(HealthEndpoint.class, PrometheusScrapeEndpoint.class)
+                        : request -> false).permitAll()
                 .requestMatchers(JsonLoginConfigurer.LOGIN_URL, "/actuator/health").permitAll()
                 .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")

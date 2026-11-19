@@ -7,7 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.LocalDateTime;
 import java.util.List;
 
-/** R04 경보 한 건 — E 와 그 창 안의 A 고리 전부(첫 거래 시각순). */
+/** R04 경보 한 건 — E 와 그 분에 닫힌 A 고리 전부(첫 거래 시각순). */
 public record CycleAlert(LocalDateTime minute, List<CyclePath> paths) {
 
     public CycleAlert {
@@ -18,12 +18,12 @@ public record CycleAlert(LocalDateTime minute, List<CyclePath> paths) {
         return paths.get(0).accountKey();
     }
 
-    /** 저장 전 검사 — 경로가 있고, 모두 같은 대상 계좌이며, 경로마다 CyclePath.validFor. 어긋나면 경보를 만들지 않는다. */
+    /** 저장 전 검사 — 경로가 있고, 모두 같은 대상 계좌·같은 닫힌 분 E 이며, 경로마다 CyclePath.validFor. 어긋나면 경보를 만들지 않는다. */
     public boolean valid(CycleRule rule) {
         LocalDateTime start = rule.windowStart(minute);
         LocalDateTime end = rule.windowEnd(minute);
-        return !paths.isEmpty() && paths.stream().allMatch(p ->
-                p.accountKey().equals(accountKey()) && p.validFor(rule, start, end));
+        return !paths.isEmpty() && paths.stream().allMatch(p -> p.accountKey().equals(accountKey())
+                && p.closeMinute().equals(minute) && p.validFor(rule, start, end));
     }
 
     /** 최상위 transaction_ids — 모든 고리 거래의 합집합, 거래 id 순 (여러 고리가 같은 거래를 쓰면 한 번만). */

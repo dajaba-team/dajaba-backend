@@ -12,66 +12,98 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** R04 판정 — E 마다 지금 창·1분 전 창 비교 (rules.md R04). DB 없이. */
+/** R04 판정 — 사건형, (A, 닫힌 분 E) 마다 경보 (rules.md R04). DB 없이. */
 class CycleRuleTest {
 
     private static final ObjectMapper OM = new ObjectMapper();
     private static final LocalDate D = LocalDate.of(2022, 9, 5);
     private final CycleRule rule = new CycleRule(96, 4);
 
-    /** A→B(t0) → B→A(t1) 2홉 고리. */
+    /** A→B(t0, id) → B→A(t1, id+1) 2홉 고리. */
     private static CyclePath cycle(long id, LocalDateTime t0, LocalDateTime t1) {
-        return new CyclePath(List.of(id, id + 1), List.of(t0, t1), List.of("A", "B"), List.of("B", "A"));
+        return cycle(id, t0, id + 1, t1);
+    }
+
+    /** A→B(t0, out) → B→A(t1, back) 2홉 고리 — 같은 거래를 여러 고리에 쓸 때. */
+    private static CyclePath cycle(long out, LocalDateTime t0, long back, LocalDateTime t1) {
+        return new CyclePath(List.of(out, back), List.of(t0, t1), List.of("A", "B"), List.of("B", "A"));
     }
 
     @Test
     void 그날_처음_닫힌_고리에_경보_1건() {
         CyclePath c = cycle(1, D.atTime(9, 0), D.atTime(10, 0));
-        List<CycleAlert> alerts = rule.alerts(List.of(c), List.of(), D);
-        assertThat(alerts).singleElement().satisfies(a -> {
+        assertThat(rule.alerts(List.of(c), D)).singleElement().satisfies(a -> {
             assertThat(a.minute()).isEqualTo(D.atTime(10, 0));
             assertThat(a.paths()).containsExactly(c);
+            assertThat(a.valid(rule)).isTrue();
         });
     }
 
     @Test
-    void 고리가_남아_있는_동안_새로_닫힌_고리는_경보를_늘리지_않는다() {
-        List<CycleAlert> alerts = rule.alerts(List.of(
-                cycle(1, D.atTime(9, 0), D.atTime(10, 0)),
-                cycle(3, D.atTime(11, 0), D.atTime(12, 0))), List.of(), D);
-        assertThat(alerts).singleElement().satisfies(a -> assertThat(a.minute()).isEqualTo(D.atTime(10, 0)));
+    void 앞_고리가_창에_남아_있어도_다른_분에_닫힌_고리는_각각_경보() {   // paths 는 자기 분에 닫힌 고리만
+        CyclePath c1 = cycle(1, D.atTime(9, 0), D.atTime(10, 0));
+        CyclePath c2 = cycle(3, D.atTime(11, 0), D.atTime(12, 0));
+        assertThat(rule.alerts(List.of(c2, c1), D)).satisfiesExactly(
+                a -> {
+                    assertThat(a.minute()).isEqualTo(D.atTime(10, 0));
+                    assertThat(a.paths()).containsExactly(c1);
+                },
+                a -> {
+                    assertThat(a.minute()).isEqualTo(D.atTime(12, 0));
+                    assertThat(a.paths()).containsExactly(c2);
+                });
     }
 
     @Test
-    void 전날_닫힌_고리가_1분_전_창에_있으면_경보_없음() {
-        CycleMark yesterday = new CycleMark("A", D.minusDays(1).atTime(10, 0), D.minusDays(1).atTime(9, 0));
-        assertThat(rule.alerts(List.of(cycle(3, D.atTime(11, 0), D.atTime(12, 0))), List.of(yesterday), D)).isEmpty();
+    void 이미_경보에_쓴_거래도_나중에_닫힌_고리의_일부로_다시_쓰인다() {
+        // A→B 09:00(1), B→A 10:00(2), A→B 11:00(3), B→A 12:00(4) — 12:00 에 (09:00, 12:00)·(11:00, 12:00) 두 고리가 닫힌다
+        CyclePath at10 = cycle(1, D.atTime(9, 0), 2, D.atTime(10, 0));
+        CyclePath at12Old = cycle(1, D.atTime(9, 0), 4, D.atTime(12, 0));
+        CyclePath at12New = cycle(3, D.atTime(11, 0), 4, D.atTime(12, 0));
+        assertThat(rule.alerts(List.of(at12New, at10, at12Old), D)).satisfiesExactly(
+                a -> {
+                    assertThat(a.minute()).isEqualTo(D.atTime(10, 0));
+                    assertThat(a.paths()).containsExactly(at10);
+                },
+                a -> {
+                    assertThat(a.minute()).isEqualTo(D.atTime(12, 0));
+                    assertThat(a.paths()).containsExactly(at12Old, at12New);   // 첫 거래 시각순
+                    assertThat(a.transactionIds()).containsExactly(1L, 3L, 4L);
+                    assertThat(a.valid(rule)).isTrue();
+                });
     }
 
     @Test
-    void 전날_고리_요약은_가장_늦은_첫_거래_시각_하나로_판단() {
-        LocalDateTime e = D.atTime(12, 0);
-        CycleMark justIn = new CycleMark("A", D.minusDays(1).atTime(10, 0), e.minusHours(96));             // 첫 거래 = E-H → 1분 전 창 안
-        CycleMark justOut = new CycleMark("A", D.minusDays(1).atTime(10, 0), e.minusHours(96).minusMinutes(1));
-        CyclePath fresh = cycle(3, D.atTime(11, 0), e);
-        assertThat(rule.alerts(List.of(fresh), List.of(justIn), D)).isEmpty();
-        assertThat(rule.alerts(List.of(fresh), List.of(justOut), D)).hasSize(1);
-    }
-
-    @Test
-    void 전날_고리가_창_밖으로_나갔으면_다시_경보() {
-        CycleMark old = new CycleMark("A", D.minusDays(4).atTime(10, 0), D.minusDays(4).atTime(9, 0));   // 첫 거래가 E-H 이전
-        CyclePath fresh = cycle(3, D.atTime(11, 0), D.atTime(12, 0));
-        assertThat(rule.alerts(List.of(fresh), List.of(old), D)).singleElement()
-                .satisfies(a -> assertThat(a.paths()).containsExactly(fresh));
-    }
-
-    @Test
-    void 경보의_paths는_E_시점_창_안의_고리_전부_첫_거래_시각순() {
+    void 같은_분에_닫힌_고리_여럿은_경보_1건_paths는_첫_거래_시각순() {
         CyclePath early = cycle(1, D.atTime(8, 0), D.atTime(10, 0));
-        CyclePath sameClose = cycle(3, D.atTime(7, 0), D.atTime(10, 0));
-        assertThat(rule.alerts(List.of(early, sameClose), List.of(), D)).singleElement()
-                .satisfies(a -> assertThat(a.paths()).containsExactly(sameClose, early));
+        CyclePath earlier = cycle(3, D.atTime(7, 0), D.atTime(10, 0));
+        assertThat(rule.alerts(List.of(early, earlier), D)).singleElement()
+                .satisfies(a -> assertThat(a.paths()).containsExactly(earlier, early));
+    }
+
+    @Test
+    void 같은_거래를_여러_고리가_쓰면_근거_거래는_한_번만() {   // A→B 10:00·10:01, B→A 10:05 → 2홉 고리 2개, 근거 3건
+        LocalDateTime back = D.atTime(10, 5);
+        CyclePath p1 = cycle(1, D.atTime(10, 0), 3, back);
+        CyclePath p2 = cycle(2, D.atTime(10, 1), 3, back);
+        assertThat(rule.alerts(List.of(p2, p1), D)).singleElement().satisfies(a -> {
+            assertThat(a.paths()).containsExactly(p1, p2);
+            assertThat(a.transactionIds()).containsExactly(1L, 2L, 3L);
+            assertThat(a.toRuleFacts().get("hops_by_path").toString()).isEqualTo("[2,2]");
+        });
+    }
+
+    @Test
+    void 다른_날_닫힌_고리는_그날_경보에_안_들어간다() {   // 이미 닫힌 고리는 다음 날 다시 경보가 되지 않음
+        CyclePath yesterday = cycle(1, D.minusDays(1).atTime(9, 0), D.minusDays(1).atTime(10, 0));
+        assertThat(rule.alerts(List.of(yesterday), D)).isEmpty();
+    }
+
+    @Test
+    void 다른_분에_닫힌_고리가_섞이면_저장_전_검사_실패() {
+        CyclePath c1 = cycle(1, D.atTime(9, 0), D.atTime(10, 0));
+        CyclePath c2 = cycle(3, D.atTime(11, 0), D.atTime(12, 0));
+        assertThat(new CycleAlert(D.atTime(12, 0), List.of(c1, c2)).valid(rule)).isFalse();
     }
 
     @Test

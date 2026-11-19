@@ -49,11 +49,6 @@ public record CyclePath(List<Long> ids, List<LocalDateTime> ts, List<String> fro
         return ids.size();
     }
 
-    /** 1분 전 창 판단용 요약. */
-    public CycleMark mark() {
-        return new CycleMark(accountKey(), closeMinute(), firstTs());
-    }
-
     /** rules.md 2.1 저장 전 검사 (R04): A 에서 시작해 A 로, 이어짐, 분 단위 증가, 창 안, 중간 계좌 겹침 없음, max_hops 이하. */
     public boolean validFor(CycleRule rule, LocalDateTime windowStart, LocalDateTime windowEnd) {
         int k = ids.size();

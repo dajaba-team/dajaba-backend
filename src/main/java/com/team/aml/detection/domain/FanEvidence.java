@@ -55,7 +55,7 @@ public record FanEvidence(String entityId, List<CurrencyTotal> byCurrency) {
     }
 
     /** numeric(20,6) 합계의 끝 0 을 떼되 지수 표기(1E+3)는 만들지 않는다. */
-    private static BigDecimal plain(BigDecimal amount) {
+    static BigDecimal plain(BigDecimal amount) {
         return new BigDecimal(amount.stripTrailingZeros().toPlainString());
     }
 }

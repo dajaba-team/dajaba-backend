@@ -2,9 +2,9 @@ package com.team.aml.detection.domain;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /** 룰 스캔의 집계·저장 (SD 명세 §5). 집계는 SQL, 판정은 FanInRule·FanOutRule 같은 domain 룰이 한다. */
 public interface RuleScanRepository {
@@ -32,15 +32,26 @@ public interface RuleScanRepository {
     /** R06 집계 — 그날 입금·출금이 있었던 (계좌, 분) 마다 지금 창·1분 전 창의 송신·수신 계좌 수. 하한·상한은 후보 거르기에만. */
     List<GatherScatterMinute> gatherScatterMinutes(LocalDate date, GatherScatterRule rule);
 
-    /** R04 — 돌아오는 거래(→A)가 [closeFrom, closeTo) 에 있는 거래 단위 고리 전부. 각 고리는 자기 창(돌아오는 분 기준) 안. */
-    List<CyclePath> cyclesClosing(LocalDateTime closeFrom, LocalDateTime closeTo, CycleRule rule);
+    /** R03 집계 — 그날 중계 쌍을 완성하는 출금이 있었던 (계좌, 분) 과 1분 전 창에도 쌍이 있었는지. */
+    List<FxRelayMinute> fxRelayMinutes(LocalDate date, FxRelayRule rule);
+
+    /** [windowStart, windowEnd) 안의 모든 중계 쌍(받은 거래 시각순) + 계좌의 법인. */
+    FxRelayEvidence fxRelayEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd,
+                                    FxRelayRule rule);
 
     /**
-     * R04 1분 전 창 판단용 — accounts 의 고리 중 [closeFrom, closeTo) 에 닫힌 것을 (계좌, 닫힌 분) 별 가장 늦은 첫 거래 시각으로만.
-     * 경보에 담지 않는 과거 고리의 거래 조합은 가져오지 않는다.
+     * R05 — 후보 (출발 S, 도착 T) 의 S→M·M→T 거래 전부, [D - H, D+1) (1분 전 창 판단 포함).
+     * 후보 = 그날 받은 거래가 있는 T 마다 S→M·M→T 엣지가 시간순으로 가능한 서로 다른 M 이 N 이상, S ≠ T.
      */
-    List<CycleMark> cycleMarksClosing(LocalDateTime closeFrom, LocalDateTime closeTo, CycleRule rule,
-                                      Collection<String> accounts);
+    List<ScatterGatherLeg> scatterGatherLegs(LocalDate date, ScatterGatherRule rule);
+
+    /**
+     * R04 — 돌아오는 거래(→A)가 [closeFrom, closeTo) 에 있는 거래 단위 고리를 (대상 계좌, 닫힌 분) 묶음으로 하나씩 넘긴다.
+     * 각 고리는 자기 창(돌아오는 분 기준) 안. 같은 계좌열이라도 거래가 다르면 다른 고리 — 앞 거래 하나가 여러 고리에 쓰일 수 있다.
+     * 결과를 커서로 나눠 받아 메모리에는 묶음 하나만 든다(하루치 경로를 한꺼번에 올리지 않음). 트랜잭션 안에서 불러야 한다.
+     */
+    void forEachCycleGroup(LocalDateTime closeFrom, LocalDateTime closeTo, CycleRule rule,
+                           Consumer<List<CyclePath>> group);
 
     /** 계좌의 법인 (accounts 에 없으면 null). */
     String entityIdOf(String accountKey);

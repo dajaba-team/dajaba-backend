@@ -69,9 +69,9 @@
 |---|---|---|---|---|
 | R01 | `R01_FAN_OUT` | 서로 다른 수신 계좌 N개 이상으로 송금 | `window_hours` 96, `min_distinct_receivers` 10 | **구현됨 (SCRUM-188)** |
 | R02 | `R02_FAN_IN` | 서로 다른 송신 계좌 N개 이상에서 입금 | `window_hours` 96, `min_distinct_senders` 5 | **구현됨 (SCRUM-99)** |
-| R03 | `R03_FX_RELAY` — 환전 중계 | 받은 거래보다 늦은 분, 창 안에 **다른 통화로** 보낸 거래가 있고 USD 환산 금액 비율(보낸 ÷ 받은)이 0.9~1.1(양 끝 포함). 받은 거래마다 창 안 출금 전부를 봄(건수 상한 없음) | `window_hours` 96, `amount_tolerance` 0.1, `require_currency_change` true, `usd_rates`(15개 통화 고정표) | 옛 `R03_PASS_THROUGH`를 대체 — 번호만 재사용, ID는 다름 |
-| R04 | `R04_CYCLE` | 대표 계좌에서 나가 같은 계좌로 돌아오는 고리 | `window_hours` 96, `max_hops` 4 | `rule_facts.paths` 필수 · **구현됨 (SCRUM-192)** |
-| R05 | `R05_SCATTER_GATHER` | 흩었다 모으기 — 한 계좌에서 서로 다른 중간 계좌 N개 이상을 거쳐 한 계좌로 모임 | `window_hours` 96, `min_intermediates` 3 | `rule_facts.paths` 필수. 옛 이름 `R05_STACK` |
+| R03 | `R03_FX_RELAY` — 환전 중계 | 받은 거래보다 늦은 분, 창 안에 **다른 통화로** 보낸 거래가 있고 USD 환산 금액 비율(보낸 ÷ 받은)이 0.9~1.1(양 끝 포함). 받은 거래마다 창 안 출금 전부를 봄(건수 상한 없음) | `window_hours` 96, `amount_tolerance` 0.1, `require_currency_change` true, `usd_rates`(15개 통화 고정표) | 옛 `R03_PASS_THROUGH`를 대체 — 번호만 재사용, ID는 다름 · **구현됨 (SCRUM-193)** |
+| R04 | `R04_CYCLE` | 대표 계좌에서 나가 같은 계좌로 돌아오는 고리 | `window_hours` 96, `max_hops` 4 | `rule_facts.paths` 필수 · 사건형 경보(고리가 닫힐 때마다) · **구현됨 (SCRUM-192)** |
+| R05 | `R05_SCATTER_GATHER` | 흩었다 모으기 — 한 계좌에서 서로 다른 중간 계좌 N개 이상을 거쳐 한 계좌로 모임 | `window_hours` 96, `min_intermediates` 3 | `rule_facts.paths` 필수. 옛 이름 `R05_STACK` · **구현됨 (SCRUM-194)** |
 | R06 | `R06_GATHER_SCATTER` | 모았다 흩기 — 입금 상대·출금 상대가 **각각** 하한~상한 안 | `window_hours` 96, `min_distinct_senders` 5, `max_distinct_senders` 100, `min_distinct_receivers` 5, `max_distinct_receivers` 100 | 옛 `R06_BIPARTITE`를 대체 · **구현됨 (SCRUM-189)** |
 
 - R07·R08은 v2에서 뺐어요. 번호와 ID는 다른 룰에 다시 쓰지 않아요.
@@ -79,7 +79,7 @@
 
 **룰 공통** [안건 20, B7 11/2, 룰 v2]
 1. **룰 ID**는 `번호_유형`이고 코드·DB·학습 데이터에서 같은 문자열이에요. 시간은 ID에 넣지 않고 `params.window_hours`에 둬요.
-2. **창**은 B7 슬라이딩이에요. H = `window_hours`(v2 = 96)일 때 지금 창은 `[E+1분-H, E+1분)`, 1분 전 창은 `[E-H, E)`예요. 1분 전엔 거짓이고 지금 참일 때만 경보를 만들어요. `reference_ts` = `window_end` = E+1분이에요.
+2. **창**은 B7 슬라이딩이에요. H = `window_hours`(v2 = 96)일 때 지금 창은 `[E+1분-H, E+1분)`, 1분 전 창은 `[E-H, E)`예요. 1분 전엔 거짓이고 지금 참일 때만 경보를 만들어요(R04는 예외 — 고리가 닫힌 분마다 경보, `rules.md` 1.1). `reference_ts` = `window_end` = E+1분이에요.
 3. **평가 시점**은 관련 거래가 있는 분뿐이에요.
    - R01·R02·R06은 그 계좌에 거래가 있는 분에 평가해요.
    - R03·R04·R05는 중계·경로의 마지막 거래가 있는 분에 평가해요.
@@ -91,25 +91,27 @@
 룰 명세는 준혁이 관리해요. 준영의 학습용 경보와 `expected.json`으로 건수·거래 ID를 맞춰 봐요.
 
 **`rule_facts.paths` (R04·R05)** [ML 규약 §2.4] — 경로별 실제 거래 ID의 시간순 배열(`[[…],[…]]`)이에요.
-- 합집합 = `transaction_ids`예요.
+- 합집합 = `transaction_ids`예요(R04). R05는 합집합 ⊆ `transaction_ids`예요.
 - R04는 모든 고리가 대표 계좌에서 시작해 같은 계좌로 돌아와요.
-- 창 안의 **모든 유효 경로**를 담아요. 9/1~9/10 기준 경보당 최대 경로는 R04 16개, R05 106개예요.
+- R04는 그 분에 닫힌 **모든** 고리를 담아요(거래 조합 단위, 9/1~9/10 경보당 최대 36개). R05는 중간 계좌 Mᵢ마다 대표 경로 하나를 담고, 고른 출발 계좌의 모든 유효 경로 거래는 `transaction_ids`에 넣어요(`rules.md` R05).
 - 경로를 임의로 재배열·삭제하지 않아요.
 
 **룰 엔진 = 두 단계** [레퍼런스 §6.1 ③]
-1. **집계는 SQL**(`RuleScanJdbcRepository`): R02는 그날 입금이 있었던 (계좌, 분 E)마다 지금 창 `[E+1분-H, E+1분)`과 1분 전 창 `[E-H, E)`의 서로 다른 송금 계좌 수, R01은 그날 송금한 (계좌, 분 E)마다 같은 두 창의 서로 다른 수신 계좌 수(H = `params.window_hours`, 같은 SQL에 방향만 바꿔 씀). R06은 그날 입금이나 출금이 있었던 (계좌, 분 E)마다 같은 두 창의 송신·수신 계좌 수. R04는 계좌 쌍에서 그날 A로 돌아오는 고리 후보(2~4홉)를 찾고 후보만 거래 단위로 펼쳐요. 하루 범위에서도 N이 안 되는 계좌, 그리고 그날 모든 분의 1분 전 창에 공통으로 들어가는 구간에서 이미 N 이상인 계좌(거짓→참이 될 수 없음)는 먼저 걸러요 — 결과는 같고 대형 계좌를 분마다 다시 세지 않아요(9/5 R01 6분 → 5초)
-2. **판정은 Java**: `FanInRule`·`FanOutRule.fires(FanMinute)` — 지금 ≥ N이고 1분 전 < N(거짓→참)일 때만 경보 1건. R06 `GatherScatterRule.fires(GatherScatterMinute)` — 송신·수신 계좌 수가 둘 다 하한~상한 안이 되는 거짓→참. R04 `CycleRule.alerts` — 그날 고리가 닫힌 분 E마다 1분 전 창에 A의 고리가 없을 때만(전날까지 닫힌 고리는 계좌·닫힌 분별 가장 늦은 첫 거래 시각만 가져와 판단). 기준값(`window_hours`·`min_distinct_senders`/`min_distinct_receivers`)이 없거나 정수가 아니거나 1 미만이면 409 `INVALID_RULE_PARAMS` — 기본값으로 조용히 돌지 않아요 [SCRUM-99]
+1. **집계는 SQL**(`RuleScanJdbcRepository`): R02는 그날 입금이 있었던 (계좌, 분 E)마다 지금 창 `[E+1분-H, E+1분)`과 1분 전 창 `[E-H, E)`의 서로 다른 송금 계좌 수, R01은 그날 송금한 (계좌, 분 E)마다 같은 두 창의 서로 다른 수신 계좌 수(H = `params.window_hours`, 같은 SQL에 방향만 바꿔 씀). R06은 그날 입금이나 출금이 있었던 (계좌, 분 E)마다 같은 두 창의 송신·수신 계좌 수. R03은 그날 출금마다 그 계좌의 창 안 입금과 중계 쌍(늦은 분·다른 통화·USD 환산 ±10%)이 되는지 봐요. R05는 엣지에서 그날 받은 거래가 있는 T마다 S→M·M→T가 시간순으로 가능한 M이 N 이상인 (S, T) 후보를 찾아 그 거래를 가져와요. R04는 계좌 쌍에서 그날 A로 돌아오는 고리 후보(2~4홉)를 찾고 후보만 거래 단위로 펼쳐요. 하루 범위에서도 N이 안 되는 계좌, 그리고 그날 모든 분의 1분 전 창에 공통으로 들어가는 구간에서 이미 N 이상인 계좌(거짓→참이 될 수 없음)는 먼저 걸러요 — 결과는 같고 대형 계좌를 분마다 다시 세지 않아요(9/5 R01 6분 → 5초)
+2. **판정은 Java**: `FanInRule`·`FanOutRule.fires(FanMinute)` — 지금 ≥ N이고 1분 전 < N(거짓→참)일 때만 경보 1건. R06 `GatherScatterRule.fires(GatherScatterMinute)` — 송신·수신 계좌 수가 둘 다 하한~상한 안이 되는 거짓→참. R03 `FxRelayRule.fires(FxRelayMinute)` — 쌍을 완성하는 출금 분에 1분 전 창에 쌍이 없을 때만. R05 `ScatterGatherRule.alerts` — 그날 M→T가 있는 분 E마다 중간 계좌 N 이상인 S가 생길 때만(1분 전 창엔 없을 때), 대표 경로·근거 거래도 여기서. R04 `CycleRule.alerts` — 사건형: 그날 고리가 닫힌 분 E마다 경보 1건(1분 전 창 비교 없음), `paths` = 그 분에 닫힌 고리. 기준값(`window_hours`·`min_distinct_senders`/`min_distinct_receivers`·R05 `min_intermediates`·R04 `max_hops` 2~4)이 없거나 정수가 아니거나 1 미만이면 409 `INVALID_RULE_PARAMS` — 기본값으로 조용히 돌지 않아요 [SCRUM-99]
 - 룰별 조건·창·기준값·`rule_facts`는 룰 명세 `rules.md`(SCRUM-73)가 기준이에요.
 
-**룰 스캔 — 구현됨 (SCRUM-99 R02, SCRUM-188 R01, SCRUM-189 R06, SCRUM-192 R04)** `POST /api/v1/admin/batches/rule-scan?date=` → 200 `{batch_run_id, batch_type, batch_date, status, rows_in(그날 거래 수), rows_out(경보 수), alerts_by_rule[{rule_id, rule_version, alert_count}], started_at, finished_at}`
+**룰 스캔 — 구현됨 (SCRUM-99 R02, SCRUM-188 R01, SCRUM-189 R06, SCRUM-193 R03, SCRUM-192 R04, SCRUM-194 R05)** `POST /api/v1/admin/batches/rule-scan?date=` → 200 `{batch_run_id, batch_type, batch_date, status, rows_in(그날 거래 수), rows_out(경보 수), alerts_by_rule[{rule_id, rule_version, alert_count}], started_at, finished_at}`
 - 시작 전 거절(행 안 남김): 거래 없음 409 `DATASET_NOT_LOADED` · 거래 첫날~마지막 날 밖 409 `DATE_OUT_OF_RANGE` · 실행 중 409 `BATCH_RUNNING` · 이미 성공 409 `BATCH_ALREADY_DONE` · 켜진 룰 없음 409 `NO_ACTIVE_RULES`. 〔SD 명세 v0.3의 400 두 개는 409로 — 400은 요청 형식 오류에만〕
 - 룰 전체가 **한 트랜잭션**(하나라도 실패하면 그 실행의 경보 전부 롤백 → 다시 돌려도 두 번 생기지 않음), `SUCCEEDED`도 그 안에서. 실패는 `FAILED`를 따로 커밋. 앱이 죽어 남은 `RUNNING`은 기동 때 `FAILED`로.
 - 경보: `alert_no`는 시퀀스, `score_status = PENDING`, `case_opened = false`. R01·R02 창은 B7(11/2) 슬라이딩 `window_hours`(v2 96시간) — `window_end = reference_ts = E+1분`(뜻은 `(E-H, E]`), `batch_date` = 스캔 날짜(E의 날짜). 자기 계좌 거래 제외. `entity_id`는 `accounts`.
 - R02 `rule_facts` = `{distinct_senders, amounts_by_currency:[{currency, total_amount, transaction_count, transaction_ids}]}`(받은 쪽 금액, 통화 원문 그대로). `transaction_ids` = 창 안 입금 전부.
 - R01 `rule_facts` = `{distinct_receivers, amounts_by_currency:[{currency, total_amount, transaction_count, transaction_ids}]}`(보낸 쪽 금액 `amount_paid`·`currency_paid`, 통화 원문 그대로). `transaction_ids` = 창 안 송금 전부.
 - R06 `rule_facts` = `{distinct_senders, distinct_receivers, inbound_by_currency:[…], outbound_by_currency:[…]}`(입금은 받은 쪽, 출금은 보낸 쪽 금액). `transaction_ids` = 창 안 입금·출금 전부.
-- R04 `rule_facts` = `{paths:[[t1…tk],…], hops_by_path:[k,…]}`(E 시점 창 안 A의 고리 전부, 첫 거래 시각순). `transaction_ids` = 모든 고리 거래의 합집합.
-- 룰 행은 Flyway 시드(`V011` = `R02_FAN_IN` 버전 1, 96시간·N = 5, `V016` = 나머지 다섯 룰 버전 1). 켜진 룰에 구현이 없으면 500(배치 FAILED)이지만, 지금은 임시로 경고 로그만 남기고 건너뛰어요(SCRUM-260, 남은 룰 중 마지막 PR에서 되돌림). 건너뛰는 동안 성공한 날짜는 다시 스캔하지 않으므로 시연 데이터는 여섯 룰 머지 뒤 DB 초기화 후 스캔해요.
+- R03 `rule_facts` = `{paths:[[받은 거래, 보낸 거래],…], relays:[{in_currency, in_amount, out_currency, out_amount, ratio}]}`(창 안 모든 중계 쌍, 받은 거래 시각순). `transaction_ids` = 모든 쌍 거래의 합집합.
+- R04 `rule_facts` = `{paths:[[t1…tk],…], hops_by_path:[k,…]}`(그 분 E에 닫힌 A의 고리 전부, 첫 거래 시각순). `transaction_ids` = 그 고리 거래의 합집합.
+- R05 `rule_facts` = `{source_account_key, intermediates, paths:[[S→Mᵢ, Mᵢ→T],…]}`(Mᵢ마다 대표 경로 하나). `transaction_ids` = 고른 S의 모든 유효 경로 거래(paths 합집합 ⊆).
+- 룰 행은 Flyway 시드(`V011` = `R02_FAN_IN` 버전 1, 96시간·N = 5, `V016` = 나머지 다섯 룰 버전 1). 켜진 룰에 구현이 없으면 500(배치 FAILED)이에요(SCRUM-260 임시 건너뛰기는 SCRUM-192에서 지움). 건너뛰던 동안 성공한 날짜는 다시 스캔하지 않으므로 시연 데이터는 DB 초기화 후 스캔해요.
 - 룰 기준값은 기존 행을 고치지 않고 새 버전 행을 추가해요. DB도 `rules`는 `is_active`·`updated_*`만 바꿀 수 있어요(V005).
 - 이미 성공한 날짜는 다시 스캔하지 않아요(`batch_runs`). 그래서 룰 버전을 올려도 같은 날짜에 같은 룰·계좌·창 경보가 버전별로 또 생기지 않아요. 새 버전은 다음 스캔부터 적용돼요.
 

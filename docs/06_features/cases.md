@@ -60,7 +60,7 @@
 - 경계값 설정 `aml.case-policy.{version, low-to-medium, medium-to-high}` — 기본값 없음(평가 뒤 확정, 미결 23). [SCRUM-105]
 - **생성 당시 점수·모델·정책 스냅샷 — 구현됨 (V013, SCRUM-236·237, 11/15 C안)** `cases.opened_*` 7칸(점수 행 id·점수·모델·피처 버전 / 정책 버전·두 경계값). 생성 배치가 HIGH로 판정한 `ScoreClassification`과 경보 점수를 `OpenedScore`(embeddable)로 남겨요. 만든 뒤 안 바뀌어요. V013 전에 만든 케이스는 마이그레이션이 `alert_scores`에서 점수·모델만 채우고 정책 세 칸은 null. CHECK: 점수 네 칸·정책 세 칸은 각각 함께 있거나 함께 없고, 정책은 점수가 있을 때만.
   - **왜 복사하나(C안)** — cases가 목록 SQL에서 detection 테이블을 조인하지 않으려고(규칙 예외 B안 대신). `alert_scores`는 경보당 1행·앱 계정 UPDATE/DELETE 없음(V005_1)이라 생성 당시 점수 = 지금 점수. 재채점(다른 모델로 다시 매기기)이 생기면 이 정렬 방식을 다시 정해요.
-- **API — 구현됨 (SCRUM-105)** `POST /api/v1/admin/batches/open-cases?date=YYYY-MM-DD` → **202** `{batch_run_id, batch_type, batch_date, status: "RUNNING"}`(계약서 B4). `RequestOpenCases`가 `start()`로 RUNNING을 커밋한 뒤 `run()`을 Boot 기본 실행기(`applicationTaskExecutor`)에 넘겨요 — 적재(#56 `RequestIbmDatasetLoad`)와 같은 모양. 실행기가 거절하면 FAILED로 남기고 500. 결과는 `GET /admin/batches/{batch_run_id}`(#56). 시작 전 거절 409는 그대로 동기 응답. 〔`date` 누락·형식 오류 400은 #56의 `GlobalExceptionHandler` 쿼리 파라미터 처리가 들어와야 해요 — 지금은 500〕
+- **API — 구현됨 (SCRUM-105)** `POST /api/v1/admin/batches/open-cases?date=YYYY-MM-DD` → **202** `{batch_run_id, batch_type, batch_date, status: "RUNNING"}`(계약서 B4). `RequestOpenCases`가 `start()`로 RUNNING을 커밋한 뒤 `run()`을 Boot 기본 실행기(`applicationTaskExecutor`)에 넘겨요 — 적재(#56 `RequestIbmDatasetLoad`)와 같은 모양. 실행기가 거절하면 FAILED로 남기고 500. **RabbitMQ를 켜면(SCRUM-276)** 실행기 대신 `case.open-cases` 큐에 `batch_run_id`만 보내고 `OpenCasesMessageListener` → `RunOpenCasesOnce`가 받아 같은 `run()`을 돌려요(행이 `RUNNING`이 아니면 건너뜀). 꺼짐·브로커가 못 받으면 지금처럼 실행기로 — 실행기도 `RunOpenCasesOnce`를 거쳐서, 확인이 늦어 둘 다 돌게 돼도 batch_run_id 실행 잠금을 먼저 잡은 쪽만 돌아요. 큐 재시도를 다 쓰면 DLQ 전에 행을 `FAILED`로 바꿔 다시 요청할 수 있어요 — [`03_shared.md` §14](../03_shared.md). 결과는 `GET /admin/batches/{batch_run_id}`(#56). 시작 전 거절 409는 그대로 동기 응답. 〔`date` 누락·형식 오류 400은 #56의 `GlobalExceptionHandler` 쿼리 파라미터 처리가 들어와야 해요 — 지금은 500〕
 
 **메모** [안건 16 — 일부 미결]
 - 결정표 권장은 `case_history`의 `NOTE` 행(메모 전체를 매번 저장). 지윤 의견은 `case_note_history` 분리. **이름(A/B)이 엇갈려서 최종 확인 필요** — 지윤·진희.
@@ -177,7 +177,7 @@
 - JPQL에서 `CASE`가 예약어라 엔티티 이름은 `InvestigationCase`예요(`select c from InvestigationCase c`).
 - `case_history.case_version_before`는 **그 변경 직전**의 `cases.version`이에요. `@Version`은 flush 때 올라가서, 한 트랜잭션에서 전이가 두 번 일어나면 두 행에 같은 번호가 남아요.
 
-**str에 주는 공개 기능 — 초안 있는 종결 (SCRUM-235)** `CloseCaseWithDraft.execute(caseId, draftId, expectedVersion, closeReason, comment)` → 새 `cases.version`, `Propagation.MANDATORY`. str `close-with-draft`(A6, SCRUM-186)가 현재 초안을 SUPERSEDED로 바꾸기 **전에** 불러요(케이스 먼저 잠금). 명세 이름은 `CloseCase`였지만 화면용 `CloseCase`(API-06)와 겹쳐 `WithDraft`를 붙였어요.
+**str에 주는 공개 기능 — 초안 있는 종결 (SCRUM-235)** `CloseCaseWithDraft.execute(caseId, draftId, expectedVersion, closeReason, comment)` → 새 `cases.version`, `Propagation.MANDATORY`. str `close-with-draft`(A6, SCRUM-278)가 현재 초안을 SUPERSEDED로 바꾸기 **전에** 불러요(케이스 먼저 잠금). 명세 이름은 `CloseCase`였지만 화면용 `CloseCase`(API-06)와 겹쳐 `WithDraft`를 붙였어요.
 - 검사 순서: 케이스 잠금 404 → version 409 → 담당자 403 `NOT_ASSIGNEE` → 현재 초안(다른 초안 409 `DRAFT_SUPERSEDED`, 초안 없음 409 `INVALID_CASE_TRANSITION` — 그건 화면용 `close`로) → 상태 409(DRAFTED, REJECTED+NOT_REPORTABLE만) → 사유(`COMMENT_REQUIRED`, 형식 400은 str DTO).
 - CLOSED·`close_reason`·`CLOSE` 이력(`reason_code`=종결 사유), 반려 코드 지움. `current_draft_id`는 남겨요(V006 — CLOSED는 둘 다 허용).
 

@@ -2,18 +2,22 @@ package com.team.aml.detection.application;
 
 import com.team.aml.detection.domain.ActiveRule;
 import com.team.aml.detection.domain.CycleAlert;
-import com.team.aml.detection.domain.CycleMark;
-import com.team.aml.detection.domain.CyclePath;
 import com.team.aml.detection.domain.CycleRule;
 import com.team.aml.detection.domain.FanEvidence;
 import com.team.aml.detection.domain.FanInRule;
 import com.team.aml.detection.domain.FanMinute;
 import com.team.aml.detection.domain.FanOutRule;
+import com.team.aml.detection.domain.FxRelayEvidence;
+import com.team.aml.detection.domain.FxRelayMinute;
+import com.team.aml.detection.domain.FxRelayRule;
 import com.team.aml.detection.domain.GatherScatterEvidence;
 import com.team.aml.detection.domain.GatherScatterMinute;
 import com.team.aml.detection.domain.GatherScatterRule;
 import com.team.aml.detection.domain.NewAlert;
 import com.team.aml.detection.domain.RuleScanRepository;
+import com.team.aml.detection.domain.ScatterGatherAlert;
+import com.team.aml.detection.domain.ScatterGatherLeg;
+import com.team.aml.detection.domain.ScatterGatherRule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -24,7 +28,6 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
@@ -36,13 +39,6 @@ import java.util.stream.Collectors;
 public class RuleScanner {
 
     private static final Logger log = LoggerFactory.getLogger(RuleScanner.class);
-
-    /**
-     * 임시 (SCRUM-260): V016 으로 다섯 룰을 구현 전에 먼저 켰다. 여기 없는 룰은 경고만 남기고 건너뛰며 alerts_by_rule 에도 넣지 않는다.
-     * 룰 PR 마다 ID 를 여기와 switch 에 추가하고, 남은 룰 중 마지막으로 머지되는 룰 PR 에서 이 목록과 건너뛰기를 지운다.
-     */
-    private static final Set<String> IMPLEMENTED =
-            Set.of(FanOutRule.RULE_ID, FanInRule.RULE_ID, CycleRule.RULE_ID, GatherScatterRule.RULE_ID);
 
     private final RuleScanRepository scans;
     private final RuleScanRecorder recorder;
@@ -56,14 +52,12 @@ public class RuleScanner {
     public List<RuleAlertCount> scan(long batchRunId, LocalDate date) {
         List<RuleAlertCount> counts = new ArrayList<>();
         for (ActiveRule rule : scans.findActiveRules()) {
-            if (!IMPLEMENTED.contains(rule.ruleId())) {
-                log.warn("rule scan skipped unimplemented rule rule_id={} version={}", rule.ruleId(), rule.version());
-                continue;
-            }
             int created = switch (rule.ruleId()) {
                 case FanOutRule.RULE_ID -> scanFanOut(batchRunId, date, rule);
                 case FanInRule.RULE_ID -> scanFanIn(batchRunId, date, rule);
+                case FxRelayRule.RULE_ID -> scanFxRelay(batchRunId, date, rule);
                 case CycleRule.RULE_ID -> scanCycle(batchRunId, date, rule);
+                case ScatterGatherRule.RULE_ID -> scanScatterGather(batchRunId, date, rule);
                 case GatherScatterRule.RULE_ID -> scanGatherScatter(batchRunId, date, rule);
                 default -> throw new IllegalStateException("구현되지 않은 룰이 켜져 있습니다: " + rule.ruleId());
             };
@@ -128,33 +122,78 @@ public class RuleScanner {
         return created;
     }
 
+    /** R03 — 중계 쌍을 완성하는 출금 분에, 1분 전 창에 쌍이 없으면 경보. 저장 전 쌍 검사(rules.md 2.1)가 어긋나면 만들지 않는다. */
+    private int scanFxRelay(long batchRunId, LocalDate date, ActiveRule rule) {
+        FxRelayRule fx = FxRelayRule.from(rule.params());
+        int created = 0;
+        for (FxRelayMinute m : scans.fxRelayMinutes(date, fx)) {
+            if (!fx.fires(m)) {
+                continue;
+            }
+            LocalDateTime start = fx.windowStart(m.minute());
+            LocalDateTime end = fx.windowEnd(m.minute());
+            FxRelayEvidence evidence = scans.fxRelayEvidence(m.accountKey(), start, end, fx);
+            if (!evidence.valid(fx)) {
+                log.warn("rule scan dropped alert failing path check rule_id={} reference_ts={} pairs={}",
+                        FxRelayRule.RULE_ID, end, evidence.pairs().size());
+                continue;
+            }
+            scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), m.accountKey(), evidence.entityId(),
+                    start, end, end, evidence.toRuleFacts(fx), evidence.transactionIds()));
+            created++;
+        }
+        return created;
+    }
+
     /**
-     * R04 — 그날 닫힌 고리를 찾고, 그 대상 계좌들만 1분 전 창 판단용으로 그 전 H 안에 닫힌 고리 요약(CycleMark)을 더 가져온다.
-     * 판정은 CycleRule.alerts, 저장 전 경로 검사(rules.md 2.1)가 어긋나면 만들지 않는다.
+     * R05 — 그날 M→T 가 있는 분 E 마다 지금 창에 중간 계좌 N 이상인 출발 S 가 생기면 경보(1분 전 창엔 없을 때).
+     * 저장 전 검사(rules.md 2.1)가 어긋나면 만들지 않는다.
+     */
+    private int scanScatterGather(long batchRunId, LocalDate date, ActiveRule rule) {
+        ScatterGatherRule sg = ScatterGatherRule.from(rule.params());
+        Map<String, List<ScatterGatherLeg>> byTarget = scans.scatterGatherLegs(date, sg).stream()
+                .collect(Collectors.groupingBy(ScatterGatherLeg::target, TreeMap::new, Collectors.toList()));
+        int created = 0;
+        for (Map.Entry<String, List<ScatterGatherLeg>> entry : byTarget.entrySet()) {
+            for (ScatterGatherAlert alert : sg.alerts(entry.getValue(), date)) {
+                LocalDateTime end = sg.windowEnd(alert.minute());
+                if (!alert.valid(sg)) {
+                    log.warn("rule scan dropped alert failing path check rule_id={} reference_ts={} paths={}",
+                            ScatterGatherRule.RULE_ID, end, alert.paths().size());
+                    continue;
+                }
+                scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), entry.getKey(),
+                        scans.entityIdOf(entry.getKey()), sg.windowStart(alert.minute()), end, end,
+                        alert.toRuleFacts(), alert.transactionIds()));
+                created++;
+            }
+        }
+        return created;
+    }
+
+    /**
+     * R04 — 그날 닫힌 고리를 (대상 계좌, 닫힌 분) 묶음으로 받아 묶음마다 경보 1건 (사건형, rules.md R04).
+     * 묶음이 끝날 때마다 바로 저장해서 하루치 경로를 한꺼번에 들고 있지 않는다(scan 의 트랜잭션 안에서 커서로 받음).
+     * 묶기는 CycleRule.alerts, 저장 전 경로 검사(rules.md 2.1)가 어긋나면 만들지 않는다.
      */
     private int scanCycle(long batchRunId, LocalDate date, ActiveRule rule) {
         CycleRule cr = CycleRule.from(rule.params());
         LocalDateTime dayStart = date.atStartOfDay();
-        Map<String, List<CyclePath>> today = scans.cyclesClosing(dayStart, dayStart.plusDays(1), cr).stream()
-                .collect(Collectors.groupingBy(CyclePath::accountKey, TreeMap::new, Collectors.toList()));
-        Map<String, List<CycleMark>> earlier = today.isEmpty() ? Map.of()
-                : scans.cycleMarksClosing(dayStart.minusHours(cr.windowHours()), dayStart, cr, today.keySet()).stream()
-                        .collect(Collectors.groupingBy(CycleMark::accountKey));
-        int created = 0;
-        for (Map.Entry<String, List<CyclePath>> entry : today.entrySet()) {
-            for (CycleAlert alert : cr.alerts(entry.getValue(), earlier.getOrDefault(entry.getKey(), List.of()), date)) {
+        int[] created = {0};
+        scans.forEachCycleGroup(dayStart, dayStart.plusDays(1), cr, group -> {
+            for (CycleAlert alert : cr.alerts(group, date)) {
                 LocalDateTime end = cr.windowEnd(alert.minute());
                 if (!alert.valid(cr)) {
                     log.warn("rule scan dropped alert failing path check rule_id={} reference_ts={} paths={}",
                             CycleRule.RULE_ID, end, alert.paths().size());
                     continue;
                 }
-                scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), entry.getKey(),
-                        scans.entityIdOf(entry.getKey()), cr.windowStart(alert.minute()), end, end,
+                scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), alert.accountKey(),
+                        scans.entityIdOf(alert.accountKey()), cr.windowStart(alert.minute()), end, end,
                         alert.toRuleFacts(), alert.transactionIds()));
-                created++;
+                created[0]++;
             }
-        }
-        return created;
+        });
+        return created[0];
     }
 }
