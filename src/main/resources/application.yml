@@ -121,6 +121,8 @@ logging:
     # 그러면 Spring 의 "사용자 못 찾음" 디버그에 입력한 login_id 원문이 찍힌다 → 모든 프로필에서 INFO 고정 (SCRUM-19)
     com.team.aml.shared.security.AppLoginProvider: INFO
     com.team.aml.shared.security.JsonLoginFilter: INFO
+    # 보고서 PDF 라이브러리 — 기본이 INFO 라 PDF 마다 글꼴·CSS 안내가 여러 줄 찍힌다. 경고부터만
+    com.openhtmltopdf: WARN
 
 ---
 # local — 개발. swagger, DevUserSeeder, CORS(5173), MockAiClient

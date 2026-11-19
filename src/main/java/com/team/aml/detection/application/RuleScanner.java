@@ -13,6 +13,9 @@ import com.team.aml.detection.domain.GatherScatterMinute;
 import com.team.aml.detection.domain.GatherScatterRule;
 import com.team.aml.detection.domain.NewAlert;
 import com.team.aml.detection.domain.RuleScanRepository;
+import com.team.aml.detection.domain.ScatterGatherAlert;
+import com.team.aml.detection.domain.ScatterGatherLeg;
+import com.team.aml.detection.domain.ScatterGatherRule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -22,7 +25,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.stream.Collectors;
 
 /**
  * 켜진 룰 전부를 한 트랜잭션으로 스캔한다 (SD 명세 §5). 하나라도 실패하면 그 실행의 경보가 전부 롤백 →
@@ -38,7 +44,8 @@ public class RuleScanner {
      * 룰 PR 마다 ID 를 여기와 switch 에 추가하고, 남은 룰 중 마지막으로 머지되는 룰 PR 에서 이 목록과 건너뛰기를 지운다.
      */
     private static final Set<String> IMPLEMENTED =
-            Set.of(FanOutRule.RULE_ID, FanInRule.RULE_ID, FxRelayRule.RULE_ID, GatherScatterRule.RULE_ID);
+            Set.of(FanOutRule.RULE_ID, FanInRule.RULE_ID, FxRelayRule.RULE_ID, ScatterGatherRule.RULE_ID,
+                    GatherScatterRule.RULE_ID);
 
     private final RuleScanRepository scans;
     private final RuleScanRecorder recorder;
@@ -60,6 +67,7 @@ public class RuleScanner {
                 case FanOutRule.RULE_ID -> scanFanOut(batchRunId, date, rule);
                 case FanInRule.RULE_ID -> scanFanIn(batchRunId, date, rule);
                 case FxRelayRule.RULE_ID -> scanFxRelay(batchRunId, date, rule);
+                case ScatterGatherRule.RULE_ID -> scanScatterGather(batchRunId, date, rule);
                 case GatherScatterRule.RULE_ID -> scanGatherScatter(batchRunId, date, rule);
                 default -> throw new IllegalStateException("구현되지 않은 룰이 켜져 있습니다: " + rule.ruleId());
             };
@@ -143,6 +151,32 @@ public class RuleScanner {
             scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), m.accountKey(), evidence.entityId(),
                     start, end, end, evidence.toRuleFacts(fx), evidence.transactionIds()));
             created++;
+        }
+        return created;
+    }
+
+    /**
+     * R05 — 그날 M→T 가 있는 분 E 마다 지금 창에 중간 계좌 N 이상인 출발 S 가 생기면 경보(1분 전 창엔 없을 때).
+     * 저장 전 검사(rules.md 2.1)가 어긋나면 만들지 않는다.
+     */
+    private int scanScatterGather(long batchRunId, LocalDate date, ActiveRule rule) {
+        ScatterGatherRule sg = ScatterGatherRule.from(rule.params());
+        Map<String, List<ScatterGatherLeg>> byTarget = scans.scatterGatherLegs(date, sg).stream()
+                .collect(Collectors.groupingBy(ScatterGatherLeg::target, TreeMap::new, Collectors.toList()));
+        int created = 0;
+        for (Map.Entry<String, List<ScatterGatherLeg>> entry : byTarget.entrySet()) {
+            for (ScatterGatherAlert alert : sg.alerts(entry.getValue(), date)) {
+                LocalDateTime end = sg.windowEnd(alert.minute());
+                if (!alert.valid(sg)) {
+                    log.warn("rule scan dropped alert failing path check rule_id={} reference_ts={} paths={}",
+                            ScatterGatherRule.RULE_ID, end, alert.paths().size());
+                    continue;
+                }
+                scans.insertAlert(new NewAlert(batchRunId, date, rule.refId(), entry.getKey(),
+                        scans.entityIdOf(entry.getKey()), sg.windowStart(alert.minute()), end, end,
+                        alert.toRuleFacts(), alert.transactionIds()));
+                created++;
+            }
         }
         return created;
     }
