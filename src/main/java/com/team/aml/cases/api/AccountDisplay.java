@@ -8,7 +8,7 @@ import java.util.HexFormat;
 /**
  * 화면 응답의 계좌 (미결 19, 계약서 v0.2 2.4). 원본 account_key({bank_id}_{account_no})는 응답에 넣지 않는다.
  * <ul>
- *   <li>account_no — 표시용 가린 값 {@code 010_****BD30}. 같은 은행·같은 끝 4자리는 구별되지 않으니 식별자로 쓰지 않는다</li>
+ *   <li>account_no — 표시용 가린 값 {@code 10_****BD30}(은행 ID 정규화 뒤 — 08_decisions 11/2). 같은 은행·같은 끝 4자리는 구별되지 않으니 식별자로 쓰지 않는다</li>
  *   <li>account_ref — 여러 계좌 구별용 {@code ACR-XXXXXXXXXXXX}. 같은 계좌는 어느 응답에서나 같은 값</li>
  * </ul>
  */
@@ -20,7 +20,7 @@ final class AccountDisplay {
 
     private AccountDisplay() {}
 
-    /** {@code 010_8000EBD30 → 010_****BD30}. 번호가 4자리 이하면 끝자리도 보여 주지 않는다. */
+    /** {@code 10_8000EBD30 → 10_****BD30}. 번호가 4자리 이하면 끝자리도 보여 주지 않는다. */
     static String maskedNo(String accountKey) {
         if (accountKey == null) {
             return null;
