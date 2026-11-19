@@ -47,7 +47,7 @@ spring:
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
       database: 0
-      connect-timeout: 2s                 # Redis 가 죽었을 때 요청이 오래 매달리지 않게
+      connect-timeout: 2s                 # Redis 가 죽었을 때 요청이 오래 매달리지 않게 → 503 SESSION_STORE_UNAVAILABLE
       timeout: 2s
   session:
     redis:
@@ -162,7 +162,7 @@ logging:
     com.openhtmltopdf: WARN
     # Redis 세션(SCRUM-273): 세션 끊기 중 세션을 못 찾으면 Spring 이 세션 ID 를 INFO 로 찍는다 → WARN 부터
     org.springframework.session.security.SpringSessionBackedSessionInformation: WARN
-    # Lettuce 재연결 로그(INFO·WARN)는 Redis 주소를 찍는다
+    # Lettuce 재연결 로그(INFO·WARN)는 Redis 주소를 찍는다. 장애는 SessionStoreFailureFilter 가 오류 클래스 이름만 남긴다
     io.lettuce.core: ERROR
 
 ---

@@ -8,6 +8,7 @@ import com.team.aml.shared.domain.ForbiddenException;
 import com.team.aml.shared.domain.NotFoundException;
 import com.team.aml.shared.domain.TooManyRequestsException;
 import com.team.aml.shared.metrics.ErrorMetrics;
+import com.team.aml.shared.security.SessionStoreUnavailableException;
 import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.postgresql.util.PSQLException;
@@ -54,6 +55,7 @@ import java.util.Set;
  *  AccessDenied (403)              → 403 FORBIDDEN
  *  NoResourceFoundException        → 404 NOT_FOUND (없는 경로, details {}, 경고 한 줄 — SCRUM-157)
  *  HttpRequestMethodNotSupported   → 405 METHOD_NOT_ALLOWED (Allow 헤더, 모르면 없음, 경고 한 줄 — SCRUM-157)
+ *  세션 저장소(Redis) 장애         → 여기선 다시 던짐 → SessionStoreFailureFilter 가 503 SESSION_STORE_UNAVAILABLE (SCRUM-273)
  *  그 외                            → 500 INTERNAL_ERROR (진짜 처리 안 된 것만. 메시지 고정, 스택은 로그에만). DB 오류는 클래스·SQLState·제약 이름만 (SCRUM-272)
  *
  * 응답마다 aml.http.errors{code, status} 를 1 센다(counted, SCRUM-271). 세다 실패해도 응답은 그대로(ErrorMetrics 가 삼킴).
@@ -198,6 +200,11 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> unknown(Exception e) {
+        // 세션 저장소(Redis) 장애는 여기서 답하지 않는다 — 응답을 쓰는 순간 세션 저장을 다시 시도해 또 실패한다.
+        // 같은 예외를 그대로 던지면(경고 로그 없음) Spring Session 필터 바깥의 SessionStoreFailureFilter 가 503 으로 답한다 (SCRUM-273).
+        if (e instanceof RuntimeException redis && SessionStoreUnavailableException.isCausedBy(redis)) {
+            throw redis;
+        }
         if (e instanceof DataAccessException dbError) {
             log.error("{}", databaseErrorSummary(dbError));
         } else {
