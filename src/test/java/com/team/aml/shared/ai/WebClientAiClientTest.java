@@ -89,7 +89,7 @@ class WebClientAiClientTest {
         var wc = org.springframework.web.reactive.function.client.WebClient.builder().baseUrl(baseUrl).build();
         var props = new AmlProperties(
                 new AmlProperties.Ai(baseUrl, "test-internal-key-0123456789abcd", timeoutSeconds, 500, false,
-                        askTimeoutSeconds, false),
+                        askTimeoutSeconds, false, 5),
                 null, null, null);
         return new WebClientAiClient(wc, props, om, writer);
     }

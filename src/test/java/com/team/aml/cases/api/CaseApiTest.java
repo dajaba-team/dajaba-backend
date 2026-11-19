@@ -137,6 +137,19 @@ class CaseApiTest {
     }
 
     @Test
+    void 꺼짐_질문_답변이_꺼져_있으면_상세에_ASK_QUESTION이_없고_A8_C9는_404_NOT_FOUND() throws Exception {   // SCRUM-302 기본값
+        String caseNo = newOpenCase("010_8000E%05dBD30".formatted(SEQ.incrementAndGet()));
+        body(post("/api/v1/cases/{caseNo}/assign", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"version\": 0}").with(as(inv)).with(csrf()), 200);
+        assertThat(texts(json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(inv)), 200))
+                .get("available_actions"))).doesNotContain("ASK_QUESTION");
+        assertThat(code(post("/api/v1/cases/{caseNo}/questions", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"question\": \"몇 건이야?\"}").with(as(inv)).with(csrf()), 404)).isEqualTo("NOT_FOUND");
+        assertThat(code(get("/api/v1/cases/{caseNo}/questions", caseNo).with(as(inv)), 404)).isEqualTo("NOT_FOUND");
+        assertThat(jdbc.queryForObject("select count(*) from ops.case_questions", Long.class)).isZero();
+    }
+
+    @Test
     void 실패_형식이_틀리면_400_INVALID_REQUEST이고_케이스는_그대로() throws Exception {
         String caseNo = newOpenCase("010_BAD%05d".formatted(SEQ.incrementAndGet()));
         assign(caseNo, inv);

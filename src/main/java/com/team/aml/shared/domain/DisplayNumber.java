@@ -28,6 +28,11 @@ public final class DisplayNumber {
         return "STR-" + approvedYear + "-" + String.format("%06d", seq);
     }
 
+    /** QST-000041 — case_questions.id(identity) 그대로 (계약서 5.3 A8, SCRUM-302). */
+    public static String questionNo(long questionId) {
+        return "QST-" + String.format("%06d", questionId);
+    }
+
     /** DRF-000123 — str_drafts.id(ops.str_draft_id_seq) 그대로 (계약서 v0.2 2.2). */
     public static String draftNo(long draftId) {
         return "DRF-" + String.format("%06d", draftId);

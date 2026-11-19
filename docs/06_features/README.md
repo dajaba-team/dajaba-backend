@@ -8,7 +8,7 @@
 |---|---|---|
 | [`source_detection.md`](source_detection.md) | source(적재) · detection(룰 · 경보 · 점수) | 준혁 |
 | [`rules.md`](rules.md) | 탐지 룰 6개 명세 v2(조건 · 창 · 기준값 · `rule_facts`) | 준혁 |
-| [`cases.md`](cases.md) | cases(조사 · 상태 전이 · CasePolicy · 메모 · 요약) | 지윤 |
+| [`cases.md`](cases.md) | cases(조사 · 상태 전이 · CasePolicy · 메모 · 요약 · 질문 답변) | 지윤 |
 | [`str.md`](str.md) | str(초안 · 수정 · 검증 · 승인 · 반려) | 채영 |
 
 user · shared(진희)는 [`../03_shared.md`](../03_shared.md)(공통 코드)와 [`../04_auth_user.md`](../04_auth_user.md)(계정 · 권한 · 로그인)에 있어요.

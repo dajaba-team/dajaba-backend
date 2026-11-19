@@ -66,6 +66,7 @@ public enum CaseStatus {
             case ESCALATE -> canTransitionTo(ESCALATED, rejectionCode);
             case CLOSE, CLOSE_WITH_DRAFT -> canTransitionTo(CLOSED, rejectionCode);
             case GENERATE_DRAFT -> canTransitionTo(DRAFTED, rejectionCode);
+            case ASK_QUESTION -> true;   // 조회만 하는 기능이라 상태로 막지 않는다 — 누가는 CaseAction.canAsk (SCRUM-302)
         };
     }
 

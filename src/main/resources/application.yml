@@ -75,6 +75,7 @@ aml:
     timeout-seconds: 90
     ask-timeout-seconds: 30                  # 질문 답변만 전체 30초(재시도 포함, 규약 6.2) — SCRUM-291
     ask-enabled: ${AML_AI_ASK_ENABLED:false} # 질문 답변 켜기(true)·끄기(false). 읽는 쪽은 cases — SCRUM-291
+    ask-per-minute: 5                        # 질문하기 한 사람 최근 60초 한도, 넘으면 429 — SCRUM-302
     max-batch: 500
   dataset-dir: ${AML_DATASET_DIR:./data}
   # RabbitMQ 켜기(true)·끄기(false, 기본). 끄면 케이스 생성 등은 기존 동기(앱 안 실행기) 경로 (SCRUM-276)

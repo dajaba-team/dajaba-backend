@@ -1,6 +1,6 @@
 # 06. cases — 조사
 
-> v0.1 · 2026-10-29 · 초안(팀 확인 중) · 담당 지윤 · 정리 진희
+> v0.2 · 2026-11-19 · 초안(팀 확인 중) · 담당 지윤 · 정리 진희 · 11/19 질문 답변 A8·C9(SCRUM-302)
 
 담당자 문서는 아직 초안이라 `확정` / **〔초안〕** / **〔확인 필요〕**를 나눠 적었어요(뜻은 [`../README.md`](../README.md) "읽는 법"). 이 파일은 **담당자가 고쳐요.** 노션 초안을 바꾸면 같은 주에 이 파일도 PR로 갱신해 주세요.
 
@@ -114,7 +114,7 @@
 | 상세 `aggregates` (SCRUM-179) | 02 | 근거 거래 전체로 `CaseAggregates`: 통화별 유입(amount_received)·유출(amount_paid), 경유·자기계좌 거래 제외, 환산 없음. `transaction_count`·`first_ts`·`last_ts`는 전체 기준 |
 
 - 세 변경 유스케이스는 공통 변경 응답(`CaseChangeResult` — 계약서 5.3 M)을 돌려줘요. `version`·`updated_at`은 flush 뒤 값. 요청 `version` 비교 뒤 커밋 때 `@Version`이 한 번 더 막아서 동시에 맡기면 뒤 요청은 409 `CONCURRENT_UPDATE`.
-- **`available_actions` (`CaseAction`)** — 계약서 §4의 8개. `ASSIGN`(OPEN, 조사역·ADMIN) · `REASSIGN`(ADMIN, 재배정 가능 상태) · 담당만: `UPDATE_NOTES`·`REFRESH_SUMMARY`(REVIEWING·ESCALATED·DRAFTED·보완 반려) · `ESCALATE` · `CLOSE`/`CLOSE_WITH_DRAFT`(닫을 수 있는 상태에서 초안 유무로 하나) · `GENERATE_DRAFT`(초안을 붙일 수 있는 상태). 상태 판단은 **`CaseStatus.allows(CaseAction, 반려 코드)` 한 곳**이에요 — 상태를 바꾸는 동작은 전이 표 그대로, 상태가 그대로인 동작(재배정·메모·요약)은 같은 enum의 집합으로. `Case.reassign`·`isEditableByAssignee`도 이걸 불러요. 누가(역할·담당자)와 초안 유무는 `availableFor`·유스케이스가 더 봐요 [SCRUM-171, 3주차 리뷰 질문 2].
+- **`available_actions` (`CaseAction`)** — 계약서 §4의 8개 + 상세에만 `ASK_QUESTION`(아래 "질문 답변"). `ASSIGN`(OPEN, 조사역·ADMIN) · `REASSIGN`(ADMIN, 재배정 가능 상태) · 담당만: `UPDATE_NOTES`·`REFRESH_SUMMARY`(REVIEWING·ESCALATED·DRAFTED·보완 반려) · `ESCALATE` · `CLOSE`/`CLOSE_WITH_DRAFT`(닫을 수 있는 상태에서 초안 유무로 하나) · `GENERATE_DRAFT`(초안을 붙일 수 있는 상태). 상태 판단은 **`CaseStatus.allows(CaseAction, 반려 코드)` 한 곳**이에요 — 상태를 바꾸는 동작은 전이 표 그대로, 상태가 그대로인 동작(재배정·메모·요약)은 같은 enum의 집합으로. `Case.reassign`·`isEditableByAssignee`도 이걸 불러요. 누가(역할·담당자)와 초안 유무는 `availableFor`·유스케이스가 더 봐요 [SCRUM-171, 3주차 리뷰 질문 2].
 - **경보·점수 칸** — 상세 `alert`(alert_no·rule_id·batch_date·window_start·window_end·reference_ts·transaction_count)와 `latest_score`(score_status·score·score_band·failure_code·model_version·feature_version·data_quality_status·reasons)는 detection `GetAlertSummary`로 채워요(SCRUM-152·103). `latest_score`는 늘 있고, 점수 전(PENDING)·실패(FAILED)면 score_status만 있고 점수 칸은 null, reasons는 `[]`. `score_band`는 지금 운영 정책(`CasePolicy`)으로 계산 — 정책이 설정되지 않았으면 null(상세는 막지 않음, LOW로 바꾸지 않음). 계약서 C2에 없던 `transaction_count`·`failure_code`는 계약서에 한 줄씩 추가.
 - **맨 위 `score`·`score_band`·`policy_version`** — 계약서 Q2 MVP대로 `latest_score.score`·`score_band`와 그때 쓴 정책 버전(#78 리뷰). 케이스 생성 때 저장하는 스냅샷은 후속.
 - **목록 점수 (SCRUM-236)** — 목록 `score`는 생성 당시 점수(`opened_score`), `score_band`·`policy_version`은 지금 정책으로 계산(정책 없으면 null, 목록은 막지 않음). `sort=score,asc|desc`는 `CaseRepository.searchByScore` — 쿼리에 `nulls last`를 직접 적어요(Spring Data가 문자열 쿼리의 `Sort`에 nulls 처리를 안 붙여서). 점수 없는 케이스는 오름·내림 모두 맨 뒤, 같은 점수는 `created_at DESC, id DESC`, 전체 정렬 뒤 페이지. 내림차순 인덱스 `cases_opened_score_idx`.
@@ -128,6 +128,28 @@
 - **초안 번호** — `current_draft_id`(내부 id)는 `current_draft_no`(`DRF-000123`, `DisplayNumber.draftNo`)로 바꿔 보내요(계약서 Q14).
 - **아직 null·[]인 칸**은 위 "아직 null인 칸"과 같아요. 키는 빼지 않아요(계약서 2.3). `customer`·`prior_alerts`도 후속.
 - 남은 API: 04 재배정, 05 메모, 08~11·15 거래·근거·그래프·이력·메모 이력 — 각각 유스케이스가 생기면 이 컨트롤러에 붙여요.
+
+**질문 답변 — A8 질문하기 · C9 지난 질문 (SCRUM-302)** `CaseQuestionController` `/api/v1/cases/{case_no}/questions`. 근거: 노션 「조사역 질문 답변 설계 문서」 7·9.1·13절, 규약 5.4, 프론트 계약서 5.3 A8·C9(11/19). AI 호출·응답 확인은 진희 님 `AiClient.ask`(SCRUM-291)를 그대로 써요.
+
+| 유스케이스 | API | 검사 순서·오류 |
+|---|---|---|
+| `AskCaseQuestion` (트랜잭션 없음 — DB → AI → DB) | A8 `POST …/questions` `{question}` → **201 질문 한 줄** | ① 짧은 읽기: 404 `CASE_NOT_FOUND` → 권한(아래 표) → 질문 400 `INVALID_REQUEST` `details.question` → 최근 60초 본인 질문 수가 한도 이상이면 **429 `QUESTION_RATE_LIMITED`** `details.retry_after_seconds` → 요약과 **같은 입력 조립**(`CaseSummaryInputs.requestFor`) + `question` ② 트랜잭션 밖 `AiClient.ask`(전체 30초). 응답 확인·502는 `AiClient` 몫 ③ 새 짧은 트랜잭션으로 `case_questions` 한 행. **502면 행 없음** |
+| `ListCaseQuestions` (readOnly) | C9 `GET …/questions?page&size` → 공통 목록 | 404 → 권한(아래 표). 최신 먼저(`created_at desc, id desc`), `size` ≤ 100(기본 20). 한 줄 모양은 A8 응답과 같음 |
+
+| 누가 | A8·C9 | `ASK_QUESTION` |
+|---|---|---|
+| 담당 조사역 | ○ | ○ (상태 무관) |
+| 승인자 | ○ (어느 케이스든) | ○ (상태 무관, 담당자 없는 `OPEN`도) |
+| 담당 아닌 조사역 (담당자 없는 `OPEN` 포함) | 403 `NOT_ASSIGNEE` | × |
+| 관리자 | 403 `FORBIDDEN` (`SecurityConfig` URL 규칙 — 재배정과 같은 방식) | × |
+
+- **질문 규칙** — 앞뒤 공백을 **자르지 않고** 받은 그대로 AI에 보내고 그대로 저장. 글자 수 1~300은 **NFC 뒤 UTF-16 코드 단위**(`String.length()`, STR 수정본·AI·화면과 같은 세기). 공백만(파이썬 `str.isspace()`와 같은 글자 — AI가 400으로 거절하는 것과 맞춤)·빈 문자열·없음은 400 `details.question`. 검사는 도메인 `CaseQuestion.requireValidQuestion` 한 곳.
+- **횟수 제한** — `case_questions`에서 이 사람(`created_by`)의 최근 60초 행 수를 세요. 한도 `aml.ai.ask-per-minute`(기본 5). `retry_after_seconds` = 창 안 가장 오래된 질문이 60초를 벗어날 때까지 남은 초(올림, 최소 1). 502는 행이 없어 세지 않아요(비용은 AI 일 토큰 한도가 막음). 동시에 들어온 두 요청이 같이 통과할 수 있는 것은 감수(락 없음).
+- **꺼짐** — `aml.ai.ask-enabled=false`(기본)면 상세에 `ASK_QUESTION`이 없고, A8·C9는 **404 `NOT_FOUND`**(없는 주소와 같은 응답 — 설계 문서 11.3 "끄면 흔적 없이"). 컨트롤러가 유스케이스를 부르기 전에 막아요.
+- **응답 한 줄** `{question_no, case_no, question, status, out_of_scope_reason, answer, evidence_transaction_ids, asked_by{login_id, display_name}, created_at}`. `question_no` = `QST-` + id 6자리(`DisplayNumber.questionNo`, 계약서 2.2). AI의 `cites`·`code_checks`·`kind`는 화면에 주지 않아요. 답 속 계좌는 AI가 준 그대로(13절 8번). 네 상태(`ANSWERED`·`NO_DATA`·`UNVERIFIED`·`OUT_OF_SCOPE`) 모두 201.
+- **`available_actions`의 `ASK_QUESTION`** — 역할·담당 기준이라 상태 표(`CaseStatus.allows`)는 늘 참이고, 누가 볼지는 `CaseAction.canAsk` 한 곳. 켜기 설정을 봐야 해서 `availableFor`(목록·상세 공통)가 아니라 **상세(`GetCaseDetail`)에서만** 붙여요 — 목록 한 줄의 버튼에는 없어요(계약서 C2만).
+- **저장** — `ops.case_questions`(V017): 추가만(`app_backend` UPDATE·DELETE 회수, 엔티티 setter 없음). 묻는 사람은 `created_by`(세션 — `CreatedOnlyEntity` auditing, 요청 본문으로 받지 않음). `ai_generation_id`(AI `generation_id`)·`request_id`(MDC — `ai_call_logs`와 같은 값)로 AI 쪽 기록과 이어요. 상태별 칸 규칙은 엔티티 `CaseQuestion.record`와 DB CHECK 둘 다. `question`은 설계 문서의 `varchar(300)`이 아니라 `text`(원문 코드 포인트 1,200개 상한) — 원문 그대로 저장하는데 NFD로 쪼갠 한글 300자는 코드 포인트가 900개라 `varchar(300)`이면 앱은 받고 DB가 거절해요.
+- 로그에는 케이스 번호·상태·질문 길이만. 질문·답 본문은 찍지 않아요(NFR-COM-04). `access_logs`는 바꾸지 않아요(설계 문서 9.1).
 
 **str에 주는 공개 기능 — 구현됨 (SCRUM-98)** 모두 `Propagation.MANDATORY`라 str 트랜잭션 안에서만 불러요(혼자 부르면 `IllegalTransactionStateException`).
 
