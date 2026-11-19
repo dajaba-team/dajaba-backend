@@ -135,7 +135,7 @@ public class JsonAuthHandlers {
         }
     }
 
-    /** Spring 이 이미 저장한 로그인을 되돌린다 — 세션 무효화(HttpSessionEventPublisher 가 SessionRegistry 에서도 뺀다) + 컨텍스트 비움. */
+    /** Spring 이 이미 저장한 로그인을 되돌린다 — 세션 무효화(메모리: HttpSessionEventPublisher 가 SessionRegistry 에서도 뺀다, Redis: 세션·색인을 지운다) + 컨텍스트 비움. */
     private static void undoLogin(HttpServletRequest req) {
         SecurityContextHolder.clearContext();
         HttpSession session = req.getSession(false);
