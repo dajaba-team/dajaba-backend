@@ -24,6 +24,7 @@ import java.net.ConnectException;
 import java.net.NoRouteToHostException;
 import java.net.SocketException;
 import java.net.UnknownHostException;
+import java.text.Normalizer;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -44,6 +45,7 @@ import java.util.regex.Pattern;
  * 공통 동작:
  *  - 헤더 X-Internal-Key, X-Request-Id(MDC request_id, 없거나 공백이면 UUID, 재시도해도 같은 값), X-Budget-Ms(그 시도 때 남은 예산 ms)
  *  - 화면 요청 전체 90초(재시도 포함) = aml.ai.timeout-seconds. 점수는 500건 묶음마다 같은 한도.
+ *    질문 답변(/v1/cases/ask)만 전체 30초 = aml.ai.ask-timeout-seconds (규약 6.2, SCRUM-291). 한도는 호출마다 따로 잰다.
  *  - 재시도 1회, 남은 시간 안에서만. 판별은 HTTP 5xx 가 아니라 코드/원인으로:
  *      재시도 O: LLM_UNAVAILABLE·MODEL_UNAVAILABLE·DB_UNAVAILABLE, 또는 연결 단계 실패(CONNECT_STAGE_FAILURES — 연결 거부·이름 조회 실패·경로 없음)
  *      재시도 X: 그 밖의 5xx·4xx·409, 연결 타임아웃(ConnectTimeoutException)·응답 타임아웃, 보낸 뒤 끊김(CLOSED_AFTER_SEND)
@@ -97,6 +99,7 @@ public class WebClientAiClient implements AiClient {
     private final String internalKey;
     private final int maxBatch;
     private final Duration budget;
+    private final Duration askBudget;
 
     public WebClientAiClient(WebClient aiWebClient, AmlProperties props, ObjectMapper om, AiCallLogWriter writer) {
         this.http = aiWebClient;
@@ -105,6 +108,7 @@ public class WebClientAiClient implements AiClient {
         this.internalKey = props.ai().internalKey();
         this.maxBatch = props.ai().maxBatch();
         this.budget = Duration.ofSeconds(props.ai().timeoutSeconds());
+        this.askBudget = Duration.ofSeconds(props.ai().askTimeoutSeconds());
     }
 
     @Override
@@ -112,7 +116,7 @@ public class WebClientAiClient implements AiClient {
         List<ScoreResult> merged = new ArrayList<>();
         for (int i = 0; i < alerts.size(); i += maxBatch) {       // 500건씩 나눠 보내고 합친다 (규약 6.2)
             List<AlertPayload> chunk = alerts.subList(i, Math.min(i + maxBatch, alerts.size()));
-            merged.addAll(post("/v1/scores", new ScoresRequest(batchRunId, chunk), "BATCH_RUN", String.valueOf(batchRunId),
+            merged.addAll(post("/v1/scores", new ScoresRequest(batchRunId, chunk), "BATCH_RUN", String.valueOf(batchRunId), budget,
                     resp -> {
                         List<ScoreResult> items = readScoreBatch(om, resp);
                         requireSameBatch(batchRunId, chunk, resp, items);
@@ -216,13 +220,13 @@ public class WebClientAiClient implements AiClient {
 
     @Override
     public StrDraftResponse createDraft(StrDraftRequest request) {
-        return post("/v1/str/drafts", request, "DRAFT", request.draftId(),
+        return post("/v1/str/drafts", request, "DRAFT", request.draftId(), budget,
                 r -> readRecord(r, "draft_id", StrDraftResponse.class, "AI 초안 응답 파싱 실패"));
     }
 
     @Override
     public VerifyResponse verify(String draftId, VerifyRequest request) {
-        return post("/v1/str/verify", request, "DRAFT", draftId, r -> {
+        return post("/v1/str/verify", request, "DRAFT", draftId, budget, r -> {
             requireVerifyResponse(request, r);
             return readRecord(r, "verification_id", VerifyResponse.class, "AI 검증 응답 파싱 실패");
         });
@@ -284,8 +288,200 @@ public class WebClientAiClient implements AiClient {
 
     @Override
     public CaseSummaryResponse caseSummary(CaseSummaryRequest request) {
-        return post("/v1/cases/summary", request, "CASE", request.caseNo(),
+        return post("/v1/cases/summary", request, "CASE", request.caseNo(), budget,
                 r -> readRecord(r, "case_no", CaseSummaryResponse.class, "AI 요약 응답 파싱 실패"));
+    }
+
+    /** 질문 답변 — 이 호출만 askBudget(30초). 응답 확인은 기록 전에(실패면 실패 행·재시도 없음). SCRUM-291 */
+    @Override
+    public AskResponse ask(AskRequest request) {
+        return post("/v1/cases/ask", request, "CASE", request.caseNo(), askBudget, r -> {
+            requireAskResponse(request, r);
+            return readRecord(r, "case_no", AskResponse.class, "AI 질문 답변 응답 파싱 실패");
+        });
+    }
+
+    /** AI `ask.py` 의 상한 — 답 400(NFC 뒤 UTF-16), 묶음 3개. */
+    static final int ASK_ANSWER_MAX = 400;
+    static final int ASK_BUNDLES_MAX = 3;
+    /** `ai_call_logs.ai_version` 칸 길이(V004_2 varchar(64), `AiCallLog`). 넘거나 문자열이 아니면 null 로 기록. */
+    static final int AI_VERSION_MAX = 64;
+    /** AI `verify.py` `CodeCheckName`·`CheckReason`. */
+    private static final Set<String> CODE_CHECK_NAMES = Set.of("AMOUNT_MATCH", "DATE_MATCH", "COUNT_MATCH",
+            "ACCOUNT_ID_MATCH", "EVIDENCE_IN_SCOPE", "OPINION_PRESENT");
+    private static final Set<String> CODE_CHECK_REASONS = Set.of("MISMATCH", "UNPARSED", "OUT_OF_SCOPE", "MISSING");
+    /** AI `narrative.py` `Section = SectionV1 | SectionV2` — str `StrSection` 과 같은 이름(shared 라 참조하지 않음). */
+    private static final Set<String> NARRATIVE_SECTIONS = Set.of(
+            "SUMMARY", "WHO", "WHAT_WHEN_WHERE", "HOW", "WHY_SUSPICIOUS", "CONCLUSION",
+            "SUBJECT", "DATE", "PLACE", "INSTRUMENT", "METHOD", "GROUNDS", "OPINION");
+
+    /**
+     * 질문 답변 응답 확인 (규약 5.4 = AI `ask.py` `AskResponse`·`AskGenerationMeta`·`CodeCheck` 규칙 + 보낸 값 대조, SCRUM-291).
+     * 틀리면 AI_BAD_RESPONSE 502, 메시지엔 칸 이름만(질문·답 문장 없음). AI 보다 더 보는 곳: `case_no` 대조,
+     * `evidence_ids` ⊆ 보낸 근거, `produced_at` 은 Z 만. 안 보는 곳: 모르는 칸(원칙 4 — 받아 둠).
+     */
+    static void requireAskResponse(AskRequest sent, JsonNode r) {
+        for (String field : List.of("produced_at", "case_no", "generation_id", "status", "generation_meta")) {
+            if (!r.hasNonNull(field)) throw badAsk(field);
+        }
+        for (String field : List.of("case_no", "generation_id")) {
+            if (!r.get(field).isTextual()) throw badAsk(field);
+        }
+        for (String field : List.of("cites", "evidence_ids", "code_checks")) {
+            if (!r.path(field).isArray()) throw badAsk(field);
+        }
+        AskStatus status = askEnum(AskStatus.class, r.get("status"), "status");
+        requireUtcZ(r.get("produced_at"), "produced_at");
+        if (!r.get("case_no").textValue().equals(sent.caseNo())) {
+            throw new AiClientException("AI_BAD_RESPONSE", "AI 질문 답변 응답 case_no 가 요청과 다름", Map.of(), 502);
+        }
+
+        boolean outOfScope = status == AskStatus.OUT_OF_SCOPE;
+        if (outOfScope) {
+            if (r.hasNonNull("kind")) throw badAsk("kind");
+            askEnum(OutOfScopeReason.class, r.get("out_of_scope_reason"), "out_of_scope_reason");
+        } else {
+            askEnum(AskKind.class, r.get("kind"), "kind");
+            if (r.hasNonNull("out_of_scope_reason")) throw badAsk("out_of_scope_reason");
+        }
+
+        JsonNode answer = r.get("answer");
+        if (answer != null && !answer.isNull()) {   // ask.py: 공백만 X, NFC 뒤 UTF-16 ≤400, 앞뒤 공백은 그대로 셈
+            if (!answer.isTextual() || isBlankLikePython(answer.textValue())
+                    || Normalizer.normalize(answer.textValue(), Normalizer.Form.NFC).length() > ASK_ANSWER_MAX) {
+                throw badAsk("answer");
+            }
+        }
+        requireDistinctNonBlankStrings(r.get("cites"), "cites", Integer.MAX_VALUE);
+        if (status == AskStatus.ANSWERED) {
+            if (answer == null || answer.isNull()) throw badAsk("answer");
+            if (r.get("cites").isEmpty()) throw badAsk("cites");
+        } else {
+            if (answer != null && !answer.isNull()) throw badAsk("answer");
+            if (!r.get("cites").isEmpty()) throw badAsk("cites");
+            if (!r.get("evidence_ids").isEmpty()) throw badAsk("evidence_ids");
+        }
+
+        Set<Long> sentEvidence = sent.evidenceTransactionIds() == null ? Set.of() : Set.copyOf(sent.evidenceTransactionIds());
+        for (JsonNode id : r.get("evidence_ids")) {
+            if (!id.isIntegralNumber() || !id.canConvertToLong() || id.longValue() < 1
+                    || !sentEvidence.contains(id.longValue())) {
+                throw badAsk("evidence_ids");
+            }
+        }
+
+        boolean mismatch = false;
+        for (JsonNode check : r.get("code_checks")) {
+            mismatch |= !requireCodeCheck(check);
+        }
+        boolean checksOk = switch (status) {
+            case ANSWERED -> !mismatch;
+            case UNVERIFIED -> mismatch;
+            case NO_DATA, OUT_OF_SCOPE -> r.get("code_checks").isEmpty();
+        };
+        if (!checksOk) throw badAsk("code_checks");
+
+        requireAskMeta(r.get("generation_meta"), outOfScope);
+    }
+
+    /** AI `CodeCheck` 한 개 — check 6종, section 13종|null, draft_value·source_value 칸 있음(문자열|null), match 참거짓, reason 은 match=false 일 때만(4종). @return match */
+    private static boolean requireCodeCheck(JsonNode c) {
+        if (!c.isObject()) throw badAsk("code_checks");
+        JsonNode check = c.get("check");
+        if (check == null || !check.isTextual() || !CODE_CHECK_NAMES.contains(check.textValue())) throw badAsk("code_checks");
+        JsonNode section = c.get("section");
+        if (section != null && !section.isNull()
+                && (!section.isTextual() || !NARRATIVE_SECTIONS.contains(section.textValue()))) {
+            throw badAsk("code_checks");
+        }
+        for (String field : List.of("draft_value", "source_value")) {
+            JsonNode v = c.get(field);
+            if (v == null || !(v.isNull() || v.isTextual())) throw badAsk("code_checks");
+        }
+        JsonNode match = c.get("match");
+        if (match == null || !match.isBoolean()) throw badAsk("code_checks");
+        JsonNode reason = c.get("reason");
+        boolean hasReason = reason != null && !reason.isNull();
+        if (hasReason && (!reason.isTextual() || !CODE_CHECK_REASONS.contains(reason.textValue()))) throw badAsk("code_checks");
+        if (match.booleanValue() == hasReason) throw badAsk("code_checks");   // match=true 면 reason 없음, false 면 있음
+        return match.booleanValue();
+    }
+
+    /** AI `AskGenerationMeta` — 칸 8개 타입 + 상태 짝(OUT_OF_SCOPE 면 prompt_version null·bundles [], 그 밖은 값·1~3개). */
+    private static void requireAskMeta(JsonNode m, boolean outOfScope) {
+        if (!m.isObject()) throw badAsk("generation_meta");
+        for (String field : List.of("llm_model", "plan_prompt_version", "server_version")) {
+            if (!m.path(field).isTextual()) throw badAsk("generation_meta." + field);
+        }
+        for (String field : List.of("tokens_in", "tokens_out", "latency_ms")) {
+            JsonNode v = m.get(field);
+            if (v == null || !v.isIntegralNumber()) throw badAsk("generation_meta." + field);
+        }
+        JsonNode promptVersion = m.get("prompt_version");   // 칸은 있어야 함(값 null 허용)
+        boolean promptOk = promptVersion != null
+                && (outOfScope ? promptVersion.isNull() : promptVersion.isTextual());
+        if (!promptOk) throw badAsk("generation_meta.prompt_version");
+        JsonNode bundles = m.get("bundles");
+        if (bundles == null || !bundles.isArray()) throw badAsk("generation_meta.bundles");
+        requireDistinctNonBlankStrings(bundles, "generation_meta.bundles", ASK_BUNDLES_MAX);
+        if (outOfScope != bundles.isEmpty()) throw badAsk("generation_meta.bundles");
+    }
+
+    /** ask.py `cites`·`bundles` — 원소는 문자열, 앞뒤 공백을 뺀 값이 비지 않고 서로 다름(AI 가 공백을 자른 뒤 비교). */
+    private static void requireDistinctNonBlankStrings(JsonNode arr, String field, int max) {
+        if (arr.size() > max) throw badAsk(field);
+        Set<String> seen = new java.util.HashSet<>();
+        for (JsonNode v : arr) {
+            if (!v.isTextual()) throw badAsk(field);
+            String stripped = stripLikePython(v.textValue());
+            if (stripped.isEmpty() || !seen.add(stripped)) throw badAsk(field);
+        }
+    }
+
+    /** 파이썬 `str.strip()` 처럼 — 공백 판정은 {@link #isPythonSpace} (pydantic `str_strip_whitespace` 도 `strip()`). */
+    private static String stripLikePython(String s) {
+        int start = 0;
+        int end = s.length();
+        while (start < end && isPythonSpace(s.charAt(start))) start++;
+        while (end > start && isPythonSpace(s.charAt(end - 1))) end--;
+        return s.substring(start, end);
+    }
+
+    private static boolean isBlankLikePython(String s) {
+        return stripLikePython(s).isEmpty();
+    }
+
+    /**
+     * 파이썬 `str.isspace()` 가 참인 글자 29개 그대로 (AI 서버 Python 3.12 에서 0~U+10FFFF 전부 돌려 확인, SCRUM-291).
+     * JDK 의 isWhitespace·isSpaceChar 조합은 U+0085(NEL)를 놓쳐서 쓰지 않는다. 전부 BMP 라 char 로 충분.
+     * (U+000A·U+000D 는 자바 소스의 유니코드 이스케이프가 줄 바꿈이 돼서 16진 숫자로 적는다.)
+     */
+    static boolean isPythonSpace(char c) {
+        return (c >= 0x09 && c <= 0x0D) || (c >= 0x1C && c <= 0x20)
+                || c == 0x85 || c == 0xA0 || c == 0x1680 || (c >= 0x2000 && c <= 0x200A)
+                || c == 0x2028 || c == 0x2029 || c == 0x202F || c == 0x205F || c == 0x3000;
+    }
+
+    /** 문자열이고 enum 이름 중 하나여야 한다(모르는 값·null 은 실패). */
+    private static <E extends Enum<E>> E askEnum(Class<E> type, JsonNode v, String field) {
+        if (v == null || !v.isTextual()) throw badAsk(field);
+        for (E e : type.getEnumConstants()) {
+            if (e.name().equals(v.textValue())) return e;
+        }
+        throw badAsk(field);
+    }
+
+    private static void requireUtcZ(JsonNode v, String field) {
+        try {
+            if (!v.isTextual() || !v.textValue().endsWith("Z")) throw badAsk(field);   // UTC Z 만 (규약 1.4)
+            Instant.parse(v.textValue());
+        } catch (DateTimeParseException e) {
+            throw badAsk(field);
+        }
+    }
+
+    private static AiClientException badAsk(String field) {
+        return new AiClientException("AI_BAD_RESPONSE", "AI 질문 답변 응답 확인 실패: " + field, Map.of(), 502);
     }
 
     @Override
@@ -296,9 +492,11 @@ public class WebClientAiClient implements AiClient {
 
     // --- 호출 + 재시도 ------------------------------------------------------
 
-    private <T> T post(String path, Object body, String targetType, String targetId, Function<JsonNode, T> reader) {
+    /** {@code budget} = 이 호출 전체 한도(재시도 포함). 질문 답변만 askBudget, 나머지는 budget. */
+    private <T> T post(String path, Object body, String targetType, String targetId, Duration budget,
+                       Function<JsonNode, T> reader) {
         JsonNode json = om.valueToTree(body);   // 요청은 주입된 om(SNAKE_CASE)으로 직렬화해 WebClient 코덱과 무관하게
-        return withRetry(path, targetType, targetId, (requestId, remaining) -> exchange(
+        return withRetry(path, targetType, targetId, budget, (requestId, remaining) -> exchange(
                 http.post().uri(path).contentType(MediaType.APPLICATION_JSON)
                         .header(HEADER_INTERNAL_KEY, internalKey)
                         .header(HEADER_REQUEST_ID, requestId)
@@ -308,7 +506,7 @@ public class WebClientAiClient implements AiClient {
     }
 
     private <T> T get(String path, Function<JsonNode, T> reader) {
-        return withRetry(path, null, null, (requestId, remaining) -> exchange(
+        return withRetry(path, null, null, budget, (requestId, remaining) -> exchange(
                 http.get().uri(path)
                         .header(HEADER_INTERNAL_KEY, internalKey)
                         .header(HEADER_REQUEST_ID, requestId)
@@ -320,7 +518,7 @@ public class WebClientAiClient implements AiClient {
      * 시도마다 한 행. 2xx 면 reader(필수 칸·변환·묶음 대조)를 **기록 전에** 돌려, 실패하면 같은 시도를
      * status=실제 2xx · AI_BAD_RESPONSE 실패 행으로 남기고 재시도 없이 던진다 (형식 오류는 재시도 대상 아님, SCRUM-128).
      */
-    private <T> T withRetry(String path, String targetType, String targetId,
+    private <T> T withRetry(String path, String targetType, String targetId, Duration budget,
                             BiFunction<String, Duration, Response> attempt, Function<JsonNode, T> reader) {
         String requestId = MDC.get("request_id");
         if (requestId == null || requestId.isBlank()) requestId = UUID.randomUUID().toString();
@@ -443,6 +641,7 @@ public class WebClientAiClient implements AiClient {
                 case "/v1/str/drafts" -> text(body.path("generation_meta"), "prompt_version");
                 case "/v1/str/verify" -> text(body, "verifier_version");
                 case "/v1/cases/summary" -> text(body.path("generation_meta"), "prompt_version");
+                case "/v1/cases/ask" -> askVersion(body.path("generation_meta"));
                 default -> null;
             };
             writer.write(AiCallLog.create(path, requestId, attempt, status, errorCode, durationMs,
@@ -450,6 +649,20 @@ public class WebClientAiClient implements AiClient {
         } catch (RuntimeException e) {
             log.warn("ai call log failed path={} request_id={} try={}", path, requestId, attempt);
         }
+    }
+
+    /**
+     * 질문 답변 기록 버전 — `prompt_version`, OUT_OF_SCOPE(답 호출 없음)면 `plan_prompt_version` (SCRUM-291).
+     * 성공·실패 행 모두 응답 확인 전 원문에서 읽으므로, 칸 모양(문자열 · `ai_version` 칸 길이 64 이하)이 아니면 null.
+     */
+    static String askVersion(JsonNode meta) {
+        JsonNode answerVersion = meta.get("prompt_version");
+        if (answerVersion != null && !answerVersion.isNull()) return versionOrNull(answerVersion);
+        return versionOrNull(meta.get("plan_prompt_version"));
+    }
+
+    private static String versionOrNull(JsonNode v) {
+        return v != null && v.isTextual() && v.textValue().length() <= AI_VERSION_MAX ? v.textValue() : null;
     }
 
     private record Response(int status, JsonNode body) {}

@@ -119,4 +119,52 @@ class MockAiClientTest {
         assertThat(client.scores(1L, List.of(alert())).scores().get(0).score()).isEqualTo(expected);
         assertThat(client.scores(2L, List.of(alert())).scores().get(0).score()).isEqualTo(expected);
     }
+
+    // --- SCRUM-291 질문 답변 — 질문 낱말로 상태 4종 ------------------------------------
+
+    private AskRequest ask(String question) {
+        return new AskRequest("CASE-1", alert(), List.of(1L, 2L, 3L), null, 0, null, question);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0} → {1} {2} {3}")
+    @org.junit.jupiter.params.provider.CsvSource(nullValues = "-", value = {
+            "이 문장 수정해 줘,               OUT_OF_SCOPE, -,    EDIT_REQUEST",
+            "다른 케이스도 같은 계좌야?,       OUT_OF_SCOPE, -,    OUTSIDE_CASE",
+            "STR 보내야 하는지 판단해 줘,      OUT_OF_SCOPE, -,    JUDGMENT",
+            "수정할지 판단해 줘,               OUT_OF_SCOPE, -,    EDIT_REQUEST",
+            "자료에 없는 내용 알려 줘,          NO_DATA,      FACT, -",
+            "숫자 불일치 나오게 해 줘,          UNVERIFIED,   FACT, -",
+            "왜 위험한 거야?,                 ANSWERED,     WHY,  -",
+            "입금 상대가 몇 곳이야?,           ANSWERED,     FACT, -"})
+    void ask_picks_status_by_question_word_and_passes_response_check(String question, AskStatus status,
+                                                                     AskKind kind, OutOfScopeReason reason) {
+        AskRequest request = ask(question);
+        AskResponse res = client.ask(request);
+
+        assertThat(res.status()).isEqualTo(status);
+        assertThat(res.kind()).isEqualTo(kind);
+        assertThat(res.outOfScopeReason()).isEqualTo(reason);
+        assertThat(res.caseNo()).isEqualTo("CASE-1");
+        assertThat(res.producedAt()).endsWith("Z");
+        WebClientAiClient.requireAskResponse(request, res.raw());   // 목업도 실제 응답 확인을 통과하는 모양
+        if (status == AskStatus.ANSWERED) {
+            assertThat(res.answer()).startsWith("(목업)");
+            assertThat(res.cites()).isNotEmpty();
+            assertThat(res.evidenceIds()).containsExactly(1L);   // 보낸 근거 안
+            assertThat(res.generationMeta().promptVersion()).isNotNull();
+        }
+        if (status == AskStatus.OUT_OF_SCOPE) {
+            assertThat(res.generationMeta().promptVersion()).isNull();
+            assertThat(res.generationMeta().bundles()).isEmpty();
+        }
+    }
+
+    @Test
+    void ask_without_evidence_answers_with_empty_evidence_ids() {
+        AskRequest request = new AskRequest("CASE-1", alert(), List.of(), null, 0, null, "몇 곳이야?");
+        AskResponse res = client.ask(request);
+        assertThat(res.status()).isEqualTo(AskStatus.ANSWERED);
+        assertThat(res.evidenceIds()).isEmpty();
+        WebClientAiClient.requireAskResponse(request, res.raw());
+    }
 }

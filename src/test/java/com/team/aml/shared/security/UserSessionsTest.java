@@ -8,6 +8,9 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionSynchronizationUtils;
 
+import java.util.Map;
+import java.util.Optional;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -15,7 +18,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class UserSessionsTest {
 
     SessionRegistryImpl registry = new SessionRegistryImpl();
-    UserSessions sessions = new UserSessions(registry);
+    // users 대신 — id → login_id (SCRUM-273). 999 는 없는 사용자
+    UserSessions sessions = new UserSessions(registry, id -> Optional.ofNullable(Map.of(42L, "inv42", 7L, "admin").get(id)));
 
     @BeforeEach
     void setUp() {

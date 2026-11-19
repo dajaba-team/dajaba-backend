@@ -82,9 +82,14 @@ class WebClientAiClientTest {
     }
 
     private WebClientAiClient newClient(String baseUrl, int timeoutSeconds) {
+        return newClient(baseUrl, timeoutSeconds, timeoutSeconds);
+    }
+
+    private WebClientAiClient newClient(String baseUrl, int timeoutSeconds, int askTimeoutSeconds) {
         var wc = org.springframework.web.reactive.function.client.WebClient.builder().baseUrl(baseUrl).build();
         var props = new AmlProperties(
-                new AmlProperties.Ai(baseUrl, "test-internal-key-0123456789abcd", timeoutSeconds, 500, false),
+                new AmlProperties.Ai(baseUrl, "test-internal-key-0123456789abcd", timeoutSeconds, 500, false,
+                        askTimeoutSeconds, false),
                 null, null, null);
         return new WebClientAiClient(wc, props, om, writer);
     }
@@ -991,5 +996,202 @@ class WebClientAiClientTest {
 
         assertThat(server.takeRequest().getHeader("X-Request-Id"))
                 .matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+    }
+
+    // --- 질문 답변 ask (SCRUM-291) — 30초 예산·응답 확인·기록 --------------------------
+
+    private static final String ANSWER_TEXT = "입금 상대 계좌는 3개예요.";
+
+    private AskRequest askReq(String question) throws Exception {
+        CaseSummaryRequest summary = om.treeToValue(
+                om.readTree(Files.readString(Path.of("contracts/examples/summary_request.json"))), CaseSummaryRequest.class);
+        return AskRequest.of(summary, question);
+    }
+
+    private static String askExample(String status) throws Exception {
+        return Files.readString(Path.of("contracts/examples/ask_response_" + status + ".json"));
+    }
+
+    @Test
+    void 정상_ask는_규약_5_4_칸으로_보내고_질문_공백을_자르지_않고_응답을_읽는다() throws Exception {
+        server.enqueue(json(200, askExample("answered")));
+
+        AskResponse r = client.ask(askReq("  입금 상대가 몇 곳이야? "));
+
+        RecordedRequest req = server.takeRequest();
+        assertThat(req.getMethod()).isEqualTo("POST");
+        assertThat(req.getPath()).isEqualTo("/v1/cases/ask");
+        assertThat(req.getHeader("X-Internal-Key")).isEqualTo("test-internal-key-0123456789abcd");
+        JsonNode sent = om.readTree(req.getBody().readUtf8());
+        assertThat(sent.fieldNames()).toIterable().containsExactlyInAnyOrder("case_no", "alert",
+                "evidence_transaction_ids", "reasons", "prior_alert_count", "reporting_institution", "question");
+        assertThat(sent.get("question").textValue()).isEqualTo("  입금 상대가 몇 곳이야? ");
+        assertThat(r.status()).isEqualTo(AskStatus.ANSWERED);
+        assertThat(r.answer()).isEqualTo(ANSWER_TEXT);
+        assertThat(r.evidenceIds()).containsExactly(104221L, 104233L, 104301L);
+        assertThat(r.generationMeta().promptVersion()).isEqualTo("ask_answer_v1");
+        assertThat(r.raw().path("generation_meta").path("tokens_in").asInt()).isEqualTo(1450);
+
+        assertThat(writer.rows).hasSize(1);
+        AiCallLog row = writer.rows.get(0);
+        assertThat(row.getEndpoint()).isEqualTo("/v1/cases/ask");
+        assertThat(row.getTargetType()).isEqualTo("CASE");
+        assertThat(row.getTargetId()).isEqualTo("CASE-2022-000057");
+        assertThat(row.getStatusCode()).isEqualTo(200);
+        assertThat(row.getErrorCode()).isNull();
+        assertThat(row.getGenerationId()).isEqualTo("g-91ab33c0");
+        assertThat(row.getAiVersion()).isEqualTo("ask_answer_v1");
+    }
+
+    @Test
+    void 경계_ask_OUT_OF_SCOPE는_ai_version에_plan_prompt_version을_남긴다() throws Exception {
+        server.enqueue(json(200, askExample("out_of_scope")));
+
+        AskResponse r = client.ask(askReq("STR 보내야 해?"));
+
+        assertThat(r.status()).isEqualTo(AskStatus.OUT_OF_SCOPE);
+        assertThat(r.outOfScopeReason()).isEqualTo(OutOfScopeReason.JUDGMENT);
+        assertThat(writer.rows).hasSize(1);
+        assertThat(writer.rows.get(0).getAiVersion()).isEqualTo("ask_plan_v1");
+        assertThat(writer.rows.get(0).getErrorCode()).isNull();
+    }
+
+    @Test
+    void 경계_ask_NO_DATA와_UNVERIFIED는_prompt_version을_남긴다() throws Exception {
+        server.enqueue(json(200, askExample("no_data")));
+        server.enqueue(json(200, askExample("unverified")));
+
+        assertThat(client.ask(askReq("q")).status()).isEqualTo(AskStatus.NO_DATA);
+        assertThat(client.ask(askReq("q")).status()).isEqualTo(AskStatus.UNVERIFIED);
+
+        assertThat(writer.rows).extracting(AiCallLog::getAiVersion).containsExactly("ask_answer_v1", "ask_answer_v1");
+    }
+
+    @Test
+    void 경계_ask는_자기_예산으로_끊고_같은_지연에도_요약은_90초_쪽_예산이라_성공한다() throws Exception {
+        client = newClient(server.url("/").toString(), 5, 1);   // 기본 5초 · 질문 답변 1초 (90초·30초를 줄인 모양)
+        server.enqueue(json(200, askExample("answered")).setBodyDelay(2, TimeUnit.SECONDS));
+
+        assertThatThrownBy(() -> client.ask(askReq("q")))
+                .isInstanceOfSatisfying(AiClientException.class, e -> {
+                    assertThat(e.code()).isEqualTo("AI_TIMEOUT");
+                    assertThat(e.httpStatus()).isEqualTo(502);
+                });
+        assertThat(server.getRequestCount()).isEqualTo(1);   // 타임아웃은 재시도 안 함
+        assertThat(writer.rows).hasSize(1);
+        assertThat(writer.rows.get(0).getEndpoint()).isEqualTo("/v1/cases/ask");
+        assertThat(writer.rows.get(0).getStatusCode()).isNull();
+        assertThat(writer.rows.get(0).getErrorCode()).isEqualTo("AI_TIMEOUT");
+
+        server.enqueue(json(200, "{\"case_no\":\"CASE-2022-000001\",\"generation_meta\":{\"prompt_version\":\"p-1\"}}")
+                .setBodyDelay(2, TimeUnit.SECONDS));
+        assertThat(client.caseSummary(new CaseSummaryRequest("CASE-2022-000001", null, List.of(), null, 0, null))
+                .caseNo()).isEqualTo("CASE-2022-000001");
+    }
+
+    @Test
+    void 정상_ask의_X_Budget_Ms는_질문_답변_예산_기준이고_초안은_기본_예산_기준이다() throws Exception {
+        client = newClient(server.url("/").toString(), 5, 2);
+        server.enqueue(json(200, askExample("answered")));
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));
+
+        client.ask(askReq("q"));
+        client.createDraft(draftReq());
+
+        assertThat(budgetMs(server.takeRequest())).isPositive().isLessThanOrEqualTo(2_000);
+        assertThat(budgetMs(server.takeRequest())).isGreaterThan(2_000).isLessThanOrEqualTo(5_000);
+    }
+
+    @Test
+    void 경계_ask_LLM_UNAVAILABLE는_1회_재시도하고_같은_요청id로_두_행이다() throws Exception {
+        server.enqueue(json(503, "{\"code\":\"LLM_UNAVAILABLE\"}"));
+        server.enqueue(json(200, askExample("answered")));
+
+        assertThat(client.ask(askReq("q")).status()).isEqualTo(AskStatus.ANSWERED);
+
+        assertThat(server.getRequestCount()).isEqualTo(2);
+        assertThat(writer.rows).extracting(AiCallLog::getAttempt).containsExactly((short) 1, (short) 2);
+        assertThat(writer.rows).extracting(AiCallLog::getErrorCode).containsExactly("LLM_UNAVAILABLE", null);
+        assertThat(writer.rows).extracting(AiCallLog::getEndpoint).containsOnly("/v1/cases/ask");
+        String first = server.takeRequest().getHeader("X-Request-Id");
+        assertThat(server.takeRequest().getHeader("X-Request-Id")).isEqualTo(first);
+    }
+
+    @Test
+    void 재시도없음_ask_다른_5xx는_재시도하지_않고_코드_그대로_502() throws Exception {
+        server.enqueue(json(500, "{\"code\":\"INTERNAL\"}"));
+
+        assertThatThrownBy(() -> client.ask(askReq("q")))
+                .isInstanceOfSatisfying(AiClientException.class, e -> assertThat(e.code()).isEqualTo("INTERNAL"));
+        assertThat(server.getRequestCount()).isEqualTo(1);
+    }
+
+    @Test
+    @org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
+    void 실패_ask_2xx_응답_확인이_틀리면_실패_행이고_재시도_없고_로그에_질문과_답이_없다(
+            org.springframework.boot.test.system.CapturedOutput out) throws Exception {
+        ObjectNode body = (ObjectNode) om.readTree(askExample("answered"));
+        body.putArray("evidence_ids").add(104221L).add(999999L);   // 보낸 근거 밖
+        server.enqueue(json(200, body.toString()));
+        String question = "입금 상대 비밀질문문장?";
+
+        assertOneBadResponseRow(catchThrowable(() -> client.ask(askReq(question))), "/v1/cases/ask");
+        assertThat(writer.rows.get(0).getAiVersion()).isEqualTo("ask_answer_v1");   // 본문 메타는 남음
+        assertThat(writer.rows.get(0).getGenerationId()).isEqualTo("g-91ab33c0");
+        assertThat(out.getAll()).contains("/v1/cases/ask").doesNotContain(question).doesNotContain(ANSWER_TEXT);
+    }
+
+    // --- 2차: 원소·길이 위반은 실패 행 · 버전 칸 모양이 아니면 ai_version null --------------
+
+    @Test
+    void 실패_ask_cites_null_원소_공백_원소_401자_답은_실패_행이고_재시도_없다() throws Exception {
+        List<java.util.function.Consumer<ObjectNode>> edits = List.of(
+                b -> b.putArray("cites").addNull(),
+                b -> b.putArray("cites").add("   "),
+                b -> b.put("answer", "가".repeat(401)));
+        for (var edit : edits) {
+            writer.rows.clear();
+            int before = server.getRequestCount();
+            ObjectNode body = (ObjectNode) om.readTree(askExample("answered"));
+            edit.accept(body);
+            server.enqueue(json(200, body.toString()));
+
+            Throwable e = catchThrowable(() -> client.ask(askReq("q")));
+
+            assertBadResponse(e);
+            assertThat(server.getRequestCount() - before).isEqualTo(1);
+            assertThat(writer.rows).hasSize(1);
+            assertThat(writer.rows.get(0).getStatusCode()).isEqualTo(200);
+            assertThat(writer.rows.get(0).getErrorCode()).isEqualTo("AI_BAD_RESPONSE");
+            assertThat(writer.rows.get(0).getAiVersion()).isEqualTo("ask_answer_v1");
+        }
+    }
+
+    @Test
+    void 실패_ask_두_버전_칸에_긴_문장이_오면_실패_행의_ai_version은_null이다() throws Exception {
+        String sentence = "입금 상대 계좌는 세 곳이고 모두 같은 날 짧은 간격으로 들어왔으며 금액이 거의 같아서 보고 기준을 피하려고 쪼갠 거래로 보입니다.";
+        assertThat(sentence.length()).isGreaterThan(WebClientAiClient.AI_VERSION_MAX);
+        ObjectNode body = (ObjectNode) om.readTree(askExample("answered"));
+        ObjectNode meta = (ObjectNode) body.get("generation_meta");
+        meta.put("prompt_version", sentence);
+        meta.put("plan_prompt_version", sentence);
+        body.putArray("cites");   // 응답 확인도 실패
+        server.enqueue(json(200, body.toString()));
+
+        assertOneBadResponseRow(catchThrowable(() -> client.ask(askReq("q"))), "/v1/cases/ask");
+        assertThat(writer.rows.get(0).getAiVersion()).isNull();
+    }
+
+    @Test
+    void 경계_ask_OUT_OF_SCOPE_plan_prompt_version이_문자열이_아니거나_길면_null이고_64자는_그대로() {
+        ObjectNode meta = om.createObjectNode().putNull("prompt_version");
+        meta.put("plan_prompt_version", 3);
+        assertThat(WebClientAiClient.askVersion(meta)).isNull();
+        meta.put("plan_prompt_version", "p".repeat(65));
+        assertThat(WebClientAiClient.askVersion(meta)).isNull();
+        meta.put("plan_prompt_version", "p".repeat(64));
+        assertThat(WebClientAiClient.askVersion(meta)).isEqualTo("p".repeat(64));
+        meta.put("prompt_version", "a".repeat(65));   // 답 버전이 있는데 모양이 틀리면 계획 버전으로 바꾸지 않고 null
+        assertThat(WebClientAiClient.askVersion(meta)).isNull();
     }
 }

@@ -135,6 +135,50 @@ public final class AiDtos {
     }
 
     /**
+     * POST /v1/cases/ask 요청 (규약 5.4, SCRUM-291) = 요약 요청 6칸(이름·값·필수 여부 같음) + `question`.
+     * Java record 는 상속이 없어 칸을 다시 적었다 — 요약 조립을 그대로 쓰려면 {@link #of}. `question` 은
+     * **앞뒤 공백을 자르지 않고** 그대로 보낸다(길이·공백 검사는 유스케이스 400 몫, AI 와 같은 단위).
+     */
+    public record AskRequest(String caseNo, AlertPayload alert, List<Long> evidenceTransactionIds,
+                             JsonNode reasons, Integer priorAlertCount, String reportingInstitution,
+                             String question) {
+
+        public static AskRequest of(CaseSummaryRequest summary, String question) {
+            return new AskRequest(summary.caseNo(), summary.alert(), summary.evidenceTransactionIds(),
+                    summary.reasons(), summary.priorAlertCount(), summary.reportingInstitution(), question);
+        }
+    }
+
+    /** 질문 답변 상태 (규약 5.4). 넷 다 AI 200. 모르는 값은 `requireAskResponse` 가 먼저 거부한다. */
+    public enum AskStatus { ANSWERED, NO_DATA, UNVERIFIED, OUT_OF_SCOPE }
+
+    /** 질문 종류 — `OUT_OF_SCOPE` 면 null. */
+    public enum AskKind { FACT, WHY }
+
+    /** 범위 밖 사유 — `OUT_OF_SCOPE` 일 때만 값. */
+    public enum OutOfScopeReason { EDIT_REQUEST, OUTSIDE_CASE, JUDGMENT }
+
+    /**
+     * 질문 답변 `generation_meta` (AI `AskGenerationMeta`). 토큰·지연은 계획+답 두 호출 합계.
+     * `promptVersion` 은 답 프롬프트 — `OUT_OF_SCOPE`(답 호출 안 함)만 null. `bundles` 는 OUT_OF_SCOPE 면 [].
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record AskGenerationMeta(String llmModel, String promptVersion, String planPromptVersion,
+                                    List<String> bundles, String serverVersion, Integer tokensIn,
+                                    Integer tokensOut, Integer latencyMs) {}
+
+    /**
+     * POST /v1/cases/ask 응답 (규약 5.4). 칸 전부 + 원문 `raw`. 상태별 칸 규칙은 `WebClientAiClient.requireAskResponse`
+     * 가 record 로 바꾸기 전에 확인한다. `codeChecks` 는 요약처럼 JsonNode(저장 모양은 cases 몫).
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record AskResponse(String producedAt, String caseNo, String generationId, AskStatus status,
+                              AskKind kind, OutOfScopeReason outOfScopeReason, String answer,
+                              List<String> cites, List<Long> evidenceIds, JsonNode codeChecks,
+                              @JsonProperty("generation_meta") AskGenerationMeta generationMeta,
+                              JsonNode raw) {}
+
+    /**
      * GET /v1/health (AI `main.py` `health()`, SCRUM-22 — 미결 28). 전부 String, 없으면 null.
      * `db` = "ok" | "down:<예외>", `llm` = "ok" | "missing_key". `generator_version` 은 AI 가 주지 않는다.
      */
