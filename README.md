@@ -43,6 +43,8 @@ swagger에서 **`POST /api/v1/auth/login`** 본문 `{"login_id": "inv01", "passw
 | `AML_CASE_POLICY_MEDIUM_TO_HIGH` | 점수 경계 MEDIUM → HIGH | — | — | 위와 같음 |
 | `AML_RABBITMQ_ENABLED` | RabbitMQ 작업 큐 켜기(`true`)·끄기(`false`). 끄면 케이스 생성 등은 앱 안 실행기로 — 지금과 같아요 (SCRUM-276) | — | — | `false` |
 | `RABBITMQ_HOST` · `RABBITMQ_PORT` | RabbitMQ 주소 | — | — | compose 앱 `rabbitmq`(고정) · IDE `localhost`·`5672` |
+| `AML_SESSION_REDIS_ENABLED` | 로그인 세션을 Redis(db 0)에(`true`)·앱 메모리에(`false`). **`true`/`false`만** — 다른 값(오타 `ture` 등)이면 두 설정이 다 안 걸려 `SessionRegistry` 빈이 없다는 기동 실패가 나요. 끄면 지금과 같아요 — 앱을 다시 띄우면 모두 로그아웃 (SCRUM-273) | — | — | `false` |
+| `REDIS_HOST` · `REDIS_PORT` | Redis 주소(세션을 켰을 때만 씀) | — | — | compose 앱 `redis`(고정) · IDE `localhost`·`6379` |
 | 참고: `SPRING_PROFILES_ACTIVE` | 프로파일 | — | — | compose 앱은 `local` 고정 · IDE는 실행 설정에 `local` |
 
 IDE에서 띄우면 앱이 리포 루트의 `.env`를 직접 읽어요(`application.yml`의 `spring.config.import`). compose로 띄운 앱은 위 표의 변수를 `compose.yaml`이 넘겨 줘요.
@@ -91,7 +93,7 @@ docker compose --profile ops down     # 도구까지 내리기 (볼륨은 남음
 | prometheus | 지표 수집. 대상은 `app:8081/actuator/prometheus`(관리 포트, 호스트엔 안 열림 — `docs/03_shared.md` §13)·`ai:8000/metrics`(AI 끝점이 생기기 전에는 DOWN) | 백엔드·AI 공통 지표 — 진희, 기능 지표 — 각자 | 256m |
 | grafana | 지표·로그 화면. Prometheus·Loki 데이터 소스 자동 등록, 익명 접근 끔 | 대시보드 — 각자 | 384m |
 | loki · alloy | 컨테이너 표준출력 로그 모음(`dajaba_default` 네트워크 컨테이너만). Alloy는 Docker 소켓을 **읽기 전용**으로 붙여요 — 컨테이너 목록·로그를 읽는 공식 방법이 소켓뿐이라서, 그래서 ops 프로필에만 둬요 | 로그 형식 — 각자 | 256m · 256m |
-| redis | **db 0 = 로그인 세션, db 1 = Langfuse**. Langfuse 필수인 `noeviction`이 db 0에도 걸려서, 메모리가 차면 지우는 대신 **세션 쓰기까지 실패**(로그인 안 됨)해요. 그래서 컨테이너 상한 256m 안에서 `maxmemory 200mb`로 두고(강제 종료 대신 쓰기 거부), Grafana에서 Redis 메모리를 봐요 | 세션 — 진희·지윤 | 256m |
+| redis | **db 0 = 로그인 세션, db 1 = Langfuse**. 앱은 `AML_SESSION_REDIS_ENABLED=true`일 때만 세션을 여기 둬요(기본 꺼짐 = 앱 메모리, 키 `aml:session:*`). Langfuse 필수인 `noeviction`이 db 0에도 걸려서, 메모리가 차면 지우는 대신 **세션 쓰기까지 실패**(로그인 안 됨)해요. 그래서 컨테이너 상한 256m 안에서 `maxmemory 200mb`로 두고(강제 종료 대신 쓰기 거부), Grafana에서 Redis 메모리를 봐요 | 세션 — 지윤(SCRUM-273) | 256m |
 | rabbitmq | vhost `aml`, 관리 UI 포함. 큐 이름은 `batch.*`·`case.*`·`str.pdf.*`, **메시지에는 작업 ID만**(`batch_run_id`·`draft_id`). 앱 쪽 공통 설정은 `shared/messaging` — 큐는 `JobQueues`에 한 줄 추가하면 DLQ까지 앱이 선언해요. 앱은 `AML_RABBITMQ_ENABLED=true`일 때만 붙어요(기본 꺼짐). 붙이는 법은 [`docs/03_shared.md` §14](docs/03_shared.md) | 배치 잇기 — 준혁, 케이스 생성 — 지윤(`case.open-cases`, SCRUM-276), 확정본 PDF — 채영 | 384m |
 | minio (+ minio-init) | 파일 저장. 버킷 `str-reports`(확정본 PDF)·`langfuse`(Langfuse 이벤트)를 `minio-init`이 한 번 만들어요. 공식 Docker Hub 이미지가 중단돼서 Chainguard 이미지를 **digest로 고정**했어요(무료판은 `latest` 태그만 있음) | 확정본 PDF — 채영 | 256m |
 | elasticsearch | 단일 노드, 보안 켬(`elastic` 계정), 힙 512m | RAG 키워드 검색 — 진희 | 1g |
@@ -105,6 +107,15 @@ docker compose up -d --build app                 # 앱이 붙으면서 aml.jobs 
 ```
 
 관리 UI(`compose.override.yml`로 15672를 열었을 때) `http://localhost:15672` → vhost `aml` → Queues에 `case.open-cases`·`case.open-cases.dlq`가 보이면 붙은 거예요. 브로커가 죽어 있거나 꺼져 있으면 앱은 그냥 지금처럼(앱 안 실행기) 돌아요.
+
+**Redis 세션 켜고 띄우기** (SCRUM-273) — `.env`에 `AML_SESSION_REDIS_ENABLED=true`를 넣고 Redis까지 띄워요.
+
+```bash
+docker compose --profile ops up -d redis         # ops-env-check 가 비밀값을 본 뒤 뜸
+docker compose up -d --build app
+```
+
+로그인한 뒤 `docker compose restart app`을 해도 로그인이 유지되면 붙은 거예요(키는 `docker compose --profile ops exec redis redis-cli -n 0 --scan --pattern 'aml:session:sessions:*'`, 비밀번호는 컨테이너의 `REDISCLI_AUTH`). 끄면(`false`) 앱은 Redis에 연결하지 않아요.
 
 **로그 주의** — Alloy는 앱 로그를 **그대로** Loki로 옮겨요. 로그에 계좌번호·금액·본문·프롬프트 전문을 남기지 않는 규칙(NFR-COM-04)은 앱 쪽 로그 형식에서 지켜요.
 
@@ -124,7 +135,7 @@ services:
 | 변수 | 도구 | 무엇 |
 |---|---|---|
 | `GRAFANA_ADMIN_PASSWORD` | grafana | 관리자(`admin`) 비밀번호 |
-| `REDIS_PASSWORD` | redis · langfuse | Redis 비밀번호 |
+| `REDIS_PASSWORD` | redis · langfuse · app | Redis 비밀번호. 앱도 이 값으로 붙어요(`AML_SESSION_REDIS_ENABLED=true`일 때) |
 | `RABBITMQ_USER` · `RABBITMQ_PASSWORD` | rabbitmq · app | 관리 계정. 앱도 이 계정으로 붙어요(`AML_RABBITMQ_ENABLED=true`일 때) |
 | `MINIO_ROOT_USER` · `MINIO_ROOT_PASSWORD` | minio · minio-init · langfuse | MinIO 루트 계정 |
 | `ELASTIC_PASSWORD` | elasticsearch | `elastic` 계정 비밀번호 |
