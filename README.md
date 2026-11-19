@@ -33,6 +33,7 @@ swagger에서 **`POST /api/v1/auth/login`** 본문 `{"login_id": "inv01", "passw
 | `AI_INTERNAL_KEY` | AI 서버와 맞추는 내부 키(32자 이상 난수, `X-Internal-Key`) | — | **같음** | 비어 있음 (`AML_AI_MOCK=true`면 무관) |
 | `AI_BASE_URL` | AI 서버 주소 | — | — | compose 앱 `http://ai:8000` · IDE `http://localhost:8000` |
 | `AML_AI_MOCK` | local에서 AI 목업(`true`)·진짜 AI 서버(`false`). `true`/`false`만 — 다른 값이면 앱이 안 떠요 | — | — | `true` (목업) |
+| `AML_AI_ASK_ENABLED` | 케이스 질문 답변 켜기(`true`)·끄기(`false`). 참·거짓으로 못 읽는 값(예: `maybe`)이면 앱이 안 떠요 | — | — | `false` (꺼짐) |
 | `DEV_USER_PASSWORD` | local 시연 계정 4명(admin·inv01·apr01·inv02)의 비밀번호 | — | — | 비어 있음 → 개발 계정을 안 만들고 경고 한 줄 |
 | `DB_HOST` | DB 호스트 | — | — | compose 앱 `db`(고정) · IDE `localhost` |
 | `DB_PORT` | DB 포트 | — | — | `5432` |

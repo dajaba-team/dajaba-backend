@@ -76,6 +76,7 @@ services:
       AI_BASE_URL: ${AI_BASE_URL:-http://ai:8000}
       AI_INTERNAL_KEY: ${AI_INTERNAL_KEY}
       AML_AI_MOCK: ${AML_AI_MOCK:-true} # local 목업(true)·진짜 AI(false). 진짜: AML_AI_MOCK=false docker compose up -d app (README)
+      AML_AI_ASK_ENABLED: ${AML_AI_ASK_ENABLED:-false} # 케이스 질문 답변 켜기(true)·끄기(false, 기본) — SCRUM-291 (README)
       AML_DATASET_DIR: /data
       AML_CASE_POLICY_VERSION: ${AML_CASE_POLICY_VERSION:-}            # 비어 있으면 케이스 생성 배치가 POLICY_NOT_CONFIGURED
       AML_CASE_POLICY_LOW_TO_MEDIUM: ${AML_CASE_POLICY_LOW_TO_MEDIUM:-}

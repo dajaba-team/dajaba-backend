@@ -5,12 +5,12 @@ import com.team.aml.shared.ai.AiDtos.*;
 import java.util.List;
 
 /**
- * AI 서버(FastAPI) 호출 인터페이스 (레퍼런스 8.5). 규약 6절 엔드포인트 다섯 개 = 메서드 다섯 개.
+ * AI 서버(FastAPI) 호출 인터페이스 (레퍼런스 8.5). 규약 엔드포인트 여섯 개 = 메서드 여섯 개.
  * 유스케이스는 이 인터페이스만 본다. 구현은 두 개:
  *  - MockAiClient      aml.ai.mock=true  (local/test). AI 서버 없이 고정 응답.
  *  - WebClientAiClient aml.ai.mock=false (prod, 또는 local 에서 진짜 서버 붙일 때). SCRUM-17.
  *
- * 공통 동작(구현체가 지킨다): X-Internal-Key, X-Request-Id(UUID), 화면 요청 전체 90초(재시도 포함).
+ * 공통 동작(구현체가 지킨다): X-Internal-Key, X-Request-Id(UUID), 화면 요청 전체 90초(재시도 포함 — 질문 답변만 30초).
  * 재시도 1회는 HTTP 5xx 여부가 아니라 코드/원인으로 — LLM_UNAVAILABLE·MODEL_UNAVAILABLE·503 DB_UNAVAILABLE,
  * 또는 연결 거부(ConnectException)만. 그 밖의 5xx·4xx·타임아웃·409 는 재시도 없이 AiClientException (규약 6.2).
  * AI 409 GENERATION_IN_PROGRESS → 409 DRAFT_IN_PROGRESS. 호출은 트랜잭션 밖에서 (레퍼런스 8.4).
@@ -30,6 +30,13 @@ public interface AiClient {
     VerifyResponse verify(String draftId, VerifyRequest request);
 
     CaseSummaryResponse caseSummary(CaseSummaryRequest request);
+
+    /**
+     * 조사역 질문 답변 (규약 5.4, SCRUM-291). **이 호출만 전체 30초**(재시도 포함, `aml.ai.ask-timeout-seconds`).
+     * 상태 4종 모두 AI 200 — 상태별 칸 규칙·`case_no` 대조·`evidence_ids` ⊆ 보낸 근거가 틀리면 502 `AI_BAD_RESPONSE`.
+     * `question` 은 자르지 않고 그대로 보낸다. 켜기 설정(`askEnabled`)은 부르는 쪽이 본다.
+     */
+    AskResponse ask(AskRequest request);
 
     /** 기동 시 1회 호출. 실패해도 기동은 한다(경고 로그). */
     HealthResponse health();
