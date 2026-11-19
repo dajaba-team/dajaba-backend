@@ -4,6 +4,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /** 룰 스캔의 집계·저장 (SD 명세 §5). 집계는 SQL, 판정은 FanInRule·FanOutRule 같은 domain 룰이 한다. */
 public interface RuleScanRepository {
@@ -43,6 +44,14 @@ public interface RuleScanRepository {
      * 후보 = 그날 받은 거래가 있는 T 마다 S→M·M→T 엣지가 시간순으로 가능한 서로 다른 M 이 N 이상, S ≠ T.
      */
     List<ScatterGatherLeg> scatterGatherLegs(LocalDate date, ScatterGatherRule rule);
+
+    /**
+     * R04 — 돌아오는 거래(→A)가 [closeFrom, closeTo) 에 있는 거래 단위 고리를 (대상 계좌, 닫힌 분) 묶음으로 하나씩 넘긴다.
+     * 각 고리는 자기 창(돌아오는 분 기준) 안. 같은 계좌열이라도 거래가 다르면 다른 고리 — 앞 거래 하나가 여러 고리에 쓰일 수 있다.
+     * 결과를 커서로 나눠 받아 메모리에는 묶음 하나만 든다(하루치 경로를 한꺼번에 올리지 않음). 트랜잭션 안에서 불러야 한다.
+     */
+    void forEachCycleGroup(LocalDateTime closeFrom, LocalDateTime closeTo, CycleRule rule,
+                           Consumer<List<CyclePath>> group);
 
     /** 계좌의 법인 (accounts 에 없으면 null). */
     String entityIdOf(String accountKey);

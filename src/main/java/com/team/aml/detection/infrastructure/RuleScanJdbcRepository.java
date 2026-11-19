@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.detection.domain.ActiveRule;
+import com.team.aml.detection.domain.CyclePath;
+import com.team.aml.detection.domain.CycleRule;
 import com.team.aml.detection.domain.DataRange;
 import com.team.aml.detection.domain.FanEvidence;
 import com.team.aml.detection.domain.FanInRule;
@@ -22,18 +24,26 @@ import com.team.aml.detection.domain.RuleScanRepository;
 import com.team.aml.detection.domain.ScatterGatherLeg;
 import com.team.aml.detection.domain.ScatterGatherRule;
 import com.team.aml.shared.domain.DisplayNumber;
+import org.springframework.jdbc.core.ArgumentPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.sql.Array;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 @Repository
 public class RuleScanJdbcRepository implements RuleScanRepository {
@@ -252,6 +262,90 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
                  and x.ts >= ? and x.ts < ?
             order by 1, 2, 5, 4""";
 
+    /*
+     * R04 ① 엣지: [closeFrom + 1분 - H, closeTo) 의 (보낸 계좌, 받은 계좌) 쌍 + 처음·마지막 거래 시각.
+     * ② 계좌 고리 후보: 돌아오는 엣지 z→a(그 구간에 거래)에서 출발, a→b 를 붙여 b=z(2홉)·b→z(3홉)·b→c→z(4홉).
+     *    앞 엣지의 첫 거래 분 < 다음 엣지의 마지막 거래 분인 것만 (시간순 가능성). 중간 계좌는 서로 다르고 a 가 아님.
+     * ③ 후보만 거래 단위로 펼친다: 돌아오는 거래 tk ∈ [closeFrom, closeTo), 앞 거래마다 창 시작(tk분+1분-H) 이상·다음 거래 분보다 이른 분.
+     * 9/5 측정(rules.md R04 구현 1단계 기준선): 엣지 55만, 후보 2홉 425·3홉 26·4홉 7, 4홉 후보 조인이 약 21초.
+     */
+    private static final String CYCLES = """
+            with e as (
+                select from_account_key as src, to_account_key as dst, min(ts) as first_ts, max(ts) as last_ts
+                from ops.transactions
+                where ts >= ? and ts < ? and not is_self_transfer
+                group by from_account_key, to_account_key
+            ),
+            closing as (
+                select src as z, dst as a, last_ts as close_ts from e where last_ts >= ?
+            ),
+            start as (
+                select c.a, e1.dst as b, c.z, e1.first_ts as f1, c.close_ts
+                from closing c join e e1 on e1.src = c.a
+                where e1.first_ts < date_trunc('minute', c.close_ts)
+            ),
+            cand as (
+                select a, b, null::text as c, z, 2 as k from start where b = z
+                union all
+                select s.a, s.b, null, s.z, 3
+                from start s join e e2 on e2.src = s.b and e2.dst = s.z
+                where ? >= 3 and s.b <> s.z
+                  and s.f1 < date_trunc('minute', e2.last_ts) and e2.first_ts < date_trunc('minute', s.close_ts)
+                union all
+                select s.a, s.b, e2.dst, s.z, 4
+                from start s
+                join e e2 on e2.src = s.b and e2.dst not in (s.a, s.b, s.z)
+                join e e3 on e3.src = e2.dst and e3.dst = s.z
+                where ? >= 4 and s.b <> s.z
+                  and s.f1 < date_trunc('minute', e2.last_ts) and e2.first_ts < date_trunc('minute', e3.last_ts)
+                  and e3.first_ts < date_trunc('minute', s.close_ts)
+            ),
+            closes as (
+                select tk.transaction_id, tk.ts, tk.from_account_key, tk.to_account_key,
+                       date_trunc('minute', tk.ts) + interval '1 minute' - make_interval(hours => ?) as ws
+                from ops.transactions tk
+                join (select distinct a, z from cand) p on tk.from_account_key = p.z and tk.to_account_key = p.a
+                where tk.ts >= ? and tk.ts < ? and not tk.is_self_transfer
+            )
+            select array[t1.transaction_id, tk.transaction_id] as ids, array[t1.ts, tk.ts] as tss,
+                   array[t1.from_account_key, tk.from_account_key] as froms,
+                   array[t1.to_account_key, tk.to_account_key] as tos
+            from cand c
+            join closes tk on tk.from_account_key = c.z and tk.to_account_key = c.a
+            join ops.transactions t1 on t1.from_account_key = c.a and t1.to_account_key = c.b and not t1.is_self_transfer
+                 and t1.ts >= tk.ws and t1.ts < date_trunc('minute', tk.ts)
+            where c.k = 2
+            union all
+            select array[t1.transaction_id, t2.transaction_id, tk.transaction_id], array[t1.ts, t2.ts, tk.ts],
+                   array[t1.from_account_key, t2.from_account_key, tk.from_account_key],
+                   array[t1.to_account_key, t2.to_account_key, tk.to_account_key]
+            from cand c
+            join closes tk on tk.from_account_key = c.z and tk.to_account_key = c.a
+            join ops.transactions t2 on t2.from_account_key = c.b and t2.to_account_key = c.z and not t2.is_self_transfer
+                 and t2.ts >= tk.ws and t2.ts < date_trunc('minute', tk.ts)
+            join ops.transactions t1 on t1.from_account_key = c.a and t1.to_account_key = c.b and not t1.is_self_transfer
+                 and t1.ts >= tk.ws and t1.ts < date_trunc('minute', t2.ts)
+            where c.k = 3
+            union all
+            select array[t1.transaction_id, t2.transaction_id, t3.transaction_id, tk.transaction_id],
+                   array[t1.ts, t2.ts, t3.ts, tk.ts],
+                   array[t1.from_account_key, t2.from_account_key, t3.from_account_key, tk.from_account_key],
+                   array[t1.to_account_key, t2.to_account_key, t3.to_account_key, tk.to_account_key]
+            from cand c
+            join closes tk on tk.from_account_key = c.z and tk.to_account_key = c.a
+            join ops.transactions t3 on t3.from_account_key = c.c and t3.to_account_key = c.z and not t3.is_self_transfer
+                 and t3.ts >= tk.ws and t3.ts < date_trunc('minute', tk.ts)
+            join ops.transactions t2 on t2.from_account_key = c.b and t2.to_account_key = c.c and not t2.is_self_transfer
+                 and t2.ts >= tk.ws and t2.ts < date_trunc('minute', t3.ts)
+            join ops.transactions t1 on t1.from_account_key = c.a and t1.to_account_key = c.b and not t1.is_self_transfer
+                 and t1.ts >= tk.ws and t1.ts < date_trunc('minute', t2.ts)
+            where c.k = 4""";
+    /** 같은 (대상 계좌, 닫힌 분) 고리가 이어서 오게 — 묶음이 끝날 때마다 저장한다. 묶음 안은 첫 거래 시각·거래 id 순. */
+    private static final String CYCLES_GROUPED = "select * from (" + CYCLES + ") q "
+            + "order by q.froms[1], date_trunc('minute', q.tss[array_length(q.tss, 1)]), q.tss[1], q.ids";
+    /** 커서로 한 번에 받는 행 수. 트랜잭션 안(autocommit off)이라 PostgreSQL JDBC 가 이만큼씩 나눠 받는다. */
+    private static final int CYCLE_FETCH_SIZE = 1000;
+
     private static final String INSERT_ALERT = """
             insert into ops.alerts(alert_no, batch_run_id, rule_ref_id, account_key, entity_id, window_start,
                                    window_end, reference_ts, rule_facts, batch_date)
@@ -391,6 +485,43 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
                         rs.getString(6), rs.getString(7)),
                 from, dayEnd, rule.minIntermediates(), rule.minIntermediates(), dayStart, rule.minIntermediates(),
                 from, dayEnd, from, dayEnd);
+    }
+
+    @Override
+    public void forEachCycleGroup(LocalDateTime closeFrom, LocalDateTime closeTo, CycleRule rule,
+                                  Consumer<List<CyclePath>> group) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {   // #148 리뷰
+            throw new IllegalStateException("R04 고리 조회는 트랜잭션 안에서만 — 밖에서는 커서가 아니라 결과 전체를 한 번에 받는다");
+        }
+        int h = rule.windowHours();
+        Object[] args = {closeFrom.plusMinutes(1).minusHours(h), closeTo, closeFrom,
+                rule.maxHops(), rule.maxHops(), h, closeFrom, closeTo};
+        List<CyclePath> current = new ArrayList<>();
+        jdbc.query(con -> {
+            PreparedStatement ps = con.prepareStatement(CYCLES_GROUPED);
+            ps.setFetchSize(CYCLE_FETCH_SIZE);
+            new ArgumentPreparedStatementSetter(args).setValues(ps);
+            return ps;
+        }, (RowCallbackHandler) rs -> {
+            CyclePath p = cyclePath(rs);
+            if (!current.isEmpty() && !(current.get(0).accountKey().equals(p.accountKey())
+                    && current.get(0).closeMinute().equals(p.closeMinute()))) {
+                group.accept(List.copyOf(current));
+                current.clear();
+            }
+            current.add(p);
+        });
+        if (!current.isEmpty()) {
+            group.accept(List.copyOf(current));
+        }
+    }
+
+    private static CyclePath cyclePath(ResultSet rs) throws SQLException {
+        return new CyclePath(
+                List.of((Long[]) rs.getArray("ids").getArray()),
+                Arrays.stream((Timestamp[]) rs.getArray("tss").getArray()).map(Timestamp::toLocalDateTime).toList(),
+                List.of((String[]) rs.getArray("froms").getArray()),
+                List.of((String[]) rs.getArray("tos").getArray()));
     }
 
     @Override
