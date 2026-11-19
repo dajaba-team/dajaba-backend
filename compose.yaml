@@ -87,6 +87,11 @@ services:
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_USER: ${RABBITMQ_USER:-}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-}
+      # 로그인 세션 Redis(db 0, SCRUM-273). 기본 꺼짐(메모리 세션) — 켜려면 .env 에 AML_SESSION_REDIS_ENABLED=true + ops 프로필.
+      # depends_on 에 넣지 않음 — 켠 채 Redis 가 죽어도 앱은 뜬다(세션이 필요한 요청만 실패)
+      AML_SESSION_REDIS_ENABLED: ${AML_SESSION_REDIS_ENABLED:-false}
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     ports:
       - "8080:8080"
     volumes:

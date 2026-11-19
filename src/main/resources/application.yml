@@ -31,6 +31,31 @@ spring:
       write-dates-as-timestamps: false
     deserialization:
       fail-on-unknown-properties: false
+  # Redis 자동 설정은 의존성만으로 켜지지 않게 막는다. 세션을 Redis 로 켤 때(aml.session.redis.enabled=true)만
+  # RedisSessionConfig 가 RedisAutoConfiguration 을 직접 가져온다 (SCRUM-273). 끄면 Redis 에 연결하지 않는다.
+  # LettuceMetrics 는 켤 때도 뺀다 — 지표 태그에 Redis 주소(remote)가 붙는다.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+      - org.springframework.boot.actuate.autoconfigure.metrics.redis.LettuceMetricsAutoConfiguration
+  # Redis = 로그인 세션만 (db 0, 03_shared §12). db 1 은 Langfuse
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: 0
+      connect-timeout: 2s                 # Redis 가 죽었을 때 요청이 오래 매달리지 않게
+      timeout: 2s
+  session:
+    redis:
+      repository-type: indexed            # 사용자별 색인(login_id) — maximumSessions(1)·관리자 세션 끊기가 찾는다
+      namespace: aml:session
+      configure-action: none              # 기동 때 CONFIG SET 안 함 — 키 공간 알림을 쓰지 않고, Redis 없이도 앱이 떠야 한다
+      cleanup-cron: "-"                   # 만료 이벤트용 정리 작업 끔(이벤트를 안 씀). 만료 판단은 읽을 때, 키는 TTL 로 지워짐
+    # 만료는 server.servlet.session.timeout(30m), 쿠키는 server.servlet.session.cookie 를 그대로 따른다
   # RabbitMQ (SCRUM-276, shared.messaging). aml.messaging.enabled=false(기본)면 연결하지 않는다.
   # 공통 ACK·재시도·DLQ 기본값 — 진희 공통 정책 확정 전 초안. 바꾸면 docs/03_shared.md §14 도 같이.
   rabbitmq:
@@ -78,6 +103,10 @@ aml:
     ask-per-minute: 5                        # 질문하기 한 사람 최근 60초 한도, 넘으면 429 — SCRUM-302
     max-batch: 500
   dataset-dir: ${AML_DATASET_DIR:./data}
+  # 로그인 세션 저장소 — Redis(true)·서버 메모리(false, 기본). 끄면 지금처럼 재시작하면 모두 로그아웃 (SCRUM-273)
+  session:
+    redis:
+      enabled: ${AML_SESSION_REDIS_ENABLED:false}
   # RabbitMQ 켜기(true)·끄기(false, 기본). 끄면 케이스 생성 등은 기존 동기(앱 안 실행기) 경로 (SCRUM-276)
   messaging:
     enabled: ${AML_RABBITMQ_ENABLED:false}
@@ -119,6 +148,8 @@ management:
   health:
     rabbit:
       enabled: false                      # 도구가 죽어도 앱 health 는 UP (fail-open, SCRUM-263)
+    redis:
+      enabled: false                      # 세션 Redis 를 켜도 health 에 넣지 않음 — 넣을지는 08_decisions 후보 (SCRUM-273)
 
 logging:
   level:
@@ -129,6 +160,10 @@ logging:
     com.team.aml.shared.security.JsonLoginFilter: INFO
     # 보고서 PDF 라이브러리 — 기본이 INFO 라 PDF 마다 글꼴·CSS 안내가 여러 줄 찍힌다. 경고부터만
     com.openhtmltopdf: WARN
+    # Redis 세션(SCRUM-273): 세션 끊기 중 세션을 못 찾으면 Spring 이 세션 ID 를 INFO 로 찍는다 → WARN 부터
+    org.springframework.session.security.SpringSessionBackedSessionInformation: WARN
+    # Lettuce 재연결 로그(INFO·WARN)는 Redis 주소를 찍는다
+    io.lettuce.core: ERROR
 
 ---
 # local — 개발. swagger, DevUserSeeder, CORS(5173), MockAiClient
@@ -167,6 +202,9 @@ aml:
   str:
     pdf:
       storage-dir: build/str-reports-test # 테스트가 만든 확정본 PDF — gradle clean 으로 지워진다
+  session:
+    redis:
+      enabled: false                      # 테스트는 메모리 세션. Redis 테스트는 직접 프로퍼티로 (SCRUM-273)
 
 ---
 # prod — swagger 끔, 쿠키 Secure, CORS 없음, 목업 없음
