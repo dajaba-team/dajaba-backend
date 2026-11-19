@@ -117,10 +117,25 @@ class ReportPdfHtmlTest {
 
     // 10
     @Test
-    void 정상_나눔고딕에_없는_긴_줄표를_템플릿에_쓰지_않는다() {   // 없는 글자는 PDF 에 # 으로 찍힌다
-        String html = ReportPdfHtml.build(submitted(snapshot(1)), "pdf_v1");
+    void 정상_템플릿_고정_문구는_나눔고딕에_있는_글자만_쓴다() {   // 없는 글자는 PDF 에 # 으로 찍힌다
+        ReportPdfFonts fonts = ReportPdfFonts.load();
 
-        assertThat(html).doesNotContain("—", "–");
+        for (String html : new String[]{ReportPdfHtml.build(submitted(snapshot(2)), "pdf_v1"),
+                ReportPdfHtml.build(preview(ReportPdfFixtures.OM.createObjectNode()), "pdf_v1")}) {
+            assertThat(html.codePoints().filter(cp -> cp >= 0x20 && !fonts.covers(cp)).mapToObj(Integer::toHexString))
+                    .isEmpty();
+        }
+    }
+
+    // 11
+    @Test
+    void 경계_esc는_XML에_못_들어가는_글자를_빼고_짝이_맞는_이모지와_동그라미_숫자는_둔다() throws Exception {
+        assertThat(ReportPdfHtml.esc("a\uFFFEb\uFFFFc\uD800d\uDC00e\uD83D\uDE00\u2460")).isEqualTo("abcde\uD83D\uDE00\u2460");
+        assertThat(ReportPdfHtml.esc("끝\uD800")).isEqualTo("끝");                  // 끝에 홀로 남은 상위 서로게이트
+
+        ObjectNode snap = snapshot(1);
+        ((ObjectNode) snap.path("subject")).put("entity_name", "한빛\uFFFF무역\uD800");
+        assertThatCode(() -> xml(ReportPdfHtml.build(submitted(snap), "pdf_v1"))).doesNotThrowAnyException();
     }
 
     private static Document xml(String html) throws Exception {

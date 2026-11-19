@@ -25,7 +25,8 @@ import java.util.Locale;
  *   <li>거래 데이터 시각(ts)은 원문 그대로(시간대 없음), 시스템 시각(보고일자·승인 일시·마감)은 서울 시각으로</li>
  *   <li>금액은 원본 통화 그대로, 천 단위 쉼표만. 통화끼리 더하지 않는다. 달러 환산은 스냅샷 값만(US Dollar 일 때)</li>
  *   <li>openhtmltopdf 는 XML 로 읽는다 — 모든 값은 {@link #esc} 를 거치고, 태그는 닫는다. 이름 있는 엔티티(&amp;nbsp;)는 안 쓴다</li>
- *   <li>글꼴에 없는 기호(— 등)를 쓰지 않는다 — 나눔고딕에 없는 글자는 # 으로 찍힌다. 가운뎃점(·)·낫표(「」)는 있다</li>
+ *   <li>고정 문구는 나눔고딕에 있는 글자만 쓴다 — 없는 글자(①·✓·이모지 등)는 # 으로 찍힌다(ReportPdfHtmlTest 가 확인).
+ *       스냅샷 값의 없는 글자는 렌더러가 그리기 전에 □ 로 바꾼다(ReportPdfGlyphs)</li>
  * </ul>
  * 스프링 없이 만들 수 있는 순수 함수 — 모양은 단위 테스트로 본다.
  */
@@ -363,7 +364,10 @@ final class ReportPdfHtml {
         }
     }
 
-    /** XML 텍스트·속성 이스케이프. 제어 문자(탭·줄바꿈 제외)는 XML 에 못 들어가서 뺀다. */
+    /**
+     * XML 텍스트·속성 이스케이프. XML 에 못 들어가는 글자는 뺀다 — 제어 문자(탭·줄바꿈 제외), U+FFFE·U+FFFF,
+     * 짝 없는 서로게이트. 남겨 두면 openhtmltopdf 의 XML 읽기가 실패하고, 스냅샷은 안 바뀌어서 다시 해도 계속 실패한다.
+     */
     static String esc(String s) {
         if (s == null) return "";
         StringBuilder b = new StringBuilder(s.length() + 16);
@@ -376,7 +380,13 @@ final class ReportPdfHtml {
                 case '"' -> b.append("&quot;");
                 case '\'' -> b.append("&#39;");
                 default -> {
-                    if (ch >= 0x20 || ch == '\n' || ch == '\r' || ch == '\t') b.append(ch);
+                    if (Character.isHighSurrogate(ch) && i + 1 < s.length() && Character.isLowSurrogate(s.charAt(i + 1))) {
+                        b.append(ch).append(s.charAt(++i));                     // 짝이 맞는 것만 (이모지 등)
+                    } else if (Character.isSurrogate(ch) || ch == '\uFFFE' || ch == '\uFFFF') {
+                        // 뺀다
+                    } else if (ch >= 0x20 || ch == '\n' || ch == '\r' || ch == '\t') {
+                        b.append(ch);
+                    }
                 }
             }
         }

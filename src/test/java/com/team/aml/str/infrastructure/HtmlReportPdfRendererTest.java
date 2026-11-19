@@ -1,5 +1,11 @@
 package com.team.aml.str.infrastructure;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -7,11 +13,14 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
 
 import static com.team.aml.str.infrastructure.ReportPdfFixtures.preview;
 import static com.team.aml.str.infrastructure.ReportPdfFixtures.snapshot;
@@ -107,5 +116,82 @@ class HtmlReportPdfRendererTest {
         assertThat(ReportPdfFonts.isTrueType("ttcf".getBytes(StandardCharsets.US_ASCII))).isFalse();   // 컬렉션(.ttc)
         assertThat(ReportPdfFonts.isTrueType(new byte[]{1})).isFalse();
         assertThatCode(() -> ReportPdfFonts.load()).doesNotThrowAnyException();         // 리포에 들어 있다
+    }
+
+    // 7
+    @Test
+    void 정상_cmap으로_폰트에_있는_글자와_없는_글자를_가린다() {   // 11/19 cmap 직접 확인 결과와 같아야 한다
+        ReportPdfFonts fonts = ReportPdfFonts.load();
+
+        assertThat(fonts.covers('한')).isTrue();
+        assertThat(fonts.covers('→')).isTrue();
+        assertThat(fonts.covers('—')).isTrue();
+        assertThat(fonts.covers('·')).isTrue();
+        assertThat(fonts.covers('「')).isTrue();
+        assertThat(fonts.covers(ReportPdfFonts.REPLACEMENT)).isTrue();
+        assertThat(fonts.covers(0x2460)).isFalse();                         // ①
+        assertThat(fonts.covers(0x2713)).isFalse();                         // ✓
+        assertThat(fonts.covers(0x1F600)).isFalse();                        // 이모지
+        assertThat(fonts.covers(0xFFFD)).isFalse();
+        assertThat(fonts.covers(0xFFFF)).isFalse();
+        assertThat(fonts.covers(-1)).isFalse();
+        assertThat(fonts.covers(0x110000)).isFalse();
+    }
+
+    // 8
+    @Test
+    void 정상_스냅샷의_없는_글자는_네모로_바꾸고_원본은_건드리지_않는다() {
+        ObjectNode snap = snapshot(1);
+        ((ObjectNode) snap.path("narrative").path("sections").get(0)).put("text", "\u2460 송금 → 환전 — 반복 \uD83D\uDE00\n끝");
+        ((ArrayNode) snap.path("suspicion").path("types")).add("유형\u2713");
+        ReportPdfFonts fonts = ReportPdfFonts.load();
+
+        ReportPdfGlyphs.Result r = ReportPdfGlyphs.replaceUncovered(snap, fonts::covers);
+
+        assertThat(r.snapshot().path("narrative").path("sections").get(0).path("text").asText())
+                .isEqualTo("□ 송금 → 환전 — 반복 □\n끝");                   // 있는 글자·줄바꿈은 그대로
+        assertThat(r.snapshot().path("suspicion").path("types").get(2).asText()).isEqualTo("유형□");   // 배열 안 문자열도
+        assertThat(r.snapshot().path("transactions").get(0).path("seq").asInt()).isEqualTo(1);      // 숫자는 그대로
+        assertThat(r.replaced()).containsExactly(0x2460, 0x2713, 0x1F600);
+        assertThat(ReportPdfGlyphs.describe(r.replaced())).isEqualTo("U+2460, U+2713, U+1F600");
+        assertThat(snap.path("narrative").path("sections").get(0).path("text").asText()).startsWith("\u2460");
+    }
+
+    // 9
+    @Test
+    void 정상_없는_글자가_있어도_PDF는_샵_없이_네모로_찍히고_보고서_번호와_코드포인트를_WARN으로_남긴다() throws IOException {
+        ObjectNode snap = snapshot(1);
+        ((ObjectNode) snap.path("narrative").path("sections").get(0)).put("text", "\u2460 반복 \uD83D\uDE00 → 환전");
+        ((ObjectNode) snap.path("subject")).put("entity_name", "한빛\uFFFF무역");   // jsonb 가 받아 주는 XML 금지 글자
+        Logger logger = (Logger) LoggerFactory.getLogger(HtmlReportPdfRenderer.class);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            byte[] pdf = RENDERER.render(submitted(snap));
+
+            try (PDDocument doc = Loader.loadPDF(pdf)) {
+                String text = new PDFTextStripper().getText(doc);
+                assertThat(text).contains("□ 반복 □ → 환전", "한빛□무역")
+                        .doesNotContain("# 반복", "반복 #", "한빛#");   // 픽스처 은행명 "Bank #4507" 의 # 은 원래 값
+            }
+            assertThat(logs.list).singleElement().satisfies(e -> {
+                assertThat(e.getLevel()).isEqualTo(Level.WARN);
+                assertThat(e.getFormattedMessage()).contains(ReportPdfFixtures.REPORT_NO, "U+2460", "U+FFFF", "U+1F600");
+            });
+        } finally {
+            logger.detachAppender(logs);
+        }
+    }
+
+    // 10
+    @Test
+    void 정상_없는_글자가_없으면_로그도_내용도_그대로() {
+        var content = submitted(snapshot(1));
+
+        assertThat(RENDERER.coveredOnly(content)).isSameAs(content);
+        SortedSet<Integer> none = new TreeSet<>();
+        assertThat(ReportPdfGlyphs.replace("한빛무역 → —", cp -> true, none)).isEqualTo("한빛무역 → —");
+        assertThat(none).isEmpty();
     }
 }
