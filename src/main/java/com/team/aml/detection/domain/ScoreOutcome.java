@@ -10,7 +10,7 @@ import java.util.Set;
  * 점수 응답 항목 하나를 어떻게 저장할지 (SD 명세 §6 저장 규칙, 10/29 SCRUM-41).
  * <ul>
  *   <li>OK·SHORT_HISTORY·MISSING_INPUT 이고 저장 칸이 다 있으면 SCORED — alert_scores 한 행.</li>
- *   <li>FAILED 면 FAILED + failure_code. 4값이 아니면 null(다시 보낼 대상).</li>
+ *   <li>FAILED 면 FAILED + failure_code. 5값이 아니면 null(다시 보낼 대상).</li>
  *   <li>그 밖(모르는 상태, prediction_id·버전 없음·64자 넘음, produced_at 을 못 읽음)은 FAILED + null.</li>
  * </ul>
  * 0점·LOW 로 바꾸지 않는다(안건 4). 형식 검사(점수 0~1, 묶음 alert_id 대조)는 AiClient 가 먼저 한다(SCRUM-128·204).
@@ -19,7 +19,8 @@ public record ScoreOutcome(boolean scored, String failureCode, OffsetDateTime pr
 
     private static final Set<String> SCORED_STATUSES = Set.of("OK", "SHORT_HISTORY", "MISSING_INPUT");
     private static final Set<String> FAILURE_CODES = Set.of(
-            "TRANSACTION_NOT_FOUND", "HISTORY_NOT_SUPPORTED", "REQUIRED_INPUT_MISSING", "COMPUTE_ERROR");
+            "TRANSACTION_NOT_FOUND", "HISTORY_NOT_SUPPORTED", "REQUIRED_INPUT_MISSING", "COMPUTE_ERROR",
+            "RULE_NOT_SUPPORTED");   // 모델이 점수를 내지 않는 룰 (ML 규약 v0.4 11/19, SCRUM-326) — 재처리 안 함
     /** alert_scores 의 prediction_id·model_version·feature_version 길이 (V005_1 varchar(64)). */
     private static final int MAX_TEXT = 64;
 

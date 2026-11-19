@@ -120,6 +120,8 @@ class DetectionSchemaTest {
 
             statement.executeUpdate(
                     "update ops.alerts set score_status = 'FAILED', score_failure_code = 'COMPUTE_ERROR' where id = " + alertId);
+            statement.executeUpdate(   // V018 — 모델이 점수를 내지 않는 룰
+                    "update ops.alerts set score_failure_code = 'RULE_NOT_SUPPORTED' where id = " + alertId);
         }
     }
 
