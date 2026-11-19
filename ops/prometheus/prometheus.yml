@@ -8,7 +8,7 @@ scrape_configs:
   - job_name: app
     metrics_path: /actuator/prometheus
     static_configs:
-      - targets: ["app:8080"]
+      - targets: ["app:8081"]   # 관리 포트 — compose ports 에 없어 호스트로 안 나감 (SCRUM-271)
   - job_name: ai
     metrics_path: /metrics
     static_configs:

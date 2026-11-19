@@ -28,6 +28,19 @@ public interface RuleScanRepository {
     /** R01 집계 — 그날 송금한 (계좌, 분) 마다 지금 창·1분 전 창의 수신 계좌 수. minDistinctReceivers 는 후보 거르기에만. */
     List<FanMinute> fanOutMinutes(LocalDate date, FanOutRule rule);
 
+    /** R06 집계 — 그날 입금·출금이 있었던 (계좌, 분) 마다 지금 창·1분 전 창의 송신·수신 계좌 수. 하한·상한은 후보 거르기에만. */
+    List<GatherScatterMinute> gatherScatterMinutes(LocalDate date, GatherScatterRule rule);
+
+    /** R03 집계 — 그날 중계 쌍을 완성하는 출금이 있었던 (계좌, 분) 과 1분 전 창에도 쌍이 있었는지. */
+    List<FxRelayMinute> fxRelayMinutes(LocalDate date, FxRelayRule rule);
+
+    /** [windowStart, windowEnd) 안의 모든 중계 쌍(받은 거래 시각순) + 계좌의 법인. */
+    FxRelayEvidence fxRelayEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd,
+                                    FxRelayRule rule);
+
+    /** 계좌의 법인 (accounts 에 없으면 null). */
+    String entityIdOf(String accountKey);
+
     /** [windowStart, windowEnd) 의 입금 근거(자기 계좌 제외) + 계좌의 법인. */
     FanEvidence fanInEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd);
 

@@ -32,7 +32,7 @@ spring:
     deserialization:
       fail-on-unknown-properties: false
   # RabbitMQ (SCRUM-276, shared.messaging). aml.messaging.enabled=false(기본)면 연결하지 않는다.
-  # 공통 ACK·재시도·DLQ 기본값 — 진희 공통 정책 확정 전 초안. 바꾸면 docs/03_shared.md §13 도 같이.
+  # 공통 ACK·재시도·DLQ 기본값 — 진희 공통 정책 확정 전 초안. 바꾸면 docs/03_shared.md §14 도 같이.
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
@@ -93,10 +93,21 @@ springdoc:
     operations-sorter: alpha
 
 management:
+  # actuator 는 관리 포트 8081 로만 (compose ports 에 안 넣음 → 호스트·nginx 밖으로 안 나감). Prometheus 는 app:8081 을 긁는다.
+  # 8080 GET /actuator/health 는 프론트 연결 확인용 호환 컨트롤러(MainPortHealthController)가 상태만 돌려준다 (SCRUM-271, 03_shared §13)
+  server:
+    port: 8081
+    # 듣는 주소 — bootRun·IDE 는 이 기계 안에서만. compose app 컨테이너만 0.0.0.0 을 넘긴다(Prometheus 가 app:8081 로 들어와야 함, SCRUM-271 후속)
+    address: ${MANAGEMENT_SERVER_ADDRESS:127.0.0.1}
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
+  metrics:
+    distribution:
+      # 응답 시간 버킷 고정 10개 — 기본 히스토그램(70여 개)은 Prometheus 256m 에 무거움. 90s 는 AI 호출 경로용
+      slo:
+        http.server.requests: 50ms,100ms,250ms,500ms,1s,2s,5s,10s,30s,90s
   health:
     rabbit:
       enabled: false                      # 도구가 죽어도 앱 health 는 UP (fail-open, SCRUM-263)

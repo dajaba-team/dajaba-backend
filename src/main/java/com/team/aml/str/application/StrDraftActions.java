@@ -19,11 +19,12 @@ import java.util.Objects;
  * <ul>
  *   <li>조사역(담당): GENERATE_DRAFT 가 되면 REVISE·REGENERATE, 그중 케이스 DRAFTED 면 VERIFY·SUBMIT 도 (S5·S6 은 DRAFTED 만).
  *       CLOSE_WITH_DRAFT 는 C2 와 같은 값</li>
- *   <li>승인자: 케이스 PENDING_APPROVAL 이고 지금·예전 담당이 아니면 APPROVE·REJECT (미결 32 — ApproveCase·RejectCase 와 같은 판단)</li>
- *   <li>그 밖(관리자·비담당·대체·잠긴 초안·다른 상태): []</li>
+ *   <li>승인자: 케이스 PENDING_APPROVAL 이고 지금·예전 담당이 아니면 APPROVE·REJECT (미결 32 — ApproveCase·RejectCase 와 같은 판단).
+ *       케이스 APPROVED·초안 LOCKED 이고 이 초안을 승인한 사람이면 REPORT (모의 제출 P4 — ReportStrDraft 의 403 NOT_DRAFT_APPROVER 와 같은 판단)</li>
+ *   <li>그 밖(관리자·비담당·대체된 초안·다른 상태): []</li>
  * </ul>
  * SUBMIT 은 "상태상 가능"만 뜻한다 — 지금 본문 검증 통과 여부는 화면이 latest_verification.is_current·passed 로 함께 보고
- * 꺼진 이유 문구를 고른다(계약서 S6 켜는 조건). 아직 없는 동작: REPORT(P4)·PDF(S7·S8·P5) — 그 API 가 생길 때 더한다.
+ * 꺼진 이유 문구를 고른다(계약서 S6 켜는 조건). 아직 없는 동작: PDF(S7·S8·P5) — 그 API 가 생길 때 더한다.
  */
 final class StrDraftActions {
 
@@ -34,21 +35,32 @@ final class StrDraftActions {
     static final String CLOSE_WITH_DRAFT = "CLOSE_WITH_DRAFT";
     static final String APPROVE = "APPROVE";
     static final String REJECT = "REJECT";
+    static final String REPORT = "REPORT";
 
     private StrDraftActions() {}
 
     /**
      * @param draftId           보고 있는 초안 (DB id) — 케이스의 현재 초안이 아니면(재생성으로 대체) 버튼 없음
-     * @param draftStatus       ACTIVE 가 아니면(LOCKED·SUPERSEDED) 버튼 없음
-     * @param viewerWasAssignee 보는 사람이 이 케이스를 지금·예전에 담당했나 (cases WasCaseAssignee). 승인자일 때만 쓴다
+     * @param draftStatus       조사역·승인 버튼은 ACTIVE 만, 모의 제출(REPORT)은 LOCKED 만
+     * @param viewerWasAssignee   보는 사람이 이 케이스를 지금·예전에 담당했나 (cases WasCaseAssignee). 승인자일 때만 쓴다
+     * @param viewerApprovedDraft 보는 사람이 이 초안을 승인한 사람인가 (확정 보고서 created_by). REPORT 에만 쓴다
      */
     static List<String> of(long draftId, StrDraftStatus draftStatus, Case c, long viewerId, Role viewerRole,
-                           boolean viewerWasAssignee) {
-        if (draftStatus != StrDraftStatus.ACTIVE || !Objects.equals(c.getCurrentDraftId(), draftId)) {
-            return List.of();
+                           boolean viewerWasAssignee, boolean viewerApprovedDraft) {
+        if (!Objects.equals(c.getCurrentDraftId(), draftId)) {
+            return List.of();                                         // 재생성으로 대체된 옛 초안
         }
         if (viewerRole == Role.APPROVER) {
-            return c.getStatus() == CaseStatus.PENDING_APPROVAL && !viewerWasAssignee ? List.of(APPROVE, REJECT) : List.of();
+            if (draftStatus == StrDraftStatus.ACTIVE && c.getStatus() == CaseStatus.PENDING_APPROVAL && !viewerWasAssignee) {
+                return List.of(APPROVE, REJECT);
+            }
+            if (draftStatus == StrDraftStatus.LOCKED && c.getStatus() == CaseStatus.APPROVED && viewerApprovedDraft) {
+                return List.of(REPORT);                               // 모의 제출(P4) — 이 초안을 승인한 사람만(11/17)
+            }
+            return List.of();
+        }
+        if (draftStatus != StrDraftStatus.ACTIVE) {
+            return List.of();                                         // 조사역 버튼은 사용 중 초안에만
         }
         if (viewerRole != Role.INVESTIGATOR) {
             return List.of();

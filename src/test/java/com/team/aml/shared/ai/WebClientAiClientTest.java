@@ -17,6 +17,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.slf4j.MDC;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
@@ -916,4 +917,79 @@ class WebClientAiClientTest {
                 .isInstanceOfSatisfying(AiClientException.class, e -> assertThat(e.code()).isEqualTo("AI_BAD_RESPONSE"));
     }
 
+    // --- X-Request-Id = 요청 MDC 값 (SCRUM-272) ------------------------------
+
+    @AfterEach
+    void clearMdc() {
+        MDC.clear();
+    }
+
+    @Test
+    void 정상_요청_MDC의_request_id를_헤더와_기록에_그대로_쓴다() throws Exception {
+        MDC.put("request_id", "rid-from-filter-1");
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));
+
+        client.createDraft(draftReq());
+
+        assertThat(server.takeRequest().getHeader("X-Request-Id")).isEqualTo("rid-from-filter-1");
+        assertThat(writer.rows).extracting(AiCallLog::getRequestId).containsExactly("rid-from-filter-1");
+        assertThat(MDC.get("request_id")).isEqualTo("rid-from-filter-1");   // 호출이 MDC 를 바꾸지 않는다
+    }
+
+    @Test
+    void 경계_재시도해도_같은_MDC_값이다() throws Exception {
+        MDC.put("request_id", "rid-from-filter-2");
+        server.enqueue(json(503, "{\"code\":\"LLM_UNAVAILABLE\"}"));
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));
+
+        client.createDraft(draftReq());
+
+        assertThat(server.takeRequest().getHeader("X-Request-Id")).isEqualTo("rid-from-filter-2");
+        assertThat(server.takeRequest().getHeader("X-Request-Id")).isEqualTo("rid-from-filter-2");
+        assertThat(writer.rows).extracting(AiCallLog::getAttempt).containsExactly((short) 1, (short) 2);
+        assertThat(writer.rows).extracting(AiCallLog::getRequestId).containsOnly("rid-from-filter-2");
+    }
+
+    @Test
+    void 경계_한_요청에서_AI를_두_번_부르면_같은_request_id이고_endpoint로_구분된다() throws Exception {
+        MDC.put("request_id", "rid-from-filter-3");
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));
+        server.enqueue(json(200, example("verify_response.json")));
+
+        client.createDraft(draftReq());
+        client.verify("DRF-000312", om.readValue(example("verify_request.json"), VerifyRequest.class));
+
+        assertThat(server.takeRequest().getHeader("X-Request-Id")).isEqualTo("rid-from-filter-3");
+        assertThat(server.takeRequest().getHeader("X-Request-Id")).isEqualTo("rid-from-filter-3");
+        assertThat(writer.rows).extracting(AiCallLog::getRequestId).containsOnly("rid-from-filter-3");
+        assertThat(writer.rows).extracting(AiCallLog::getEndpoint).containsExactly("/v1/str/drafts", "/v1/str/verify");
+        assertThat(writer.rows).extracting(AiCallLog::getAttempt).containsExactly((short) 1, (short) 1);
+    }
+
+    @Test
+    void 경계_MDC가_없으면_배치처럼_호출마다_새_UUID다() throws Exception {
+        MDC.clear();
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));
+
+        client.createDraft(draftReq());
+        client.createDraft(draftReq());
+
+        String first = server.takeRequest().getHeader("X-Request-Id");
+        String second = server.takeRequest().getHeader("X-Request-Id");
+        assertThat(first).matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+        assertThat(second).matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").isNotEqualTo(first);
+        assertThat(writer.rows).extracting(AiCallLog::getRequestId).containsExactly(first, second);
+    }
+
+    @Test
+    void 경계_MDC가_빈_값이면_새_UUID다() throws Exception {
+        MDC.put("request_id", "");
+        server.enqueue(json(200, "{\"draft_id\":\"D1\"}"));
+
+        client.createDraft(draftReq());
+
+        assertThat(server.takeRequest().getHeader("X-Request-Id"))
+                .matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+    }
 }

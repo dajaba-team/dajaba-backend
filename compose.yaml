@@ -65,7 +65,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      SPRING_PROFILES_ACTIVE: local
+      SPRING_PROFILES_ACTIVE: local,json
       DB_HOST: db
       DB_PORT: "5432"
       DB_NAME: aml
@@ -80,6 +80,7 @@ services:
       AML_CASE_POLICY_VERSION: ${AML_CASE_POLICY_VERSION:-}            # 비어 있으면 케이스 생성 배치가 POLICY_NOT_CONFIGURED
       AML_CASE_POLICY_LOW_TO_MEDIUM: ${AML_CASE_POLICY_LOW_TO_MEDIUM:-}
       AML_CASE_POLICY_MEDIUM_TO_HIGH: ${AML_CASE_POLICY_MEDIUM_TO_HIGH:-}
+      MANAGEMENT_SERVER_ADDRESS: 0.0.0.0   # 관리 포트 8081 은 기본 127.0.0.1 — 컨테이너 안에선 Prometheus 가 app:8081 로 들어와야 해서. ports 에는 8081 안 넣음(호스트로 안 나감)
       # RabbitMQ (SCRUM-276). 기본 꺼짐 — 켜려면 .env 에 AML_RABBITMQ_ENABLED=true + ops 프로필. depends_on 에 넣지 않음(fail-open)
       AML_RABBITMQ_ENABLED: ${AML_RABBITMQ_ENABLED:-false}
       RABBITMQ_HOST: rabbitmq
@@ -285,7 +286,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:26.3.62.3
     profiles: [ops]
-    mem_limit: 1g
+    mem_limit: 2g
     depends_on:
       ops-env-check:
         condition: service_completed_successfully

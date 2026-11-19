@@ -72,7 +72,7 @@ public class RunOpenCasesOnce {
      * 큐 재시도를 다 써서 메시지가 DLQ 로 가기 직전(shared.messaging 의 JobMessageRecoverer)에 부른다.
      * 행이 RUNNING 으로 남으면 같은 날짜 재요청이 409 BATCH_RUNNING 으로 막히므로 FAILED 로 바꿔 다시 요청할 수 있게 한다.
      * 다른 곳에서 실행 중(잠금을 못 잡음)이면 그쪽이 결과를 남기므로 건드리지 않는다.
-     * DB 가 계속 안 되면 이것도 실패한다 — 그때는 §13 복구 절차(손으로 FAILED).
+     * DB 가 계속 안 되면 이것도 실패한다 — 그때는 §14 복구 절차(손으로 FAILED).
      */
     @Transactional
     public Outcome giveUp(long batchRunId) {

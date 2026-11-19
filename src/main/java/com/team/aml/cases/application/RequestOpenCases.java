@@ -76,7 +76,7 @@ public class RequestOpenCases {
 
     /**
      * 앱 안 실행기 경로. run() 은 예외를 안 던지지만 그 앞의 잠금·조회(DB)는 실패할 수 있다 — 그러면 RUNNING 이 남아
-     * 그 날짜가 막히므로 포기 처리(FAILED)를 한 번 해 본다. 그것도 안 되면 로그만(§13 복구 절차).
+     * 그 날짜가 막히므로 포기 처리(FAILED)를 한 번 해 본다. 그것도 안 되면 로그만(§14 복구 절차).
      */
     private void runInApp(long batchRunId) {
         try {

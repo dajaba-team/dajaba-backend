@@ -140,7 +140,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | `health()` | `GET /v1/health` — 기동 시 1회, 실패해도 기동은 함. 응답 `status·db·llm·server_version·model_version·feature_version·retrieval_version` 을 info 한 줄로 찍고, `status`·`db`·`llm` 중 하나라도 `ok` 가 아니면(null 포함) warn 한 줄 더 (SCRUM-22) | `AiHealthCheck` |
 
 **공통 동작**
-- 헤더 `X-Internal-Key`(32자 이상 난수, 환경변수), `X-Request-Id`(UUID, `ai_call_logs.request_id`와 같은 값), `X-Budget-Ms`(그 시도를 보낼 때 남은 시간 한도, ms 정수 — 재시도면 줄어든 값. health 포함 모든 시도. AI가 읽어 재생성 판단에 쓰는 건 AI 쪽 작업) [SCRUM-128].
+- 헤더 `X-Internal-Key`(32자 이상 난수, 환경변수), `X-Request-Id`(HTTP 요청 안이면 그 요청의 MDC `request_id`, 배치처럼 MDC가 없으면 호출마다 새 UUID — 재시도해도 같은 값, `ai_call_logs.request_id`와 같은 값 [SCRUM-272]), `X-Budget-Ms`(그 시도를 보낼 때 남은 시간 한도, ms 정수 — 재시도면 줄어든 값. health 포함 모든 시도. AI가 읽어 재생성 판단에 쓰는 건 AI 쪽 작업) [SCRUM-128].
 - **시간 한도** — 초안·검증·요약처럼 **화면에서 부르는 요청은 전체 90초**(재시도 포함, 호출마다 90초가 아님). 점수 배치는 **500건 묶음 호출 하나마다** 같은 규칙이에요(배치 전체가 90초가 아님). MVP는 **동기**(`@Async`·큐·폴링은 고도화). [10/29]
 - 4xx는 재시도 없이 `AiClientException` → 502. 단 409 `GENERATION_IN_PROGRESS`는 409 `DRAFT_IN_PROGRESS`로. [10/29]
 - **재시도** — 최대 **1회**, 그리고 **위 시간 한도 안에 남은 시간이 있을 때만**. [10/29]
@@ -151,7 +151,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   - 대상 코드는 규약 v0.2 §6.2 그대로이고, "남은 시간 안에서만"과 "백엔드 타임아웃은 제외"를 10/29에 더했어요. 규약 문구도 다음 규약 변경 때 맞출게요. 〔레퍼런스 §8.5·SD 명세의 "5xx·타임아웃 1회"는 그 전 표기〕
 - AI 쪽 중첩 재시도 금지. [안건 21]
 - **AI 주소·연결 기억** — 백엔드는 AI 서버 이름 조회 결과를 **최대 5초**만 기억하고(조회 실패는 기억 안 함), AI 전용 연결 풀에서 **4초 넘게 놀던 연결은 다시 쓰지 않아요**(AI uvicorn 기본 keep-alive 5초보다 짧게). 그래서 AI 컨테이너를 다시 만들어도 백엔드는 재시작 없이 몇 초 안에 새 주소로 붙어요. 풀의 다른 값(최대 연결 500·연결 대기 45초 등)은 라이브러리 공용 기본값 그대로. 설정은 `AiClientConfig`. [SCRUM-255]
-- 모든 호출은 `ai_call_logs`에 **시도마다 한 줄**(재시도하면 같은 `request_id`로 `attempt` 1·2) — **메타데이터만**: 엔드포인트, `request_id`, 상태 코드(AI가 준 HTTP 상태, 타임아웃·연결 실패는 null — 단 2xx 본문을 받는 중 끊긴 경우는 실제 2xx, 아래 "2xx인데 응답 확인" 줄의 예외 [SCRUM-229]), 에러 코드, 소요 ms, 재시도 회차, 버전, `generation_id`, 대상(`target_type`·`target_id`). **요청·응답 본문은 실패해도 저장하지 않아요.** 실패 요청에 조사 메모·보고서 본문이 들어갈 수 있어서예요. 전문은 **AI가 그 요청을 저장했을 때만** AI 쪽 `ai.generations`에서 `request_id`로 찾을 수 있어요(연결 실패·인증 거부처럼 AI가 기록 전에 끝난 요청은 전문이 없어요). [규약 v0.2 §6.4, 10/29] 〔레퍼런스 §3.4의 "실패한 호출만 본문 저장"은 그 전 안〕
+- 모든 호출은 `ai_call_logs`에 **시도마다 한 줄**(재시도하면 같은 `request_id`로 `attempt` 1·2. 한 HTTP 요청이 AI를 두 번 부르면 두 호출도 같은 `request_id` — `endpoint`·`attempt`로 구분 [SCRUM-272]) — **메타데이터만**: 엔드포인트, `request_id`, 상태 코드(AI가 준 HTTP 상태, 타임아웃·연결 실패는 null — 단 2xx 본문을 받는 중 끊긴 경우는 실제 2xx, 아래 "2xx인데 응답 확인" 줄의 예외 [SCRUM-229]), 에러 코드, 소요 ms, 재시도 회차, 버전, `generation_id`, 대상(`target_type`·`target_id`). **요청·응답 본문은 실패해도 저장하지 않아요.** 실패 요청에 조사 메모·보고서 본문이 들어갈 수 있어서예요. 전문은 **AI가 그 요청을 저장했을 때만** AI 쪽 `ai.generations`에서 `request_id`로 찾을 수 있어요(연결 실패·인증 거부처럼 AI가 기록 전에 끝난 요청은 전문이 없어요). [규약 v0.2 §6.4, 10/29] 〔레퍼런스 §3.4의 "실패한 호출만 본문 저장"은 그 전 안〕
 - `ai_call_logs`의 대상·버전은 엔드포인트별로 고정이에요. 버전·`generation_id`는 **2xx 응답 본문이 있을 때만** 채워요(4xx·5xx·타임아웃·연결 실패는 null). [SCRUM-18]
 - **2xx인데 `AiClient`의 응답 확인(필수 칸·칸 타입·점수 묶음 `batch_run_id`·`alert_id` 대조)이 실패하면** 그 시도는 실패 행이에요 — `status_code`=실제 2xx, `error_code`=`AI_BAD_RESPONSE`, 버전·`generation_id`는 본문에서 읽은 값. 재시도 안 함(형식 오류는 재시도 대상 아님). 대상: 점수·초안·검증·요약(health 제외). [SCRUM-128]
   - 예외: 2xx 본문을 **받는 중 연결이 끊기면** 형식 오류가 아니라 연결 실패예요 — `error_code`=`AI_UNAVAILABLE`, `status_code`=실제 2xx, 버전·`generation_id`는 null(본문을 못 받음), 재시도 안 함 — 위 `ai_call_logs` 상태 코드 칸의 예외와 같은 경우. [SCRUM-229]
@@ -224,8 +224,29 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 ## 8. 로깅·요청 추적 [레퍼런스 §8.6, 코드 `RequestIdFilter`·`UserIdMdcFilter`]
 
 - `request_id`·`user_id`를 MDC에 넣어 모든 로그에 붙여요. AI 호출 땐 같은 값을 `X-Request-Id`로 보내서 AI 로그와 짝을 맞춰요.
+- **받는 `X-Request-Id`** — 1~64자이고 `[A-Za-z0-9._-]`만이면 그대로 써요(AI와 같은 64). 헤더가 없거나 빈 값이면 새 UUID를 만들어요. 그 밖(65자 이상·줄바꿈·공백·허용 밖 문자)은 새 UUID로 바꾸고 WARN `request_id_replaced received_len={길이}` 한 줄 — 원래 값은 안 찍어요. 응답 헤더·로그·AI 호출 헤더는 모두 바꾼 뒤 값 하나예요. [SCRUM-272]
 - 로그 금지 항목은 `01_code_rules.md` §6.
 - **403 거부 로그** — URL 역할·CSRF·도메인(`ForbiddenException` 하위)·MVC 안 `AccessDeniedException` 모두 WARN `access denied code={코드} method={메서드} uri={경로}` 한 줄이에요. 쿼리스트링·요청 본문·토큰·쿠키 값·예외 메시지는 안 찍어요. request_id가 붙고, 로그인 상태면 user_id도 붙어요. CSRF는 `UserIdMdcFilter`보다 앞에서 막혀서 핸들러가 `CurrentUser`로 user_id를 넣어요. 로그인 전이거나 세션이 끊긴 요청은 user_id가 없어요. [미결 30, SCRUM-74]
+
+### 로그 형식 [SCRUM-272, AI와 같은 표]
+
+compose로 띄우면(`SPRING_PROFILES_ACTIVE: local,json`) JSON 한 줄, IDE로 `local`만 띄우면 읽기 쉬운 텍스트 그대로예요. `prod`도 `json`과 같은 형식이에요.
+
+| 칸 | 뜻 | 예 |
+|---|---|---|
+| `ts` | UTC ISO-8601, 밀리초 | `2026-11-19T01:02:03.456Z` |
+| `level` | `INFO`·`WARN`·`ERROR` (AI는 `WARNING` — 언어 기본값 그대로) | |
+| `service` | `backend` 고정 (AI는 `ai`) | |
+| `logger` | 로거 이름 | `com.team.aml.shared.ai.WebClientAiClient` |
+| `msg` | 사건 이름(짧은 영문) 또는 `key=value` 한 줄 | `request_id_replaced received_len=80` |
+| `request_id` | `X-Request-Id` (위 규칙) | |
+| `user_id` | 로그인 뒤에만 | |
+| 선택 칸 | `target`(화면 번호 `CASE-`·`DRF-`·`ALT-`) · `error_code` · `latency_ms` · `*_count` | |
+
+- **남기지 않는 것** — 계좌번호(원본·가린 값 모두) · 금액 · STR 본문·요약 본문 · 메모 · 비밀번호 · 세션 ID · 내부 키 · 쿼리스트링·요청 본문. 테스트(`SensitiveLogDbTest`)가 상세 조회·초안 저장·수정·검증·AI 실패·DB 제약 위반 경로에서 확인해요.
+- **DB 오류는 클래스·SQLState·제약 이름만** — 500 처리기에 온 `DataAccessException` 계열(`DataIntegrityViolationException` 포함)은 메시지·스택 대신 ERROR `unhandled exception error_type={클래스} sql_state={SQLState} constraint={제약 이름}` 한 줄(없는 칸은 빼요). Postgres 메시지의 `Detail: Key (…)=(값)`에 계좌가 들어갈 수 있어서예요. 다른 예외는 지금처럼 스택, 응답은 그대로 `INTERNAL_ERROR`. [SCRUM-272]
+- **팀원은 자기 기능 로그만 이 형식에 맞춰요** — 새 칸이 필요하면 선택 칸 이름 규칙(`*_count`·`*_ms`)으로. MDC 키는 `request_id`·`user_id`·`target`만 JSON에 나가요.
+- Loki 조회(Grafana Explore): `{compose_service=~"app|ai"} | json | request_id="<값>"` — 한 요청의 백엔드·AI 줄이 같이 나와요.
 
 ## 9. 열람 기록 (`access_logs`) [레퍼런스 §3.4, 계정·권한 §1, 코드 `shared/audit`·`V004_3`, SCRUM-19]
 
@@ -298,7 +319,93 @@ Prometheus·Grafana·Loki·Alloy·Redis·RabbitMQ·MinIO·Elasticsearch·Langfus
 - 로그·지표·추적에 계좌번호·금액·본문·프롬프트 전문을 넣지 않아요(NFR-COM-04, §8). Alloy는 표준출력을 그대로 옮겨요.
 - 자기 기능을 붙일 곳: 노션 「운영 도구 붙이기 — 팀원별 담당」 2절. 11/24에 고정해요.
 
-## 13. RabbitMQ 작업 큐 (`shared/messaging`) [SCRUM-276, 운영 도구 3절 11/17 결정 3, 코드 `shared/messaging`·`application.yml`]
+## 13. 지표 (Prometheus) [NFR-COM-04, 코드 `application.yml`·`ErrorMetrics`·`ops/prometheus`·`ops/grafana`, SCRUM-271]
+
+Prometheus가 15초마다 앱의 지표를 **가져가요**(pull). Prometheus가 꺼져 있어도 앱은 그대로 돌아요(fail-open, 따로 코드 없음).
+
+### 끝점 — 내부에서만
+
+| 포트 | 경로 | 누가 | 호스트에서 |
+|---|---|---|---|
+| **8081** (관리 포트) | `/actuator/prometheus`, `/actuator/health` | Prometheus(`app:8081`), 로그인 없이 | **안 열림** — compose `ports`에 8081을 넣지 않아요. 듣는 주소는 기본 `127.0.0.1`(bootRun·IDE는 이 기계 안에서만), compose app 컨테이너만 `MANAGEMENT_SERVER_ADDRESS: 0.0.0.0`(같은 Docker 네트워크의 Prometheus가 들어와야 해서) |
+| 8080 | `/actuator/health` | 프론트 연결 확인 화면·누구나 | 열림 — 응답은 전과 같음(UP 200 `{"status":"UP"}`, 그 밖 503 `{"status":"DOWN"}` 등, `components`·`details` 없음) |
+| 8080 | `/actuator/prometheus` | — | **비로그인 401 `UNAUTHENTICATED`·로그인 403 `FORBIDDEN`** (8080에는 지표 끝점이 없고 `denyAll`에 걸림) |
+
+- 관리 포트를 나누면 actuator가 통째로 8081로 옮겨 가요. 8080 `/actuator/health`는 **관리 포트를 8081로 나누면서 프론트 연결 확인·docs/09·권한 표 25번을 지키려고 남긴 호환용** 컨트롤러(`MainPortHealthController`)예요 — `HealthEndpoint`의 상태만 돌려줘요. Boot의 health 그룹 `additional-path`는 경로가 한 단계(`/health`)만 돼서 못 썼어요.
+- **8081을 compose `ports`·nginx에 넣지 마세요.** 밖으로 여는 건 nginx 하나예요. 듣는 주소는 `application.yml`의 `${MANAGEMENT_SERVER_ADDRESS:127.0.0.1}`라 `./gradlew bootRun`이어도 공용 와이파이의 다른 기계에서 못 들어와요. compose에서 app을 띄울 땐 `MANAGEMENT_SERVER_ADDRESS: 0.0.0.0`을 같이 넣어요. 리포의 `compose.yaml`에서 빠지면 `ComposeStructureTest`가 잡아요. 리포 밖 배포 구성은 사람이 챙겨야 해요(빠지면 Prometheus Targets에서 app이 DOWN으로 보여요).
+- **`MANAGEMENT_SERVER_ADDRESS`가 빈 값·공백이면 앱이 뜨지 않아요.** 환경 변수는 yml 기본값(`127.0.0.1`)을 거치지 않고 바로 덮어서, 비어 있으면 모든 주소에 열리기 때문이에요. 변수를 지우거나(기본 127.0.0.1) `127.0.0.1`·`0.0.0.0`처럼 값을 넣어요. 조용히 127.0.0.1로 바꾸지 않아요 — 잘못 넣은 설정을 사람이 보게. 이 검사(`ManagementAddressCheck`)는 `@Lazy(false)`라 `spring.main.lazy-initialization=true`여도 돌아요.
+- compose의 app은 `extends`와 `network_mode`를 쓰지 않아요. 테스트가 상속·보간(`${X:-host}`)을 풀기 전 정의만 읽어서, 값이 아니라 **키가 있는지**로 막아요(`bridge`도 위반). 목록 모양 `environment`에서는 `MANAGEMENT_SERVER_ADDRESS`를 **값과 함께 한 번만** 써요(`"MANAGEMENT_SERVER_ADDRESS"`처럼 값 없이 쓰면 호스트 값으로 덮여요).
+- **`.env`·`compose.override.yml`에 `MANAGEMENT_SERVER_ADDRESS`나 app 8081 포트를 넣지 않아요.** `.env`는 `application.yml`이 읽어서 bootRun 기본값(127.0.0.1)을 덮고, override는 `ComposeStructureTest`가 안 봐요(리포의 `compose.yaml`은 app `ports`의 8081·`network_mode: host`까지 테스트가 막아요).
+- **관리 포트와 앱 포트 합치기(`SERVER_PORT=8081`·`MANAGEMENT_SERVER_PORT=8080` 등)는 지원 안 해요 — Boot가 기동을 거부해요.** 포트가 같으면 Boot는 관리 전용 주소(`management.server.address`)가 있는 것 자체를 거부하는데, 우리는 기본값 127.0.0.1을 늘 넣어 두기 때문이에요.
+- **bootRun에서 지표를 볼 때는 `localhost` 말고 `http://127.0.0.1:8081/actuator/prometheus`**로 열어요. 맥은 `localhost`가 IPv6 `::1`로 먼저 풀려서 연결이 안 될 수 있어요.
+- env·beans 같은 다른 actuator 끝점은 열지 않아요(`exposure.include: health,info,prometheus` — `info`는 전부터 있었고 8081에서도 막혀 있어요).
+
+### 공통 지표 두 개 (진희)
+
+| 지표 | Prometheus 이름 | 태그 | 무엇을 봄 |
+|---|---|---|---|
+| HTTP 응답 시간 | `http_server_requests_seconds_{count,sum,bucket}` | `method`·`uri`(**템플릿**, 예 `/api/v1/cases/{caseNo}`)·`status`·`outcome`·`exception`·`error` | 요청 수, p50·p95·p99 (Grafana `histogram_quantile`) |
+| 에러 코드별 건수 | `aml_http_errors_total` | `code`·`status` **두 개만** | 어떤 에러가 몇 번 났나 |
+
+- 응답 시간 버킷은 **고정 10개**: 50ms·100ms·250ms·500ms·1s·2s·5s·10s·30s·90s (+`+Inf`). 기본 히스토그램(버킷 70여 개)은 끄고, Prometheus 메모리 상한(256m) 때문에 줄였어요. 90s는 AI 호출 경로를 보려고 넣었어요.
+- `uri`에 실제 경로는 안 들어가요: 매핑 없는 주소는 `uri="/**"`, 로그인처럼 컨트롤러 밖에서 끝나는 요청은 `uri="UNKNOWN"`, 보안에서 막힌 요청도 템플릿(`/api/v1/admin/alerts/{alertNo}`)이에요.
+- 에러 카운터는 **에러 응답을 쓰는 두 곳**에서 세요: `GlobalExceptionHandler`(컨트롤러 안 예외)와 `JsonAuthHandlers`(보안 필터의 401 `UNAUTHENTICATED`·`LOGIN_FAILED`, 403 `FORBIDDEN`·`CSRF_INVALID`, 로그인 400·500). 셀 때 예외가 나도 에러 응답은 그대로 나가요(fail-open). Tomcat이 직접 거절하는 요청(HTTP 형식 오류)은 안 세져요.
+- `code` 태그 값은 §2 표의 코드만이에요. 대문자·숫자·`_` 형식이 아니면 `OTHER`, AI가 준 코드(502)가 §2 표에 없으면 `AI_OTHER`로 세요 — AI가 새 코드를 보내도 태그 값이 늘지 않게요.
+
+### 이름·태그 규칙 (NFR-COM-04)
+
+- 이름: **`aml.<기능>.<무엇>`** (점으로, 소문자). Prometheus에서는 `aml_<기능>_<무엇>_total`(카운터)·`_seconds`(타이머)로 바뀌어요. 예 `aml.cases.transitions`, `aml.str.draft.generation`.
+- 태그 값은 **개수가 정해진 것만**: 코드·상태·결과·룰 ID·역할·배치 종류 같은 것.
+- **태그에 넣지 않아요**: 계좌번호·금액·본문·사유·`CASE-…`·`DRF-…`·`ALT-…` 같은 화면 번호·DB id·`login_id`·`user_id`·`request_id`·예외 메시지·실제 경로. 값이 계속 늘어나서 Prometheus 메모리가 터지고, 개인정보가 지표로 새요.
+- 태그는 지표 하나에 **3개 이하**, 값 조합은 **수십 개 이하**로요.
+
+### 각자 자기 지표 붙이는 법
+
+`MeterRegistry`를 생성자로 받아서 카운터·타이머를 만들어요. 의존성은 이미 들어 있어요(`micrometer-registry-prometheus`). 붙이는 곳은 `application` 유스케이스나 `infrastructure` 쪽이에요 — `domain`에는 넣지 않아요(`ArchitectureTest`).
+
+```java
+@Service
+class TransitionCase {
+    private final MeterRegistry meters;
+
+    TransitionCase(MeterRegistry meters /* , 다른 의존성 */) {
+        this.meters = meters;
+    }
+
+    void execute(CaseNo caseNo, CaseStatus to) {
+        CaseStatus from = /* ... */;
+        // 카운터 — 태그는 정해진 값(상태 이름)만. caseNo 는 넣지 않는다
+        meters.counter("aml.cases.transitions", "from", from.name(), "to", to.name()).increment();
+    }
+}
+
+// 타이머 — 걸린 시간. 결과(SUCCESS·FAILED)만 태그로
+Timer.Sample sample = Timer.start(meters);
+String result = "FAILED";
+try {
+    /* AI 호출 등 */
+    result = "SUCCESS";
+} finally {
+    sample.stop(meters.timer("aml.str.draft.generation", "result", result));
+}
+```
+
+| 허용 태그 예 | 금지 태그 예 |
+|---|---|
+| `status="ESCALATED"`, `result="SUCCESS"`, `rule="R01"`, `code="CASE_NOT_FOUND"`, `role="APPROVER"` | `case_no="CASE-2022-000057"`, `account="…"`, `amount="15000000"`, `login_id="kim"`, `request_id="…"`, `reason="고객 진술…"` |
+
+- 테스트에서 확인: `SimpleMeterRegistry`를 넣고 `registry.get("aml.cases.transitions").tag("to","ESCALATED").counter().count()`.
+- 붙인 뒤 `docker compose --profile ops up -d app prometheus grafana` → Prometheus(`localhost:9090`) 검색창에 `aml_cases_transitions_total`.
+
+### Grafana에서 보기
+
+- `ops/grafana/dashboards/`에 JSON을 넣으면 자동으로 등록돼요. 공통 대시보드 **「백엔드 공통」**(`backend-common.json`): 요청 수(초당)·p95 응답 시간·에러 코드별 건수.
+- 자기 대시보드는 같은 폴더에 `<기능>.json`으로 따로 만들어요(공통 파일은 고치지 않기).
+- 자주 쓰는 식:
+  - p95: `histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{job="app"}[5m])))`
+  - 에러 코드별: `sum by (code, status) (increase(aml_http_errors_total{job="app"}[5m]))`
+
+## 14. RabbitMQ 작업 큐 (`shared/messaging`) [SCRUM-276, 운영 도구 3절 11/17 결정 3, 코드 `shared/messaging`·`application.yml`]
 
 배치 잇기(준혁)·케이스 생성(지윤)·확정본 PDF(채영)가 **같이 쓰는 공통 설정**이에요. 브로커는 §12 ops 프로필의 `rabbitmq`(vhost `aml`). 〔ACK·재시도·DLQ 기본값은 진희 공통 정책 확정 전 초안 — 바꾸면 이 절과 `application.yml`을 같이 고쳐요〕
 

@@ -82,20 +82,20 @@ docker compose --profile ops down     # 도구까지 내리기 (볼륨은 남음
 ```
 
 - 시연처럼 늘 도구까지 띄울 때는 `.env`에 `COMPOSE_PROFILES=ops`를 넣어요.
-- **Docker Desktop 메모리 8GB 이상**이 필요해요(도구 상한 합계 약 5.8GB + db·app·ai).
+- **Docker Desktop 메모리 최소 8GB · 권장 10GB**(도구 상한 합계 약 6.8GB + db·app·ai).
 - 도구는 **호스트 포트를 열지 않아요.** app·ai의 `depends_on`에도 없어서 도구가 죽어도 로그인·케이스·STR은 그대로 돌아요. AI 컨테이너는 `dajaba_default` 네트워크에서 `langfuse-web:3000`·`elasticsearch:9200`처럼 이름으로 찾아요.
 - 비밀값이 하나라도 비어 있으면 `ops-env-check`가 **빈 변수 이름만** 찍고 멈춰요(값은 찍지 않아요). 그러면 비밀값을 쓰는 도구는 뜨지 않아요(비밀값이 없는 Prometheus·Loki·Alloy는 그대로 떠요). 프로필 없이 `docker compose up`을 하면 이 검사는 돌지 않아요.
 
 | 도구 | 무엇 | 첫 사용처 · 붙이는 사람 | 메모리 상한 |
 |---|---|---|---|
-| prometheus | 지표 수집. 대상은 `app:8080/actuator/prometheus`·`ai:8000/metrics`(끝점이 생기기 전에는 DOWN) | 백엔드·AI 공통 지표 — 진희, 기능 지표 — 각자 | 256m |
+| prometheus | 지표 수집. 대상은 `app:8081/actuator/prometheus`(관리 포트, 호스트엔 안 열림 — `docs/03_shared.md` §13)·`ai:8000/metrics`(AI 끝점이 생기기 전에는 DOWN) | 백엔드·AI 공통 지표 — 진희, 기능 지표 — 각자 | 256m |
 | grafana | 지표·로그 화면. Prometheus·Loki 데이터 소스 자동 등록, 익명 접근 끔 | 대시보드 — 각자 | 384m |
 | loki · alloy | 컨테이너 표준출력 로그 모음(`dajaba_default` 네트워크 컨테이너만). Alloy는 Docker 소켓을 **읽기 전용**으로 붙여요 — 컨테이너 목록·로그를 읽는 공식 방법이 소켓뿐이라서, 그래서 ops 프로필에만 둬요 | 로그 형식 — 각자 | 256m · 256m |
 | redis | **db 0 = 로그인 세션, db 1 = Langfuse**. Langfuse 필수인 `noeviction`이 db 0에도 걸려서, 메모리가 차면 지우는 대신 **세션 쓰기까지 실패**(로그인 안 됨)해요. 그래서 컨테이너 상한 256m 안에서 `maxmemory 200mb`로 두고(강제 종료 대신 쓰기 거부), Grafana에서 Redis 메모리를 봐요 | 세션 — 진희·지윤 | 256m |
-| rabbitmq | vhost `aml`, 관리 UI 포함. 큐 이름은 `batch.*`·`case.*`·`str.pdf.*`, **메시지에는 작업 ID만**(`batch_run_id`·`draft_id`). 앱 쪽 공통 설정은 `shared/messaging` — 큐는 `JobQueues`에 한 줄 추가하면 DLQ까지 앱이 선언해요. 앱은 `AML_RABBITMQ_ENABLED=true`일 때만 붙어요(기본 꺼짐). 붙이는 법은 [`docs/03_shared.md` §13](docs/03_shared.md) | 배치 잇기 — 준혁, 케이스 생성 — 지윤(`case.open-cases`, SCRUM-276), 확정본 PDF — 채영 | 384m |
+| rabbitmq | vhost `aml`, 관리 UI 포함. 큐 이름은 `batch.*`·`case.*`·`str.pdf.*`, **메시지에는 작업 ID만**(`batch_run_id`·`draft_id`). 앱 쪽 공통 설정은 `shared/messaging` — 큐는 `JobQueues`에 한 줄 추가하면 DLQ까지 앱이 선언해요. 앱은 `AML_RABBITMQ_ENABLED=true`일 때만 붙어요(기본 꺼짐). 붙이는 법은 [`docs/03_shared.md` §14](docs/03_shared.md) | 배치 잇기 — 준혁, 케이스 생성 — 지윤(`case.open-cases`, SCRUM-276), 확정본 PDF — 채영 | 384m |
 | minio (+ minio-init) | 파일 저장. 버킷 `str-reports`(확정본 PDF)·`langfuse`(Langfuse 이벤트)를 `minio-init`이 한 번 만들어요. 공식 Docker Hub 이미지가 중단돼서 Chainguard 이미지를 **digest로 고정**했어요(무료판은 `latest` 태그만 있음) | 확정본 PDF — 채영 | 256m |
 | elasticsearch | 단일 노드, 보안 켬(`elastic` 계정), 힙 512m | RAG 키워드 검색 — 진희 | 1g |
-| langfuse-web · langfuse-worker · clickhouse | LLM 호출 추적(v4, 직접 띄우기). Postgres는 db의 `langfuse` DB(`langfuse-db-init`이 없을 때만 만들고, 비밀번호는 기동마다 `.env` 값으로 맞춰요), Redis db 1, MinIO `langfuse` 버킷 | AI LLM 호출 — 진희 | 1g · 768m · 1g (web·worker는 Node 힙 = 상한, 공식 권장) |
+| langfuse-web · langfuse-worker · clickhouse | LLM 호출 추적(v4, 직접 띄우기). Postgres는 db의 `langfuse` DB(`langfuse-db-init`이 없을 때만 만들고, 비밀번호는 기동마다 `.env` 값으로 맞춰요), Redis db 1, MinIO `langfuse` 버킷 | AI LLM 호출 — 진희 | 1g · 768m · 2g (web·worker는 Node 힙 = 상한, 공식 권장) |
 
 **RabbitMQ 켜고 띄우기** (SCRUM-276) — `.env`에 `AML_RABBITMQ_ENABLED=true`를 넣고 도구까지 띄워요.
 
@@ -140,6 +140,12 @@ services:
 `LANGFUSE_DB_PASSWORD`·`REDIS_PASSWORD`·`MINIO_ROOT_USER`·`MINIO_ROOT_PASSWORD`는 접속 주소(URL) 안에 그대로 들어가요 — **영문·숫자만** 써요(`@`·`:`·`/`·`#` 등이 있으면 주소가 깨져요).
 
 **문제 해결** — elasticsearch가 unhealthy이고 로그에 `flood stage disk watermark [95%] exceeded`가 보이면 Docker 디스크가 찬 거예요(ES가 `elastic` 계정 인증까지 못 해요). `docker system df`로 확인하고 `docker builder prune`(빌드 캐시)로 비우거나 Docker Desktop 설정의 디스크 한도를 늘린 뒤 `docker compose restart elasticsearch`.
+
+**ClickHouse 예전 로그 테이블 정리 — 11/18(SCRUM-287) 전에 ops를 띄운 적 있으면 한 번만** — 메모리를 아끼려고 Langfuse가 읽지 않는 시스템 로그 7개를 `ops/clickhouse/low-memory.xml`에서 껐어요. 그런데 그전에 만들어진 테이블은 볼륨에 남아서, ClickHouse가 예전 파트를 계속 합치느라 메모리를 써요(그러면 `memory limit exceeded`가 나고 Langfuse 기록이 버려져요). clickhouse를 띄운 상태에서 아래를 한 번 실행해요. 비밀번호는 컨테이너 환경 변수를 읽어서 화면에 찍히지 않아요. **새 볼륨으로 처음 띄우는 사람은 이 테이블이 생기지 않으니 필요 없어요.**
+
+```bash
+docker compose --profile ops exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery -q "DROP TABLE IF EXISTS system.trace_log SYNC; DROP TABLE IF EXISTS system.text_log SYNC; DROP TABLE IF EXISTS system.opentelemetry_span_log SYNC; DROP TABLE IF EXISTS system.asynchronous_metric_log SYNC; DROP TABLE IF EXISTS system.metric_log SYNC; DROP TABLE IF EXISTS system.latency_log SYNC; DROP TABLE IF EXISTS system.processors_profile_log SYNC"'
+```
 
 ## 지금 들어 있는 것 (W1 뼈대, 10/26)
 

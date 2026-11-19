@@ -1,5 +1,7 @@
 package com.team.aml.shared.api;
 
+import com.team.aml.shared.metrics.ErrorMetrics;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.team.aml.shared.domain.DomainException;
@@ -49,7 +51,7 @@ class GlobalExceptionHandlerTest {
     /** standalone 은 application.yml 의 Jackson 설정을 안 읽는다 — 요청 본문을 snake_case 로 읽도록 같은 전략을 넣는다. */
     private final MockMvc mvc = MockMvcBuilders
             .standaloneSetup(new ThrowingController())
-            .setControllerAdvice(new GlobalExceptionHandler())
+            .setControllerAdvice(new GlobalExceptionHandler(new ErrorMetrics(new SimpleMeterRegistry())))
             .setMessageConverters(new MappingJackson2HttpMessageConverter(
                     new ObjectMapper().setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)))
             .build();
@@ -97,7 +99,7 @@ class GlobalExceptionHandlerTest {
         MethodParameter param = new MethodParameter(
                 ThrowingController.class.getDeclaredMethod("body", MemoBody.class), 0);
 
-        ErrorResponse body = new GlobalExceptionHandler()
+        ErrorResponse body = new GlobalExceptionHandler(new ErrorMetrics(new SimpleMeterRegistry()))
                 .invalid(new MethodArgumentNotValidException(param, result)).getBody();
 
         assertThat(body.error().details()).containsExactly(Map.entry("investigator_notes", "첫 번째"));
