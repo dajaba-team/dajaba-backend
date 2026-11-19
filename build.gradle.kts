@@ -33,6 +33,8 @@ dependencies {
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0")
+    // STR 보고서 PDF (S7·S8·P5). HTML → PDF, PDFBox 3.0.x 를 같이 끌어온다. LGPL 2.1 — 고치지 않고 jar 로만 쓴다
+    implementation("io.github.openhtmltopdf:openhtmltopdf-pdfbox:1.1.31")
     implementation("net.logstash.logback:logstash-logback-encoder:8.0")
     implementation("org.postgresql:postgresql")   // 적재 COPY에 CopyManager 사용
 
