@@ -26,8 +26,6 @@ import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.savedrequest.NullRequestCache;
 import org.springframework.security.core.session.SessionRegistry;
-import org.springframework.security.core.session.SessionRegistryImpl;
-import org.springframework.security.web.session.HttpSessionEventPublisher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -42,6 +40,7 @@ import java.util.List;
  *  - 성공 200 {id, login_id, display_name, role}, 실패 401 LOGIN_FAILED(사유 숨김), 본문 누락 400 INVALID_REQUEST.
  *  - 필터는 JsonLoginConfigurer 로 등록해 세션 ID 교체·maximumSessions(1)·세션 저장·CSRF 토큰 교체가 Spring 전략으로 걸린다.
  *  - 세션 쿠키, CSRF, 30분 만료, /auth/me, /auth/logout(204), 401/403 JSON.
+ *  - 세션 저장소는 서버 메모리. SessionRegistry·HttpSessionEventPublisher 빈은 MemorySessionConfig (SCRUM-273).
  *
  * URL 규칙:
  *  /api/v1/auth/login, /actuator/health, swagger → 누구나 (8080 /actuator/health 는 MainPortHealthController — 호환용)
@@ -78,21 +77,6 @@ public class SecurityConfig {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder(12);
-    }
-
-    /** 세션 만료·무효화를 SessionRegistry 에 알린다 — 없으면 maximumSessions 가 이미 끝난 세션도 센다. */
-    @Bean
-    public HttpSessionEventPublisher httpSessionEventPublisher() {
-        return new HttpSessionEventPublisher();
-    }
-
-    /**
-     * 로그인 세션 목록. maximumSessions(1) 와 UserSessions(관리자가 남의 세션을 끊을 때)가 같은 것을 쓴다 (SCRUM-135 ②).
-     * bean 이라 HttpSessionEventPublisher 의 만료·무효화 이벤트를 받는다.
-     */
-    @Bean
-    public SessionRegistry sessionRegistry() {
-        return new SessionRegistryImpl();
     }
 
     @Bean
