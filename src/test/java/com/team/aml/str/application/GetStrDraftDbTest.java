@@ -540,6 +540,12 @@ class GetStrDraftDbTest {
         assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("PREVIEW_PDF");
         login(investigator, "INVESTIGATOR");                  // 담당 조사역 — 미리보기만 (계약서 4절 APPROVED 줄)
         assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("PREVIEW_PDF");
+        // S7 이 403 NOT_ASSIGNEE 를 주는 사람에겐 버튼도 없다 — 둘 다 StrReportPdfAccess.canRead (#147 리뷰)
+        long otherInvestigator = user("get-inv-other-r" + SEQ.incrementAndGet(), "INVESTIGATOR");
+        login(otherInvestigator, "INVESTIGATOR");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
+        login(admin, "ADMIN");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
 
         caseState(caseId, "REPORTED", null);                  // 제출 뒤 — 끝 상태
         login(approver, "APPROVER");
