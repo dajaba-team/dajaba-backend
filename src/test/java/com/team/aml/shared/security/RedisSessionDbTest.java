@@ -52,12 +52,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "aml.session.redis.enabled=true",
-        "aml.dev-users.enabled=true", "aml.dev-users.password=" + RedisSessionDbTest.PASSWORD})
+        "aml.dev-users.enabled=true", "aml.dev-users.password=" + RedisSessionDbTest.PASSWORD,
+        "aml.cors.allowed-origin=" + RedisSessionDbTest.FRONT_ORIGIN})
 @ActiveProfiles("test")
 class RedisSessionDbTest {
 
     static final String PASSWORD = "test-redis-session-1234";
     static final String REDIS_PASSWORD = "redis-test-pass";
+    static final String FRONT_ORIGIN = "http://localhost:5173";   // local 프로필과 같은 프론트 출처
     private static final AtomicLong SEQUENCE = new AtomicLong();
 
     @Container
@@ -241,6 +243,35 @@ class RedisSessionDbTest {
         assertThat(b.get("/api/v1/auth/me").statusCode()).isEqualTo(401);
     }
 
+    // --- Redis 쓰기 거부 -------------------------------------------------------
+
+    @Test
+    void 실패_maxmemory로_쓰기가_거부되면_로그인과_로그인한_요청이_503_JSON() throws Exception {
+        Browser before = new Browser(port);
+        before.login("inv02", PASSWORD);
+        try {
+            redis.execInContainer("redis-cli", "-a", REDIS_PASSWORD, "--no-auth-warning", "config", "set", "maxmemory", "1");
+
+            HttpResponse<String> login = new Browser(port).login("inv01", PASSWORD);
+            assertThat(login.statusCode()).isEqualTo(503);
+            assertThat(code(login)).isEqualTo("SESSION_STORE_UNAVAILABLE");
+            assertThat(login.headers().firstValue("Content-Type").orElse("")).startsWith("application/json");
+
+            HttpResponse<String> me = before.get("/api/v1/auth/me");   // 요청 끝에 마지막 접근 시각을 쓰다 거부됨
+            assertThat(me.statusCode()).isEqualTo(503);
+            assertThat(code(me)).isEqualTo("SESSION_STORE_UNAVAILABLE");
+
+            // 프론트(5173)가 8080 을 바로 부를 때 — 503 에도 CORS 헤더가 남아야 본문을 읽는다 (#144 리뷰)
+            HttpResponse<String> cross = before.get("/api/v1/auth/me", FRONT_ORIGIN);
+            assertThat(cross.statusCode()).isEqualTo(503);
+            assertThat(cross.headers().firstValue("Access-Control-Allow-Origin")).hasValue(FRONT_ORIGIN);
+            assertThat(cross.headers().firstValue("Access-Control-Allow-Credentials")).hasValue("true");
+        } finally {
+            redis.execInContainer("redis-cli", "-a", REDIS_PASSWORD, "--no-auth-warning", "config", "set", "maxmemory", "200mb");
+        }
+        assertThat(before.get("/api/v1/auth/me").statusCode()).as("메모리가 풀리면 다시 그대로").isEqualTo(200);
+    }
+
     // --- 도우미 -----------------------------------------------------------------
 
     private User newInvestigator() {
@@ -282,6 +313,10 @@ class RedisSessionDbTest {
 
         HttpResponse<String> get(String path) throws Exception {
             return send(HttpRequest.newBuilder(uri(path)).GET());
+        }
+
+        HttpResponse<String> get(String path, String origin) throws Exception {
+            return send(HttpRequest.newBuilder(uri(path)).header("Origin", origin).GET());
         }
 
         /** 쓰기 요청 — XSRF-TOKEN 쿠키가 아직 없으면 GET 한 번으로 받는다. */
