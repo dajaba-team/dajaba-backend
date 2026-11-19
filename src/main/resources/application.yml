@@ -86,6 +86,11 @@ aml:
     version: ${AML_CASE_POLICY_VERSION:}
     low-to-medium: ${AML_CASE_POLICY_LOW_TO_MEDIUM:}
     medium-to-high: ${AML_CASE_POLICY_MEDIUM_TO_HIGH:}
+  # STR 확정본 PDF (S8·P5). 보관 폴더는 data/ 아래라 커밋되지 않는다. 도커 app 은 컨테이너 안 폴더 — MinIO 는 ops 붙이기에서
+  str:
+    pdf:
+      storage-dir: ${AML_STR_PDF_DIR:./data/str-reports}
+      generate-after-report: true          # 모의 제출(P4)·다시 만들기(P5) 커밋 뒤 뒤에서 만들기. false 는 상태를 그대로 보는 테스트용
 
 springdoc:
   api-docs:
@@ -158,6 +163,9 @@ aml:
     enabled: false
   messaging:
     enabled: false                        # 테스트는 브로커 없이. 켜는 테스트는 직접 프로퍼티로
+  str:
+    pdf:
+      storage-dir: build/str-reports-test # 테스트가 만든 확정본 PDF — gradle clean 으로 지워진다
 
 ---
 # prod — swagger 끔, 쿠키 Secure, CORS 없음, 목업 없음

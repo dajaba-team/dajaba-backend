@@ -45,7 +45,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 제출자는 그 초안을 승인한 사람만 (11/17 결정).
  */
 @Testcontainers
-@SpringBootTest
+@SpringBootTest(properties = "aml.str.pdf.generate-after-report=false")   // pdf_status PENDING 을 그대로 본다 — 생성은 GenerateStrReportPdfDbTest
 @ActiveProfiles("test")
 class ReportStrDraftDbTest {
 
