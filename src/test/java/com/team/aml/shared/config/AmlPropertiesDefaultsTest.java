@@ -22,7 +22,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * SCRUM-291 — 질문 답변 설정 `aml.ai.ask-enabled`(기본 false, 환경 변수 AML_AI_ASK_ENABLED)·
- * `aml.ai.ask-timeout-seconds`(기본 30). application.yml 을 실제로 읽어 `AmlProperties` 로 묶어 본다.
+ * `aml.ai.ask-timeout-seconds`(기본 30). SCRUM-321 — `aml.ai.timeout-seconds`(기본 90, 1 이상)·`aml.ai.max-batch`(기본 500, 1~500).
+ * application.yml 을 실제로 읽어 `AmlProperties` 로 묶어 본다.
  * 리포 루트 .env 와 셸 환경 변수에 흔들리지 않게 둘 다 빼고 테스트가 정한 값만 넣는다(AiMockSwitchTest 와 같은 방식).
  */
 class AmlPropertiesDefaultsTest {
@@ -38,6 +39,7 @@ class AmlPropertiesDefaultsTest {
             assertThat(ai.askEnabled()).as(profile).isFalse();
             assertThat(ai.askTimeoutSeconds()).as(profile).isEqualTo(30);
             assertThat(ai.timeoutSeconds()).as(profile).isEqualTo(90);
+            assertThat(ai.maxBatch()).as(profile).isEqualTo(500);
         }
     }
 
@@ -52,6 +54,51 @@ class AmlPropertiesDefaultsTest {
         AmlProperties props = Binder.get(env).bind("aml", AmlProperties.class).get();
         assertThat(props.ai().askTimeoutSeconds()).isEqualTo(30);
         assertThat(props.ai().askEnabled()).isFalse();
+        assertThat(props.ai().timeoutSeconds()).isEqualTo(90);   // SCRUM-321 — 칸이 빠져도 0 이 아니라 90·500
+        assertThat(props.ai().maxBatch()).isEqualTo(500);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}={1}")
+    @org.junit.jupiter.params.provider.CsvSource({
+            "aml.ai.timeout-seconds, 1",
+            "aml.ai.max-batch, 1",
+            "aml.ai.max-batch, 500"})
+    void 경계_timeout_seconds_1_max_batch_1과_500은_그대로_뜬다(String key, int value) {   // SCRUM-321
+        MockEnvironment env = new MockEnvironment().withProperty(key, String.valueOf(value));
+        AmlProperties.Ai ai = Binder.get(env).bind("aml", AmlProperties.class).get().ai();
+        assertThat(key.endsWith("timeout-seconds") ? ai.timeoutSeconds() : ai.maxBatch()).isEqualTo(value);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}={1}")
+    @org.junit.jupiter.params.provider.CsvSource({
+            "aml.ai.timeout-seconds, 0",
+            "aml.ai.timeout-seconds, -1",
+            "aml.ai.max-batch, 0",
+            "aml.ai.max-batch, -1",
+            "aml.ai.max-batch, 501"})
+    void 실패_timeout_seconds_0_음수_max_batch_0_음수_501이면_칸_이름과_함께_묶기에_실패한다(String key, String value) {   // SCRUM-321
+        MockEnvironment env = new MockEnvironment().withProperty(key, value);
+        assertThatThrownBy(() -> Binder.get(env).bind("aml", AmlProperties.class))
+                .isInstanceOf(BindException.class)
+                .rootCause().hasMessageContaining(key);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}=\"\"")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"aml.ai.timeout-seconds", "aml.ai.max-batch"})
+    void 실패_timeout_seconds_max_batch가_빈_값이면_묶기에_실패한다(String key) {   // SCRUM-321
+        MockEnvironment env = new MockEnvironment().withProperty(key, "");
+        assertThatThrownBy(() -> Binder.get(env).bind("aml", AmlProperties.class))
+                .isInstanceOf(BindException.class);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}=0")
+    @org.junit.jupiter.params.provider.CsvSource({
+            "AML_AI_TIMEOUT_SECONDS, aml.ai.timeout-seconds",
+            "AML_AI_MAX_BATCH, aml.ai.max-batch"})
+    void 실패_application_yml에서_환경_변수로_0을_넣으면_기동하지_않는다(String envName, String key) {   // SCRUM-321
+        assertThatThrownBy(() -> ai("local", Map.of(envName, "0")))
+                .isInstanceOf(BindException.class)
+                .rootCause().hasMessageContaining(key);
     }
 
     @org.junit.jupiter.params.ParameterizedTest(name = "ask-timeout-seconds=\"{0}\"")
