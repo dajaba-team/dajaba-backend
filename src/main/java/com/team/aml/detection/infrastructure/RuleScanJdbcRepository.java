@@ -28,6 +28,7 @@ import org.springframework.jdbc.core.ArgumentPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.sql.Array;
@@ -489,6 +490,9 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
     @Override
     public void forEachCycleGroup(LocalDateTime closeFrom, LocalDateTime closeTo, CycleRule rule,
                                   Consumer<List<CyclePath>> group) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {   // #148 리뷰
+            throw new IllegalStateException("R04 고리 조회는 트랜잭션 안에서만 — 밖에서는 커서가 아니라 결과 전체를 한 번에 받는다");
+        }
         int h = rule.windowHours();
         Object[] args = {closeFrom.plusMinutes(1).minusHours(h), closeTo, closeFrom,
                 rule.maxHops(), rule.maxHops(), h, closeFrom, closeTo};
