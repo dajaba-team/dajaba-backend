@@ -38,6 +38,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.times;
@@ -143,7 +145,7 @@ class CaseQuestionApiTest {
     @Test
     void 정상_승인자는_담당자_없는_OPEN에도_묻고_답을_못한_세_상태도_201이며_기록이_남는다() throws Exception {
         Fixture f = newCase(null);
-        when(aiClient.ask(any())).thenAnswer(i -> outOfScope(i.getArgument(0), OutOfScopeReason.JUDGMENT));
+        doAnswer(i -> outOfScope(i.getArgument(0), OutOfScopeReason.JUDGMENT)).when(aiClient).ask(any());
         JsonNode oos = json.readTree(body(ask(f.caseNo(), "자금세탁 맞아?", apr), 201));
         assertThat(oos.get("status").asText()).isEqualTo("OUT_OF_SCOPE");
         assertThat(oos.get("out_of_scope_reason").asText()).isEqualTo("JUDGMENT");
@@ -151,7 +153,7 @@ class CaseQuestionApiTest {
         assertThat(oos.get("evidence_transaction_ids").isEmpty()).isTrue();
 
         for (AskStatus status : List.of(AskStatus.NO_DATA, AskStatus.UNVERIFIED)) {
-            when(aiClient.ask(any())).thenAnswer(i -> unanswered(i.getArgument(0), status));
+            doAnswer(i -> unanswered(i.getArgument(0), status)).when(aiClient).ask(any());
             JsonNode r = json.readTree(body(ask(f.caseNo(), "EUR 로 들어온 건 얼마야?", apr), 201));
             assertThat(r.get("status").asText()).isEqualTo(status.name());
             assertThat(r.get("answer").isNull()).isTrue();
@@ -162,7 +164,7 @@ class CaseQuestionApiTest {
     @Test
     void 정상_지난_질문은_최신_먼저_공통_목록이고_한_줄_모양은_A8과_같다() throws Exception {
         Fixture f = newCase(inv);
-        when(aiClient.ask(any())).thenAnswer(i -> unanswered(i.getArgument(0), AskStatus.NO_DATA));
+        doAnswer(i -> unanswered(i.getArgument(0), AskStatus.NO_DATA)).when(aiClient).ask(any());
         String first = json.readTree(body(ask(f.caseNo(), "첫 질문", inv), 201)).get("question_no").asText();
         JsonNode second = json.readTree(body(ask(f.caseNo(), "둘째 질문", apr), 201));
 
@@ -198,7 +200,7 @@ class CaseQuestionApiTest {
     @Test
     void 경계_질문_300자는_되고_301자_공백만_없음은_400_details_question이며_AI를_부르지_않는다() throws Exception {
         Fixture f = newCase(inv);
-        when(aiClient.ask(any())).thenAnswer(i -> unanswered(i.getArgument(0), AskStatus.NO_DATA));
+        doAnswer(i -> unanswered(i.getArgument(0), AskStatus.NO_DATA)).when(aiClient).ask(any());
 
         body(ask(f.caseNo(), "가".repeat(300), inv), 201);
         // NFD 로 쪼갠 한글 300자(원문 600 UTF-16) — NFC 로 세면 300자라 통과 (화면·AI 와 같은 세기)
@@ -240,7 +242,7 @@ class CaseQuestionApiTest {
     void 실패_한_사람이_60초에_5번_물으면_6번째는_429_QUESTION_RATE_LIMITED_다른_케이스도_같이_센다() throws Exception {
         Fixture a = newCase(inv);
         Fixture b = newCase(inv);
-        when(aiClient.ask(any())).thenAnswer(i -> unanswered(i.getArgument(0), AskStatus.NO_DATA));
+        doAnswer(i -> unanswered(i.getArgument(0), AskStatus.NO_DATA)).when(aiClient).ask(any());
         for (int i = 0; i < 5; i++) {
             body(ask((i % 2 == 0 ? a : b).caseNo(), "질문 " + i, inv), 201);
         }
@@ -257,9 +259,9 @@ class CaseQuestionApiTest {
     @Test
     void 실패_AI_연동이_실패하면_502_그대로이고_질문_기록이_남지_않는다() throws Exception {
         Fixture f = newCase(inv);
-        when(aiClient.ask(any())).thenThrow(new AiClientException("AI_BAD_RESPONSE", "evidence_ids", Map.of(), 502));
+        doThrow(new AiClientException("AI_BAD_RESPONSE", "evidence_ids", Map.of(), 502)).when(aiClient).ask(any());
         assertThat(code(ask(f.caseNo(), "몇 건이야?", inv), 502)).isEqualTo("AI_BAD_RESPONSE");
-        when(aiClient.ask(any())).thenThrow(new AiClientException("AI_TIMEOUT", "timeout", Map.of(), 502));
+        doThrow(new AiClientException("AI_TIMEOUT", "timeout", Map.of(), 502)).when(aiClient).ask(any());
         assertThat(code(ask(f.caseNo(), "몇 건이야?", inv), 502)).isEqualTo("AI_TIMEOUT");
 
         assertThat(questionCount(f.caseNo())).isZero();
