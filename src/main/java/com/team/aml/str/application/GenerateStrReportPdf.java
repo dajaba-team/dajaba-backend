@@ -10,6 +10,8 @@ import com.team.aml.str.domain.StrReportRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -25,7 +27,11 @@ import java.util.Optional;
  *   <li>밖에서: 그리기 → SHA-256 → 보관</li>
  *   <li>기록: 다시 읽어 아직 PENDING 이면 READY(키·해시·크기·템플릿 버전·생성 시각) 또는 FAILED(코드). @Version 이 겹친 쓰기를 막는다</li>
  * </ol>
- * 실패 코드(pdf_failure_code)에는 본문·계좌 값을 넣지 않는다 — RENDER_FAILED·STORAGE_FAILED·NOT_STARTED 처럼 단계 이름만.
+ * 세 트랜잭션 모두 REQUIRES_NEW — 부르는 쪽 트랜잭션에 끼지 않는다. 트리거의 afterCommit 안에서는 끝난 트랜잭션의 연결·동기화가
+ * 아직 묶여 있어, 기본(REQUIRED)이면 그 끝난 트랜잭션에 합류해 FAILED(NOT_STARTED) 가 커밋되지 않는다
+ * (TransactionSynchronization#afterCommit 문서 권고, #149 리뷰). 뒤 스레드에서 부를 때는 어차피 새 트랜잭션이라 같다.
+ *
+ * <p>실패 코드(pdf_failure_code)에는 본문·계좌 값을 넣지 않는다 — RENDER_FAILED·STORAGE_FAILED·NOT_STARTED 처럼 단계 이름만.
  * 로그도 초안 번호·예외 종류만 (NFR-COM-04).
  */
 @Service
@@ -40,19 +46,24 @@ public class GenerateStrReportPdf {
     private final StrReportRepository reports;
     private final ReportPdfRenderer renderer;
     private final ReportPdfStorage storage;
-    private final TransactionTemplate tx;
+    private final TransactionTemplate readTx;
+    private final TransactionTemplate writeTx;
 
     public GenerateStrReportPdf(StrReportRepository reports, ReportPdfRenderer renderer, ReportPdfStorage storage,
-                                TransactionTemplate tx) {
+                                PlatformTransactionManager transactionManager) {
         this.reports = reports;
         this.renderer = renderer;
         this.storage = storage;
-        this.tx = tx;
+        this.readTx = new TransactionTemplate(transactionManager);
+        this.readTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.readTx.setReadOnly(true);
+        this.writeTx = new TransactionTemplate(transactionManager);
+        this.writeTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     /** @return 이번에 남긴 상태. PENDING 이 아니라 할 일이 없었으면 empty */
     public Optional<ReportPdfStatus> execute(long draftId) {
-        Optional<Job> job = tx.execute(s -> reports.findByDraftId(draftId)
+        Optional<Job> job = readTx.execute(s -> reports.findByDraftId(draftId)
                 .filter(r -> r.getPdfStatus() == ReportPdfStatus.PENDING)
                 .map(r -> new Job(ReportPdfContent.submitted(r), ReportPdfStorage.keyOf(r.getReportNo(), r.getPdfAttempts() + 1))));
         if (job == null || job.isEmpty()) {
@@ -75,7 +86,7 @@ public class GenerateStrReportPdf {
         }
 
         String key = job.get().key();
-        Boolean done = tx.execute(s -> pending(draftId).map(r -> {
+        Boolean done = writeTx.execute(s -> pending(draftId).map(r -> {
             r.pdfReady(key, sha256, pdf.length, renderer.templateVersion(), Instant.now());
             reports.save(r);
             return true;
@@ -92,7 +103,7 @@ public class GenerateStrReportPdf {
      * @return FAILED 로 바꿨으면 FAILED, 이미 PENDING 이 아니면 empty
      */
     public Optional<ReportPdfStatus> fail(long draftId, String code) {
-        Boolean done = tx.execute(s -> pending(draftId).map(r -> {
+        Boolean done = writeTx.execute(s -> pending(draftId).map(r -> {
             r.pdfFailed(code);
             reports.save(r);
             return true;

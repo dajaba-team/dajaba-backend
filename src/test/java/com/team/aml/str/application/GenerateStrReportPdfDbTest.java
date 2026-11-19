@@ -20,6 +20,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -176,6 +177,21 @@ class GenerateStrReportPdfDbTest {
         assertThat(ReportPdfStorage.keyOf("STR-2026-000001", 1)).isEqualTo("2026/STR-2026-000001-1.pdf");
         assertThat(ReportPdfStorage.keyOf("STR-2026-000001", 2)).isEqualTo("2026/STR-2026-000001-2.pdf");
         assertThatThrownBy(() -> ReportPdfStorage.keyOf("../etc", 1)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // 6
+    @Test
+    void 실패_커밋_뒤_실행기가_거절하면_FAILED_NOT_STARTED가_실제로_커밋된다() {   // #149 리뷰
+        long draftId = reportedDraft();                     // pdf_status PENDING 커밋됨
+        // 서버 종료 중처럼 실행기가 거절 — Spring 없이 mock 으로 보는 StrReportPdfTriggerTest 는 이 트랜잭션 문제를 못 잡는다
+        StrReportPdfTrigger trigger = new StrReportPdfTrigger(generate,
+                task -> { throw new TaskRejectedException("shutting down"); }, true);
+
+        // 진짜 트랜잭션 안에서 걸어 afterCommit 경로로 — 끝난 트랜잭션에 합류하면 FAILED 가 커밋되지 않고 PENDING 이 남는다
+        tx.executeWithoutResult(s -> trigger.afterCommit(draftId));
+
+        assertThat(pdfRow(draftId)).containsEntry("pdf_status", "FAILED").containsEntry("pdf_failure_code", "NOT_STARTED")
+                .containsEntry("pdf_storage_key", null);
     }
 
     // ---- 도우미 ----
