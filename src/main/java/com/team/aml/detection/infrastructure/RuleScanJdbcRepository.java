@@ -19,6 +19,8 @@ import com.team.aml.detection.domain.GatherScatterRule;
 import com.team.aml.detection.domain.NewAlert;
 import com.team.aml.detection.domain.RelayPair;
 import com.team.aml.detection.domain.RuleScanRepository;
+import com.team.aml.detection.domain.ScatterGatherLeg;
+import com.team.aml.detection.domain.ScatterGatherRule;
 import com.team.aml.shared.domain.DisplayNumber;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -210,6 +212,46 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
               and %2$s
             order by a.ts, a.transaction_id, b.ts, b.transaction_id""".formatted(RATES, RELAY_COND);
 
+    /*
+     * R05 ① 엣지: 1분 전 창까지 덮는 [D - H, D+1) 의 (보낸, 받은) 계좌 쌍 + 처음·마지막 거래 시각.
+     * ② 후보 (S, T): 그날 받은 거래가 있는 T 마다 S→M·M→T 엣지가 있고 S→M 첫 거래 분 < M→T 마지막 거래 분인
+     *    서로 다른 M 이 N 이상, S ≠ T (M 은 자기 계좌 거래가 빠진 엣지라 S·T 와 다르다).
+     *    조인 전에 송금 상대가 N 미만인 S·입금 상대가 N 미만인 T 는 뺀다 — 그런 계좌는 서로 다른 M 이 N 개일 수 없어 결과가 같다.
+     *    거래가 몰린 M 에서 S×T 조합이 불어나지 않게(9/5: 중간 행 903만 → 10만, 후보 찾기 21초 → 0.7초, #리뷰).
+     * ③ 후보의 M 마다 S→M·M→T 거래를 그대로 가져온다(판정·대표 경로는 ScatterGatherRule).
+     * 9/5 측정: 엣지 55만, 후보 (S, T) 39쌍.
+     */
+    private static final String SCATTER_GATHER_LEGS = """
+            with e as (
+                select from_account_key as src, to_account_key as dst, min(ts) as first_ts, max(ts) as last_ts
+                from ops.transactions
+                where ts >= ? and ts < ? and not is_self_transfer
+                group by from_account_key, to_account_key
+            ),
+            srcs as (select src from e group by src having count(*) >= ?),
+            targets as (select dst as t from e group by dst having count(*) >= ? and max(last_ts) >= ?),
+            mids as (
+                select e1.src as s, e2.dst as t, e2.src as m
+                from targets tg
+                join e e2 on e2.dst = tg.t
+                join e e1 on e1.dst = e2.src
+                join srcs on srcs.src = e1.src
+                where e1.src <> e2.dst and e1.first_ts < date_trunc('minute', e2.last_ts)
+            ),
+            cand as (select s, t from mids group by s, t having count(distinct m) >= ?)
+            select m.s, m.t, true as to_target, x.transaction_id, x.ts, x.from_account_key, x.to_account_key
+            from mids m
+            join cand c on c.s = m.s and c.t = m.t
+            join ops.transactions x on x.from_account_key = m.m and x.to_account_key = m.t and not x.is_self_transfer
+                 and x.ts >= ? and x.ts < ?
+            union all
+            select m.s, m.t, false, x.transaction_id, x.ts, x.from_account_key, x.to_account_key
+            from mids m
+            join cand c on c.s = m.s and c.t = m.t
+            join ops.transactions x on x.from_account_key = m.s and x.to_account_key = m.m and not x.is_self_transfer
+                 and x.ts >= ? and x.ts < ?
+            order by 1, 2, 5, 4""";
+
     private static final String INSERT_ALERT = """
             insert into ops.alerts(alert_no, batch_run_id, rule_ref_id, account_key, entity_id, window_start,
                                    window_end, reference_ts, rule_facts, batch_date)
@@ -337,6 +379,18 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
         ObjectNode n = om.createObjectNode();
         rule.usdRates().forEach(n::put);
         return text(n);
+    }
+
+    @Override
+    public List<ScatterGatherLeg> scatterGatherLegs(LocalDate date, ScatterGatherRule rule) {
+        LocalDateTime dayStart = date.atStartOfDay();
+        LocalDateTime from = dayStart.minusHours(rule.windowHours());
+        LocalDateTime dayEnd = dayStart.plusDays(1);
+        return jdbc.query(SCATTER_GATHER_LEGS, (rs, rowNum) -> new ScatterGatherLeg(rs.getString(1), rs.getString(2),
+                        rs.getBoolean(3), rs.getLong(4), rs.getObject(5, LocalDateTime.class),
+                        rs.getString(6), rs.getString(7)),
+                from, dayEnd, rule.minIntermediates(), rule.minIntermediates(), dayStart, rule.minIntermediates(),
+                from, dayEnd, from, dayEnd);
     }
 
     @Override

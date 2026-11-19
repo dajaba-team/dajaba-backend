@@ -38,6 +38,12 @@ public interface RuleScanRepository {
     FxRelayEvidence fxRelayEvidence(String accountKey, LocalDateTime windowStart, LocalDateTime windowEnd,
                                     FxRelayRule rule);
 
+    /**
+     * R05 — 후보 (출발 S, 도착 T) 의 S→M·M→T 거래 전부, [D - H, D+1) (1분 전 창 판단 포함).
+     * 후보 = 그날 받은 거래가 있는 T 마다 S→M·M→T 엣지가 시간순으로 가능한 서로 다른 M 이 N 이상, S ≠ T.
+     */
+    List<ScatterGatherLeg> scatterGatherLegs(LocalDate date, ScatterGatherRule rule);
+
     /** 계좌의 법인 (accounts 에 없으면 null). */
     String entityIdOf(String accountKey);
 
