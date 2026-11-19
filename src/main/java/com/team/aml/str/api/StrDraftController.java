@@ -3,6 +3,7 @@ package com.team.aml.str.api;
 import com.team.aml.str.application.CloseCaseWithStrDraft;
 import com.team.aml.str.application.GetStrDraft;
 import com.team.aml.str.application.ListStrRevisions;
+import com.team.aml.str.application.PreviewStrReportPdf;
 import com.team.aml.str.application.RequestStrDraft;
 import com.team.aml.str.application.ReviseStrDraft;
 import com.team.aml.str.application.SubmitStrDraft;
@@ -12,6 +13,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -29,11 +31,12 @@ public class StrDraftController {
     private final VerifyStrDraft verifyStrDraft;
     private final SubmitStrDraft submitStrDraft;
     private final CloseCaseWithStrDraft closeCaseWithStrDraft;
+    private final PreviewStrReportPdf previewStrReportPdf;
 
     public StrDraftController(RequestStrDraft requestStrDraft, GetStrDraft getStrDraft,
                               ReviseStrDraft reviseStrDraft, ListStrRevisions listStrRevisions,
                               VerifyStrDraft verifyStrDraft, SubmitStrDraft submitStrDraft,
-                              CloseCaseWithStrDraft closeCaseWithStrDraft) {
+                              CloseCaseWithStrDraft closeCaseWithStrDraft, PreviewStrReportPdf previewStrReportPdf) {
         this.requestStrDraft = requestStrDraft;
         this.getStrDraft = getStrDraft;
         this.reviseStrDraft = reviseStrDraft;
@@ -41,6 +44,7 @@ public class StrDraftController {
         this.verifyStrDraft = verifyStrDraft;
         this.submitStrDraft = submitStrDraft;
         this.closeCaseWithStrDraft = closeCaseWithStrDraft;
+        this.previewStrReportPdf = previewStrReportPdf;
     }
 
     @Operation(summary = "STR 초안 생성·재생성 (최대 90초)",
@@ -125,5 +129,15 @@ public class StrDraftController {
                                                 @Valid @RequestBody CloseCaseWithDraftRequest request) {
         return StrCaseChangeResponse.from(closeCaseWithStrDraft.execute(caseNo, request.closeReason(),
                 request.comment(), request.version()));
+    }
+
+    @Operation(summary = "제출 전 PDF 미리보기 (S7)",
+            description = "담당 조사역·승인자만(그 밖 403 NOT_ASSIGNEE). 케이스 APPROVED 에서만(아니면 409 INVALID_CASE_TRANSITION, "
+                    + "details.action PREVIEW_PDF — 제출 뒤엔 확정본 S8). 대체된 초안은 409 DRAFT_SUPERSEDED. "
+                    + "승인 때 고정한 서식 스냅샷으로 부를 때마다 만들고 저장하지 않는다 — 보고일자는 빈칸, 모든 쪽에 \"제출 전\". "
+                    + "성공은 200 application/pdf(inline), 열람 기록 PDF_DOWNLOAD")
+    @GetMapping("/str-drafts/{draftNo}/report/preview.pdf")
+    public ResponseEntity<byte[]> previewPdf(@PathVariable String draftNo) {
+        return StrPdfResponse.inline(previewStrReportPdf.execute(draftNo));
     }
 }

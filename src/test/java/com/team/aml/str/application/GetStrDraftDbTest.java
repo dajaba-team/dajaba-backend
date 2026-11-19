@@ -527,18 +527,19 @@ class GetStrDraftDbTest {
 
     // 21
     @Test
-    void 버튼_승인된_잠긴_초안이면_승인한_사람에게만_모의_제출_REPORT() {   // P4 (SCRUM-240, 11/17 결정)
+    void 버튼_승인된_잠긴_초안이면_승인한_사람에게만_모의_제출_REPORT_미리보기는_담당과_승인자_모두() {   // P4 (11/17) · S7
         long caseId = escalatedCase();
         long draftId = savedDraft(caseId);
         approve(caseId, draftId);                             // S6 → P2 실제로 — 확정 보고서 created_by = approver
         long otherApprover = user("get-apr-other-r" + SEQ.incrementAndGet(), "APPROVER");
 
         login(approver, "APPROVER");
-        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("REPORT");
-        login(otherApprover, "APPROVER");                     // 승인하지 않은 승인자 — 서버도 403 NOT_DRAFT_APPROVER
-        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
-        login(investigator, "INVESTIGATOR");
-        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions())
+                .containsExactly("REPORT", "PREVIEW_PDF");
+        login(otherApprover, "APPROVER");                     // 승인하지 않은 승인자 — 제출은 403 NOT_DRAFT_APPROVER, 미리보기는 됨
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("PREVIEW_PDF");
+        login(investigator, "INVESTIGATOR");                  // 담당 조사역 — 미리보기만 (계약서 4절 APPROVED 줄)
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("PREVIEW_PDF");
 
         caseState(caseId, "REPORTED", null);                  // 제출 뒤 — 끝 상태
         login(approver, "APPROVER");
