@@ -21,10 +21,12 @@ import java.util.Objects;
  *       CLOSE_WITH_DRAFT 는 C2 와 같은 값</li>
  *   <li>승인자: 케이스 PENDING_APPROVAL 이고 지금·예전 담당이 아니면 APPROVE·REJECT (미결 32 — ApproveCase·RejectCase 와 같은 판단).
  *       케이스 APPROVED·초안 LOCKED 이고 이 초안을 승인한 사람이면 REPORT (모의 제출 P4 — ReportStrDraft 의 403 NOT_DRAFT_APPROVER 와 같은 판단)</li>
+ *   <li>PDF: 케이스 APPROVED·초안 LOCKED 면 승인자(누구나)와 담당 조사역에게 PREVIEW_PDF — 판단은 S7 403 검사와 같은
+ *       {@link StrReportPdfAccess#canRead} 를 그대로 부른다(규칙 한 곳)</li>
  *   <li>그 밖(관리자·비담당·대체된 초안·다른 상태): []</li>
  * </ul>
  * SUBMIT 은 "상태상 가능"만 뜻한다 — 지금 본문 검증 통과 여부는 화면이 latest_verification.is_current·passed 로 함께 보고
- * 꺼진 이유 문구를 고른다(계약서 S6 켜는 조건). 아직 없는 동작: PDF(S7·S8·P5) — 그 API 가 생길 때 더한다.
+ * 꺼진 이유 문구를 고른다(계약서 S6 켜는 조건). 아직 없는 동작: 확정본 PDF(S8·P5) — 그 API 가 생길 때 더한다.
  */
 final class StrDraftActions {
 
@@ -36,6 +38,7 @@ final class StrDraftActions {
     static final String APPROVE = "APPROVE";
     static final String REJECT = "REJECT";
     static final String REPORT = "REPORT";
+    static final String PREVIEW_PDF = "PREVIEW_PDF";
 
     private StrDraftActions() {}
 
@@ -50,12 +53,20 @@ final class StrDraftActions {
         if (!Objects.equals(c.getCurrentDraftId(), draftId)) {
             return List.of();                                         // 재생성으로 대체된 옛 초안
         }
+        if (draftStatus == StrDraftStatus.LOCKED && c.getStatus() == CaseStatus.APPROVED) {
+            List<String> actions = new ArrayList<>(2);
+            if (viewerRole == Role.APPROVER && viewerApprovedDraft) {
+                actions.add(REPORT);                                  // 모의 제출(P4) — 이 초안을 승인한 사람만(11/17)
+            }
+            // 미리보기(S7) — 누가 볼 수 있는지는 PreviewStrReportPdf 의 403 검사와 같은 한 곳(StrReportPdfAccess.canRead)에서 (#147 리뷰)
+            if (StrReportPdfAccess.canRead(viewerRole, c, viewerId)) {
+                actions.add(PREVIEW_PDF);
+            }
+            return List.copyOf(actions);
+        }
         if (viewerRole == Role.APPROVER) {
             if (draftStatus == StrDraftStatus.ACTIVE && c.getStatus() == CaseStatus.PENDING_APPROVAL && !viewerWasAssignee) {
                 return List.of(APPROVE, REJECT);
-            }
-            if (draftStatus == StrDraftStatus.LOCKED && c.getStatus() == CaseStatus.APPROVED && viewerApprovedDraft) {
-                return List.of(REPORT);                               // 모의 제출(P4) — 이 초안을 승인한 사람만(11/17)
             }
             return List.of();
         }
