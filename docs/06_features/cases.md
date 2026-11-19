@@ -144,7 +144,8 @@
 | 관리자 | 403 `FORBIDDEN` (`SecurityConfig` URL 규칙 — 재배정과 같은 방식) | × |
 
 - **질문 규칙** — 앞뒤 공백을 **자르지 않고** 받은 그대로 AI에 보내고 그대로 저장. 글자 수 1~300은 **NFC 뒤 UTF-16 코드 단위**(`String.length()`, STR 수정본·AI·화면과 같은 세기). 공백만(파이썬 `str.isspace()`와 같은 글자 — AI가 400으로 거절하는 것과 맞춤)·빈 문자열·없음은 400 `details.question`. 검사는 도메인 `CaseQuestion.requireValidQuestion` 한 곳.
-- **횟수 제한** — `case_questions`에서 이 사람(`created_by`)의 최근 60초 행 수를 세요. 한도 `aml.ai.ask-per-minute`(기본 5). `retry_after_seconds` = 창 안 가장 오래된 질문이 60초를 벗어날 때까지 남은 초(올림, 최소 1). 502는 행이 없어 세지 않아요(비용은 AI 일 토큰 한도가 막음). 동시에 들어온 두 요청이 같이 통과할 수 있는 것은 감수(락 없음).
+- **횟수 제한** — `case_questions`에서 이 사람(`created_by`)의 최근 60초 행 수를 세요. 한도 `aml.ai.ask-per-minute`(기본 5). `retry_after_seconds` = 창 안 가장 오래된 질문이 60초를 벗어날 때까지 남은 초(올림, 최소 1). **저장된 질문만 세요 — 진행 중(AI 응답 전, 최대 30초)과 502는 안 세요.** 그래서 동시에 여러 개를 보내면 아직 행이 없어 같이 통과하고 그만큼 AI 호출이 나가고, AI가 계속 502를 내면 실패한 시도는 한도에 안 걸려요(비용은 AI 일 토큰 한도가 막음). 시연·내부 사용자 기준으로 알고 남김 — 막으려면 AI 호출 전에 짧은 트랜잭션으로 자리를 잡는 방법이 있지만 동결 전이라 이번엔 안 해요(#150 리뷰, 진희).
+- **권한은 묻는 시점 기준** — AI를 기다리는 30초 사이에 재배정돼도 그 질문 행은 저장돼요(물을 때 권한이 있었으니까). 저장 트랜잭션에서 권한을 다시 보지 않아요(#150 리뷰).
 - **꺼짐** — `aml.ai.ask-enabled=false`(기본)면 상세에 `ASK_QUESTION`이 없고, A8·C9는 **404 `NOT_FOUND`**(없는 주소와 같은 응답 — 설계 문서 11.3 "끄면 흔적 없이"). 컨트롤러가 유스케이스를 부르기 전에 막아요.
 - **응답 한 줄** `{question_no, case_no, question, status, out_of_scope_reason, answer, evidence_transaction_ids, asked_by{login_id, display_name}, created_at}`. `question_no` = `QST-` + id 6자리(`DisplayNumber.questionNo`, 계약서 2.2). AI의 `cites`·`code_checks`·`kind`는 화면에 주지 않아요. 답 속 계좌는 AI가 준 그대로(13절 8번). 네 상태(`ANSWERED`·`NO_DATA`·`UNVERIFIED`·`OUT_OF_SCOPE`) 모두 201.
 - **`available_actions`의 `ASK_QUESTION`** — 역할·담당 기준이라 상태 표(`CaseStatus.allows`)는 늘 참이고, 누가 볼지는 `CaseAction.canAsk` 한 곳. 켜기 설정을 봐야 해서 `availableFor`(목록·상세 공통)가 아니라 **상세(`GetCaseDetail`)에서만** 붙여요 — 목록 한 줄의 버튼에는 없어요(계약서 C2만).
