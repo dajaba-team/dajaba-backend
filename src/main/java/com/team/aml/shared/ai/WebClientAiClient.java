@@ -10,6 +10,7 @@ import io.netty.channel.unix.Errors;
 import io.netty.handler.timeout.ReadTimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -41,7 +42,7 @@ import java.util.regex.Pattern;
  * 실제 AI 서버 호출 (aml.ai.mock=false, 규약 v0.2 §6). 유스케이스는 AiClient 인터페이스만 본다.
  *
  * 공통 동작:
- *  - 헤더 X-Internal-Key, X-Request-Id(UUID, 재시도해도 같은 값), X-Budget-Ms(그 시도 때 남은 예산 ms)
+ *  - 헤더 X-Internal-Key, X-Request-Id(MDC request_id, 없거나 공백이면 UUID, 재시도해도 같은 값), X-Budget-Ms(그 시도 때 남은 예산 ms)
  *  - 화면 요청 전체 90초(재시도 포함) = aml.ai.timeout-seconds. 점수는 500건 묶음마다 같은 한도.
  *  - 재시도 1회, 남은 시간 안에서만. 판별은 HTTP 5xx 가 아니라 코드/원인으로:
  *      재시도 O: LLM_UNAVAILABLE·MODEL_UNAVAILABLE·DB_UNAVAILABLE, 또는 연결 단계 실패(CONNECT_STAGE_FAILURES — 연결 거부·이름 조회 실패·경로 없음)
@@ -321,7 +322,8 @@ public class WebClientAiClient implements AiClient {
      */
     private <T> T withRetry(String path, String targetType, String targetId,
                             BiFunction<String, Duration, Response> attempt, Function<JsonNode, T> reader) {
-        String requestId = UUID.randomUUID().toString();
+        String requestId = MDC.get("request_id");
+        if (requestId == null || requestId.isBlank()) requestId = UUID.randomUUID().toString();
         long deadline = System.nanoTime() + budget.toNanos();
         Classified last = null;
         for (int tries = 1; tries <= 2; tries++) {

@@ -8,4 +8,16 @@
     <background_schedule_pool_size>4</background_schedule_pool_size>
     <background_message_broker_schedule_pool_size>2</background_message_broker_schedule_pool_size>
     <background_distributed_schedule_pool_size>2</background_distributed_schedule_pool_size>
+    <!-- 기본 5 GiB·100 MiB → 저메모리 안전망 -->
+    <index_mark_cache_size>33554432</index_mark_cache_size>
+    <primary_index_cache_size>33554432</primary_index_cache_size>
+    <query_condition_cache_size>16777216</query_condition_cache_size>
+    <!-- Langfuse 가 읽지 않는 시스템 로그 — 7.5초마다 쓰고 합쳐 메모리 차지 (query_log·part_log·error_log 는 유지) -->
+    <trace_log remove="1"/>
+    <text_log remove="1"/>
+    <opentelemetry_span_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <metric_log remove="1"/>
+    <latency_log remove="1"/>
+    <processors_profile_log remove="1"/>
 </clickhouse>

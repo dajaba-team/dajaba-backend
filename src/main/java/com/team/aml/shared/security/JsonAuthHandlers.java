@@ -3,6 +3,7 @@ package com.team.aml.shared.security;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.team.aml.shared.audit.LoginAccessLogWriter;
 import com.team.aml.shared.api.ErrorResponse;
+import com.team.aml.shared.metrics.ErrorMetrics;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
@@ -30,6 +31,7 @@ import java.util.Objects;
  *  401 LOGIN_FAILED    — 없는 ID·틀린 비밀번호·비활성·SYSTEM·비밀번호 UTF-8 72바이트 초과 전부 같은 응답 (사유를 숨긴다)
  *  400 INVALID_REQUEST — 로그인 본문이 없거나 필드가 빔
  *  403 FORBIDDEN       — URL 역할 규칙 불일치. CSRF 불일치도 403 CSRF_INVALID
+ * 이 응답들은 GlobalExceptionHandler 를 안 거쳐서, 에러 지표(aml.http.errors)도 write 에서 센다 (SCRUM-271).
  */
 @Component
 public class JsonAuthHandlers {
@@ -43,12 +45,15 @@ public class JsonAuthHandlers {
     private final ObjectMapper om;
     private final CurrentUser currentUser;
     private final UserDetailsService users;
+    private final ErrorMetrics errorMetrics;
 
-    public JsonAuthHandlers(ObjectMapper om, LoginAccessLogWriter accessLog, CurrentUser currentUser, UserDetailsService users) {
+    public JsonAuthHandlers(ObjectMapper om, LoginAccessLogWriter accessLog, CurrentUser currentUser, UserDetailsService users,
+                            ErrorMetrics errorMetrics) {
         this.om = om;
         this.accessLog = accessLog;
         this.currentUser = currentUser;
         this.users = users;
+        this.errorMetrics = errorMetrics;
     }
 
     public AuthenticationEntryPoint entryPoint() {
@@ -156,6 +161,9 @@ public class JsonAuthHandlers {
     }
 
     private void write(HttpServletResponse res, int status, Object body) throws IOException {
+        if (body instanceof ErrorResponse error) {
+            errorMetrics.record(error.error().code(), status);   // 실패해도 응답은 그대로 (ErrorMetrics 가 삼킴)
+        }
         res.setStatus(status);
         res.setContentType(MediaType.APPLICATION_JSON_VALUE);
         res.setCharacterEncoding("UTF-8");
