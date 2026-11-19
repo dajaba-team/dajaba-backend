@@ -1,9 +1,12 @@
 package com.team.aml.shared.security;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.team.aml.shared.metrics.ErrorMetrics;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
@@ -13,6 +16,7 @@ import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
 import org.springframework.session.security.SpringSessionBackedSessionRegistry;
+import org.springframework.session.web.http.SessionRepositoryFilter;
 
 /**
  * 로그인 세션을 Redis(db 0, 키 {@code aml:session:*})에 둔다 — {@code aml.session.redis.enabled=true}
@@ -28,6 +32,7 @@ import org.springframework.session.security.SpringSessionBackedSessionRegistry;
  *       Redis 가 없을 때 구독 대기 때문에 앱 기동이 실패하고, 구독 실패 로그에 호스트가, 이벤트 처리 경고에 세션 ID 가 찍힌다.
  *       만료는 읽을 때 만료 시각으로 판단하고, 남은 키는 Redis TTL(만료 + 5분)로 지워진다.</li>
  *   <li>로그아웃하면 세션 해시까지 바로 지운다({@link RedisSessionLogoutHandler}).</li>
+ *   <li>Redis 가 안 되면 {@link SessionStoreFailureFilter} 가 503 SESSION_STORE_UNAVAILABLE.</li>
  * </ul>
  */
 @Configuration
@@ -64,5 +69,14 @@ public class RedisSessionConfig {
     RedisSessionLogoutHandler redisSessionLogoutHandler(StringRedisTemplate redis,
                                                         @Value("${spring.session.redis.namespace}") String namespace) {
         return new RedisSessionLogoutHandler(redis, namespace);
+    }
+
+    /** 세션 필터 바깥에 둬야 세션 읽기·저장에서 나는 Redis 오류를 잡는다. */
+    @Bean
+    FilterRegistrationBean<SessionStoreFailureFilter> sessionStoreFailureFilter(ObjectMapper om, ErrorMetrics errorMetrics) {
+        FilterRegistrationBean<SessionStoreFailureFilter> reg =
+                new FilterRegistrationBean<>(new SessionStoreFailureFilter(om, errorMetrics));
+        reg.setOrder(SessionRepositoryFilter.DEFAULT_ORDER - 1);
+        return reg;
     }
 }

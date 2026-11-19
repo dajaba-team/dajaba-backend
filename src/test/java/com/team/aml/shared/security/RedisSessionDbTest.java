@@ -230,6 +230,29 @@ class RedisSessionDbTest {
         assertThat(b.get("/api/v1/auth/me").statusCode()).isEqualTo(401);
     }
 
+    // --- Redis 쓰기 거부 -------------------------------------------------------
+
+    @Test
+    void 실패_maxmemory로_쓰기가_거부되면_로그인과_로그인한_요청이_503_JSON() throws Exception {
+        Browser before = new Browser(port);
+        before.login("inv02", PASSWORD);
+        try {
+            redis.execInContainer("redis-cli", "-a", REDIS_PASSWORD, "--no-auth-warning", "config", "set", "maxmemory", "1");
+
+            HttpResponse<String> login = new Browser(port).login("inv01", PASSWORD);
+            assertThat(login.statusCode()).isEqualTo(503);
+            assertThat(code(login)).isEqualTo("SESSION_STORE_UNAVAILABLE");
+            assertThat(login.headers().firstValue("Content-Type").orElse("")).startsWith("application/json");
+
+            HttpResponse<String> me = before.get("/api/v1/auth/me");   // 요청 끝에 마지막 접근 시각을 쓰다 거부됨
+            assertThat(me.statusCode()).isEqualTo(503);
+            assertThat(code(me)).isEqualTo("SESSION_STORE_UNAVAILABLE");
+        } finally {
+            redis.execInContainer("redis-cli", "-a", REDIS_PASSWORD, "--no-auth-warning", "config", "set", "maxmemory", "200mb");
+        }
+        assertThat(before.get("/api/v1/auth/me").statusCode()).as("메모리가 풀리면 다시 그대로").isEqualTo(200);
+    }
+
     // --- 도우미 -----------------------------------------------------------------
 
     private User newInvestigator() {
