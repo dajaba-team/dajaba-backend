@@ -49,7 +49,8 @@ import java.util.Objects;
  * <p><b>제출자 범위: 이 초안을 승인한 사람만</b> (11/17 결정, #110 〔확인 필요〕 닫음). 승인한 사람이 보고 책임을 끝까지 진다 —
  * 다른 승인자는 목록·상세는 보지만 제출 버튼이 없다(S2 available_actions). cases ReportCase 는 담당 검사만 안 하고 이 검사는 str 몫.
  *
- * <p>PDF 는 여기서 만들지 않는다 — pdf_status PENDING 으로 두고, 생성(제출 커밋 뒤)·다시 만들기(P5)·받기(S8)는 PDF PR(W5) 몫.
+ * <p>PDF 는 이 트랜잭션에서 만들지 않는다 — pdf_status PENDING 으로 커밋하고, 커밋 뒤 {@link StrReportPdfTrigger} 가 뒤에서
+ * {@link GenerateStrReportPdf} 로 만든다(결정 2 — PDF 가 실패해도 제출은 그대로). 받기는 S8, 다시 만들기는 P5.
  */
 @Service
 public class ReportStrDraft {
@@ -60,15 +61,18 @@ public class ReportStrDraft {
     private final CaseRepository cases;
     private final CaseHistoryRepository histories;
     private final CurrentUser currentUser;
+    private final StrReportPdfTrigger pdfTrigger;
 
     public ReportStrDraft(StrDraftRepository drafts, StrReportRepository reports, ReportCase reportCase,
-                          CaseRepository cases, CaseHistoryRepository histories, CurrentUser currentUser) {
+                          CaseRepository cases, CaseHistoryRepository histories, CurrentUser currentUser,
+                          StrReportPdfTrigger pdfTrigger) {
         this.drafts = drafts;
         this.reports = reports;
         this.reportCase = reportCase;
         this.cases = cases;
         this.histories = histories;
         this.currentUser = currentUser;
+        this.pdfTrigger = pdfTrigger;
     }
 
     /** @param expectedCaseVersion 화면이 읽은 cases.version (case_version) */
@@ -94,6 +98,7 @@ public class ReportStrDraft {
                 .orElseThrow(() -> new IllegalStateException("ReportCase 가 REPORT 이력을 남기지 않았다: " + draftNo));
         report.markReported(me.userId(), reportedAt);                                         // ⑥
         reports.save(report);
+        pdfTrigger.afterCommit(draftId);                                                      // ⑦ 커밋 뒤 확정본 PDF (롤백이면 안 만든다)
 
         Case c = cases.findById(draft.getCaseId()).orElseThrow(() -> new CaseNotFoundException(draft.getCaseId()));
         return new Result(c.getCaseNo(), c.getStatus().name(), caseVersion, DisplayNumber.draftNo(draftId),

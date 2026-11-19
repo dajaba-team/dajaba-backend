@@ -34,6 +34,7 @@ swagger에서 **`POST /api/v1/auth/login`** 본문 `{"login_id": "inv01", "passw
 | `AI_BASE_URL` | AI 서버 주소 | — | — | compose 앱 `http://ai:8000` · IDE `http://localhost:8000` |
 | `AML_AI_MOCK` | local에서 AI 목업(`true`)·진짜 AI 서버(`false`). `true`/`false`만 — 다른 값이면 앱이 안 떠요 | — | — | `true` (목업) |
 | `AML_AI_ASK_ENABLED` | 케이스 질문 답변 켜기(`true`)·끄기(`false`). 참·거짓으로 못 읽는 값(예: `maybe`)이면 앱이 안 떠요 | — | — | `false` (꺼짐) |
+| `AML_AI_TIMEOUT_SECONDS`·`AML_AI_MAX_BATCH` | AI 호출 한 번의 전체 시간 한도(초, 재시도 포함)·점수 묶음 크기. 보통 안 바꿔요. 빈 값·0 이하이거나 묶음이 500을 넘으면(규약 6.2) 앱이 안 떠요 | — | — | `90`·`500` |
 | `DEV_USER_PASSWORD` | local 시연 계정 4명(admin·inv01·apr01·inv02)의 비밀번호 | — | — | 비어 있음 → 개발 계정을 안 만들고 경고 한 줄 |
 | `DB_HOST` | DB 호스트 | — | — | compose 앱 `db`(고정) · IDE `localhost` |
 | `DB_PORT` | DB 포트 | — | — | `5432` |
