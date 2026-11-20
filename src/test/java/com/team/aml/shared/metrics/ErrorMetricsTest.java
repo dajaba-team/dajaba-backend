@@ -76,6 +76,15 @@ class ErrorMetricsTest {
         assertThat(registry.find(ErrorMetrics.NAME).tag("code", "CASE-2022-000057").counter()).isNull();
     }
 
+    @Test
+    void 경계_aiCodeTag는_같은_AI_코드_표를_쓴다() {   // 기능 지표용 (SCRUM-276)
+        assertThat(ErrorMetrics.aiCodeTag("LLM_UNAVAILABLE")).isEqualTo("LLM_UNAVAILABLE");
+        assertThat(ErrorMetrics.aiCodeTag("SUMMARY_CODE_CHECK_FAILED")).isEqualTo("SUMMARY_CODE_CHECK_FAILED");
+        assertThat(ErrorMetrics.aiCodeTag("BRAND_NEW_AI_CODE")).isEqualTo("AI_OTHER");
+        assertThat(ErrorMetrics.aiCodeTag("CASE-2022-000057")).isEqualTo("OTHER");
+        assertThat(ErrorMetrics.aiCodeTag(null)).isEqualTo("OTHER");
+    }
+
     // --- 실패 ---------------------------------------------------------------
 
     @Test

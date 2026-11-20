@@ -1,6 +1,6 @@
 # 06. cases — 조사
 
-> v0.2 · 2026-11-19 · 초안(팀 확인 중) · 담당 지윤 · 정리 진희 · 11/19 질문 답변 A8·C9(SCRUM-302)
+> v0.2 · 2026-11-20 · 초안(팀 확인 중) · 담당 지윤 · 정리 진희 · 11/19 질문 답변 A8·C9(SCRUM-302) · 11/20 케이스 지표(SCRUM-276)
 
 담당자 문서는 아직 초안이라 `확정` / **〔초안〕** / **〔확인 필요〕**를 나눠 적었어요(뜻은 [`../README.md`](../README.md) "읽는 법"). 이 파일은 **담당자가 고쳐요.** 노션 초안을 바꾸면 같은 주에 이 파일도 PR로 갱신해 주세요.
 
@@ -151,6 +151,23 @@
 - **`available_actions`의 `ASK_QUESTION`** — 역할·담당 기준이라 상태 표(`CaseStatus.allows`)는 늘 참이고, 누가 볼지는 `CaseAction.canAsk` 한 곳. 켜기 설정을 봐야 해서 `availableFor`(목록·상세 공통)가 아니라 **상세(`GetCaseDetail`)에서만** 붙여요 — 목록 한 줄의 버튼에는 없어요(계약서 C2만).
 - **저장** — `ops.case_questions`(V017): 추가만(`app_backend` UPDATE·DELETE 회수, 엔티티 setter 없음). 묻는 사람은 `created_by`(세션 — `CreatedOnlyEntity` auditing, 요청 본문으로 받지 않음). `ai_generation_id`(AI `generation_id`)·`request_id`(MDC — `ai_call_logs`와 같은 값)로 AI 쪽 기록과 이어요. 상태별 칸 규칙은 엔티티 `CaseQuestion.record`와 DB CHECK 둘 다. `question`은 설계 문서의 `varchar(300)`이 아니라 `text`(원문 코드 포인트 1,200개 상한) — 원문 그대로 저장하는데 NFD로 쪼갠 한글 300자는 코드 포인트가 900개라 `varchar(300)`이면 앱은 받고 DB가 거절해요.
 - 로그에는 케이스 번호·상태·질문 길이만. 질문·답 본문은 찍지 않아요(NFR-COM-04). `access_logs`는 바꾸지 않아요(설계 문서 9.1).
+
+**케이스 지표 (Prometheus) — 구현됨 (SCRUM-276)** 이름·태그 규칙은 [`03_shared.md` §13](../03_shared.md). 세다가 예외가 나도 삼키고 응답·처리는 그대로(fail-open). 락 동작(낙관적 `@Version`·`FOR UPDATE`)은 바꾸지 않았어요 — 세기만 해요.
+
+| 지표 | Prometheus 이름 | 태그 | 세는 곳 |
+|---|---|---|---|
+| 목록·상세 응답 시간 | `http_server_requests_seconds_*` (공통, SCRUM-271) | `uri="/api/v1/cases"`·`"/api/v1/cases/{caseNo}"` 등 | 전용 Timer는 만들지 않아요 — 공통 지표의 `uri`가 템플릿이라 그대로 걸러져요 |
+| 동시 수정 충돌 | `aml_cases_concurrent_updates_total` | `action` 하나 | `cases.api`의 `CaseConflictCounter`(`HandlerExceptionResolver`, 순서 맨 앞, 늘 `null`을 돌려 응답은 `GlobalExceptionHandler`가 그대로 만듦) |
+| AI 요약 갱신 결과 | `aml_cases_summary_refreshes_total` | `result`·`code` | `RefreshCaseSummary` — AI를 부른 뒤부터만 (앞 단계 검사 실패는 AI를 안 불러서 안 셈) |
+
+- **충돌 건수** — `CaseController` 요청이 `OptimisticLockException`·`ObjectOptimisticLockingFailureException`으로 끝날 때만 1(던져진 예외 자체만 — 다른 예외로 감싸이면 `GlobalExceptionHandler`도 500으로 내보내서 안 셈). 즉 응답이 409 `CONCURRENT_UPDATE`인 것만이고, `INVALID_CASE_TRANSITION`·`CASE_ALREADY_OPENED` 같은 다른 409는 안 섞여요. 유스케이스가 version을 비교해 던진 것과 커밋 때 Hibernate가 던진 것 둘 다 잡아요(컨트롤러 밖에서 걸러서). `action` 값은 고정: `ASSIGN`·`REASSIGN`·`ESCALATE`·`CLOSE`·`REFRESH_SUMMARY`·`UPDATE_NOTES`, 그 밖 `OTHER`. **str 엔드포인트**(승인 요청·승인·반려·초안 저장 등)에서 난 케이스 version 충돌은 여기서 안 세요 — str 몫이고, 공통 `aml_http_errors_total{code="CONCURRENT_UPDATE"}`에는 다 들어가요.
+- **요약 결과** — `result` × `code` 조합 20개 안쪽:
+  - `SUCCESS` · `code="NONE"` — 저장까지 끝남
+  - `AI_FAILED` · AI 코드 — AI 호출 실패와 응답 확인 실패(`AI_BAD_RESPONSE`·`SUMMARY_CODE_CHECK_FAILED`). 코드는 `ErrorMetrics.aiCodeTag`로 03_shared §2 표에 있는 것만, 없으면 `AI_OTHER`, `AiClientException`이 아닌 예외는 `OTHER`
+  - `SAVE_REJECTED` · `VERSION_CHANGED`(케이스 version이 바뀜 — 그사이 종결·메모 등) / `INPUT_CHANGED`(요약 입력 해시가 바뀜 — 경보·점수·근거) / `NOT_ASSIGNEE`(그사이 재배정) / `NOT_EDITABLE`(편집 못 하는 상태로 바뀜) / `CASE_NOT_FOUND` / `OTHER`. `VERSION_CHANGED`·`INPUT_CHANGED`는 응답이 둘 다 409 `CONCURRENT_UPDATE`라 응답으로는 못 나눠서 지표로 나눠요
+- **태그에 넣지 않는 것** — `case_no`·사용자·계좌·금액·AI 응답 본문·예외 메시지. `action`·`result`·`code`는 위 고정 값뿐이에요(NFR-COM-04).
+- **Grafana** — `ops/grafana/dashboards/cases.json` 「케이스」: 목록·상세 p95·초당 요청, 충돌 건수(동작별), 요약 결과(결과·코드별).
+- **확인** — `docker compose --profile ops up -d app prometheus grafana` → Prometheus(`localhost:9090`)에서 `aml_cases_concurrent_updates_total`·`aml_cases_summary_refreshes_total`. 충돌은 같은 케이스에 옛 `version`으로 메모 저장(`PUT …/notes`)을 두 번 보내면 재현돼요.
 
 **str에 주는 공개 기능 — 구현됨 (SCRUM-98)** 모두 `Propagation.MANDATORY`라 str 트랜잭션 안에서만 불러요(혼자 부르면 `IllegalTransactionStateException`).
 

@@ -414,13 +414,14 @@ try {
 |---|---|
 | `status="ESCALATED"`, `result="SUCCESS"`, `rule="R01"`, `code="CASE_NOT_FOUND"`, `role="APPROVER"` | `case_no="CASE-2022-000057"`, `account="…"`, `amount="15000000"`, `login_id="kim"`, `request_id="…"`, `reason="고객 진술…"` |
 
+- AI가 준 코드를 자기 지표 태그로 쓸 때는 `ErrorMetrics.aiCodeTag(code)`로 걸러요 — §2 표에 없는 코드는 `AI_OTHER`(표를 한 곳에만 두려고, SCRUM-276).
 - 테스트에서 확인: `SimpleMeterRegistry`를 넣고 `registry.get("aml.cases.transitions").tag("to","ESCALATED").counter().count()`.
 - 붙인 뒤 `docker compose --profile ops up -d app prometheus grafana` → Prometheus(`localhost:9090`) 검색창에 `aml_cases_transitions_total`.
 
 ### Grafana에서 보기
 
 - `ops/grafana/dashboards/`에 JSON을 넣으면 자동으로 등록돼요. 공통 대시보드 **「백엔드 공통」**(`backend-common.json`): 요청 수(초당)·p95 응답 시간·에러 코드별 건수.
-- 자기 대시보드는 같은 폴더에 `<기능>.json`으로 따로 만들어요(공통 파일은 고치지 않기).
+- 자기 대시보드는 같은 폴더에 `<기능>.json`으로 따로 만들어요(공통 파일은 고치지 않기). 지금 있는 것: `cases.json` 「케이스」(SCRUM-276, `06_features/cases.md` "케이스 지표").
 - 자주 쓰는 식:
   - p95: `histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{job="app"}[5m])))`
   - 에러 코드별: `sum by (code, status) (increase(aml_http_errors_total{job="app"}[5m]))`

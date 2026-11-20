@@ -20,6 +20,8 @@ import com.team.aml.shared.ai.AiDtos.CaseSummaryRequest;
 import com.team.aml.shared.ai.AiDtos.CaseSummaryResponse;
 import com.team.aml.shared.ai.AiDtos.StrDraftResponse;
 import com.team.aml.shared.security.AppUserDetails;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.OptimisticLockException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -99,6 +101,7 @@ class RefreshCaseSummaryDbTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired ObjectMapper om;
     @Autowired PlatformTransactionManager transactionManager;
+    @Autowired MeterRegistry meters;
 
     private long inv;
     private long inv2;
@@ -261,10 +264,12 @@ class RefreshCaseSummaryDbTest {
         Fixture f = caseWithAlert(CaseStatus.REVIEWING, true);
         when(aiClient.caseSummary(any())).thenThrow(new AiClientException("LLM_UNAVAILABLE", "down"));
         loginAs(inv);
+        double aiFailed = refreshes("AI_FAILED", "LLM_UNAVAILABLE");
 
         assertThatThrownBy(() -> refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion()))
                 .isInstanceOfSatisfying(AiClientException.class, e -> assertThat(e.code()).isEqualTo("LLM_UNAVAILABLE"));
         assertNothingSaved(f);
+        assertThat(refreshes("AI_FAILED", "LLM_UNAVAILABLE") - aiFailed).isEqualTo(1);   // SCRUM-276
     }
 
     @Test
@@ -324,10 +329,13 @@ class RefreshCaseSummaryDbTest {
         });
         loginAs(inv);
 
+        double versionChanged = refreshes("SAVE_REJECTED", "VERSION_CHANGED");
+
         assertThatThrownBy(() -> refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion()))
                 .isInstanceOf(OptimisticLockException.class);
         assertThat(summaryCount(f.c.getId())).isZero();
         assertThat(cases.findById(f.c.getId()).orElseThrow().getStatus()).isEqualTo(CaseStatus.CLOSED);
+        assertThat(refreshes("SAVE_REJECTED", "VERSION_CHANGED") - versionChanged).isEqualTo(1);   // SCRUM-276
     }
 
     @Test
@@ -338,10 +346,14 @@ class RefreshCaseSummaryDbTest {
             return ok(i.getArgument(0));
         });
         loginAs(inv);
+        double inputChanged = refreshes("SAVE_REJECTED", "INPUT_CHANGED");
+        double versionChanged = refreshes("SAVE_REJECTED", "VERSION_CHANGED");
 
         assertThatThrownBy(() -> refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion()))
                 .isInstanceOf(OptimisticLockException.class);
         assertNothingSaved(f);
+        assertThat(refreshes("SAVE_REJECTED", "INPUT_CHANGED") - inputChanged).isEqualTo(1);   // 응답은 같은 409 — 지표만 나눔
+        assertThat(refreshes("SAVE_REJECTED", "VERSION_CHANGED") - versionChanged).isZero();
     }
 
     // ── 도우미 ────────────────────────────────────────────────
@@ -498,6 +510,12 @@ class RefreshCaseSummaryDbTest {
     private void assertNothingSaved(Fixture f) {
         assertThat(summaryCount(f.c.getId())).isZero();
         assertThat(dbVersion(f.c.getId())).isEqualTo(f.c.getVersion());
+    }
+
+    /** aml.cases.summary.refreshes 누적값 — 컨텍스트를 테스트끼리 같이 써서 앞뒤 차이로 본다 (SCRUM-276). */
+    private double refreshes(String result, String code) {
+        Counter c = meters.find(CaseMetrics.SUMMARY_REFRESHES).tag("result", result).tag("code", code).counter();
+        return c == null ? 0 : c.count();
     }
 
     private long summaryCount(long caseId) {

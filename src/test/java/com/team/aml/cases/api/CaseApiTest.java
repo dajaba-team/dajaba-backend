@@ -2,7 +2,11 @@ package com.team.aml.cases.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.team.aml.cases.application.CaseMetrics;
 import com.team.aml.shared.security.AppUserDetails;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tag;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,6 +59,7 @@ class CaseApiTest {
 
     @Autowired MockMvc mvc;
     @Autowired JdbcTemplate jdbc;
+    @Autowired MeterRegistry meters;
 
     private final ObjectMapper json = new ObjectMapper();
     private AppUserDetails inv;
@@ -198,6 +203,40 @@ class CaseApiTest {
 
         assertThat(jdbc.queryForMap("select status, version from ops.cases where case_no = ?", caseNo))
                 .containsEntry("status", "REVIEWING").containsEntry("version", 1L);
+    }
+
+    @Test
+    void 지표_409_CONCURRENT_UPDATE만_동작별로_세고_다른_409는_안_섞인다_요약_성공도_센다() throws Exception {   // SCRUM-276
+        String caseNo = newOpenCase("010_METR%05d".formatted(SEQ.incrementAndGet()));
+        assign(caseNo, inv);   // version 1
+        double escalate = conflicts("ESCALATE");
+        double notes = conflicts("UPDATE_NOTES");
+        double assignConflicts = conflicts("ASSIGN");
+        double saved = meterCount(CaseMetrics.SUMMARY_REFRESHES, "result", "SUCCESS");
+
+        assertThat(code(post("/api/v1/cases/{caseNo}/escalate", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"comment\": \"오래된 화면\", \"version\": 0}").with(as(inv)).with(csrf()), 409))
+                .isEqualTo("CONCURRENT_UPDATE");
+        assertThat(code(notes(caseNo, "오래된 화면", 0, inv), 409)).isEqualTo("CONCURRENT_UPDATE");
+        assertThat(code(post("/api/v1/cases/{caseNo}/assign", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"version\": 1}").with(as(inv)).with(csrf()), 409)).isEqualTo("INVALID_CASE_TRANSITION");
+        body(post("/api/v1/cases/{caseNo}/refresh-summary", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"version\": 1}").with(as(inv)).with(csrf()), 201);   // 테스트 프로필 MockAiClient
+
+        assertThat(conflicts("ESCALATE") - escalate).isEqualTo(1);
+        assertThat(conflicts("UPDATE_NOTES") - notes).isEqualTo(1);
+        assertThat(conflicts("ASSIGN") - assignConflicts).isZero();   // INVALID_CASE_TRANSITION 은 안 셈
+        assertThat(meterCount(CaseMetrics.SUMMARY_REFRESHES, "result", "SUCCESS") - saved).isEqualTo(1);
+        assertThat(meters.find(CaseMetrics.CONCURRENT_UPDATES).meters()).allSatisfy(m -> assertThat(m.getId().getTags())
+                .extracting(Tag::getKey).containsExactly("action"));   // case_no 같은 태그 없음
+    }
+
+    private double conflicts(String action) {
+        return meterCount(CaseMetrics.CONCURRENT_UPDATES, "action", action);
+    }
+
+    private double meterCount(String name, String tag, String value) {
+        return meters.find(name).tag(tag, value).counters().stream().mapToDouble(Counter::count).sum();
     }
 
     @Test

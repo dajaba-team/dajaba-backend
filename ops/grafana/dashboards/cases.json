@@ -1,0 +1,90 @@
+{
+  "uid": "cases",
+  "title": "케이스",
+  "description": "목록·상세 응답 시간 · 동시 수정 충돌 · AI 요약 갱신 결과 (docs/06_features/cases.md 케이스 지표, SCRUM-276)",
+  "tags": ["backend", "cases"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "목록·상세 p95 응답 시간",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{job=\"app\", method=\"GET\", uri=~\"/api/v1/cases|/api/v1/cases/\\\\{caseNo\\\\}\"}[5m])))",
+          "legendFormat": "{{uri}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "목록·상세 요청 수 (초당, 상태별)",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (uri, status) (rate(http_server_requests_seconds_count{job=\"app\", method=\"GET\", uri=~\"/api/v1/cases|/api/v1/cases/\\\\{caseNo\\\\}\"}[5m]))",
+          "legendFormat": "{{uri}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "동시 수정 충돌 409 CONCURRENT_UPDATE (동작별, 선택 기간)",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] },
+      "options": { "orientation": "horizontal", "xField": "action" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "round(sum by (action) (increase(aml_cases_concurrent_updates_total{job=\"app\"}[$__range])))",
+          "legendFormat": "{{action}}",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true } } }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "barchart",
+      "title": "AI 요약 갱신 결과 (결과·코드별, 선택 기간)",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] },
+      "options": { "orientation": "horizontal", "xField": "code" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "round(sum by (result, code) (increase(aml_cases_summary_refreshes_total{job=\"app\"}[$__range])))",
+          "legendFormat": "{{result}} {{code}}",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true } } }
+      ]
+    }
+  ]
+}

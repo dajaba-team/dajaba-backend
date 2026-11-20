@@ -1,6 +1,7 @@
 package com.team.aml.cases.application;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.team.aml.cases.application.CaseMetrics.SaveRejection;
 import com.team.aml.cases.domain.Case;
 import com.team.aml.cases.domain.CaseNotFoundException;
 import com.team.aml.cases.domain.CaseRepository;
@@ -15,6 +16,7 @@ import com.team.aml.shared.ai.AiDtos.CaseSummaryRequest;
 import com.team.aml.shared.ai.AiDtos.CaseSummaryResponse;
 import com.team.aml.shared.security.CurrentUser;
 import jakarta.persistence.OptimisticLockException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -39,6 +41,9 @@ import java.util.Map;
  *       요약 입력도 다시 만들어 해시가 다르면 409 CONCURRENT_UPDATE. 통과하면 요약 한 행 + cases.version +1(이력 행 없음).</li>
  * </ol>
  *
+ * <p><b>지표</b> — AI 를 부른 뒤부터 결과를 aml.cases.summary.refreshes{result, code} 로 1 센다(SCRUM-276, CaseMetrics).
+ * 2번 실패는 AI_FAILED·AI 코드, 3번 실패는 SAVE_REJECTED·{@link SaveRejection}, 저장까지 끝나면 SUCCESS. 1번 실패는 안 센다(AI 를 안 불렀다).
+ *
  * <p><b>요청 모양</b> — 규약 v0.4 §6.1(11/6). 만드는 곳은 {@link CaseSummaryInputs} 하나 — 요약 조회(API-13)의
  * is_current 판정과 같은 코드여야 해시가 맞는다.
  */
@@ -57,9 +62,11 @@ public class RefreshCaseSummary {
     private final CurrentUser currentUser;
     private final TransactionTemplate readTx;
     private final TransactionTemplate writeTx;
+    private final CaseMetrics metrics;
 
     public RefreshCaseSummary(CaseRepository cases, CaseSummaryRepository summaries, CaseSummaryInputs inputs,
-                              AiClient aiClient, CurrentUser currentUser, PlatformTransactionManager transactionManager) {
+                              AiClient aiClient, CurrentUser currentUser, PlatformTransactionManager transactionManager,
+                              CaseMetrics metrics) {
         this.cases = cases;
         this.summaries = summaries;
         this.inputs = inputs;
@@ -68,6 +75,7 @@ public class RefreshCaseSummary {
         this.readTx = new TransactionTemplate(transactionManager);
         this.readTx.setReadOnly(true);
         this.writeTx = new TransactionTemplate(transactionManager);
+        this.metrics = metrics;
     }
 
     /**
@@ -84,21 +92,61 @@ public class RefreshCaseSummary {
             return new Prepared(c.getId(), request, inputs.inputOf(request));
         });
 
-        CaseSummaryResponse response = aiClient.caseSummary(prepared.request());   // 트랜잭션 밖 (≤ 90초)
-        Instant producedAt = requireUsable(caseNo, response);
+        CaseSummaryResponse response;
+        Instant producedAt;
+        try {
+            response = aiClient.caseSummary(prepared.request());   // 트랜잭션 밖 (≤ 90초)
+            producedAt = requireUsable(caseNo, response);
+        } catch (RuntimeException e) {
+            metrics.summaryAiFailed(e);
+            throw e;
+        }
 
+        CaseSummaryResult saved;
+        try {
+            saved = save(caseNo, expectedVersion, actorId, prepared, response, producedAt);
+        } catch (RuntimeException e) {
+            metrics.summarySaveRejected(rejectionOf(e));
+            throw e;
+        }
+        metrics.summarySaved();
+        return saved;
+    }
+
+    private CaseSummaryResult save(String caseNo, long expectedVersion, long actorId, Prepared prepared,
+                                   CaseSummaryResponse response, Instant producedAt) {
         return writeTx.execute(s -> {
             Case c = cases.findForUpdate(prepared.caseId()).orElseThrow(() -> new CaseNotFoundException(caseNo));
             check(c, expectedVersion, actorId);
             CaseSummaryInput now = inputs.currentInput(c);
             if (!now.sha256().equals(prepared.input().sha256())) {
-                throw new OptimisticLockException("요약을 만드는 사이 요약 입력(경보·점수·근거)이 바뀌었습니다: " + caseNo);
+                throw new SummaryInputChangedException(caseNo);
             }
             CaseSummary saved = summaries.save(CaseSummary.record(c.getId(), response.raw(), prepared.input(),
                     response.promptVersion(), producedAt, expectedVersion));
             cases.bumpVersion(c);   // 상태·이력은 그대로, version 만 +1 (바로 UPDATE — TouchCaseForRevision 과 같음)
             return new CaseSummaryResult(caseNo, CaseSummaryResult.Summary.of(saved, true), c.getVersion());
         });
+    }
+
+    /** 3번에서 무엇이 막았나 — 지표 code. 입력 해시는 version 보다 먼저 본다(둘 다 409 CONCURRENT_UPDATE 라 응답으로는 못 나눔). */
+    static SaveRejection rejectionOf(RuntimeException e) {
+        if (e instanceof SummaryInputChangedException) {
+            return SaveRejection.INPUT_CHANGED;
+        }
+        if (e instanceof OptimisticLockException || e instanceof ObjectOptimisticLockingFailureException) {
+            return SaveRejection.VERSION_CHANGED;
+        }
+        if (e instanceof NotAssigneeException) {
+            return SaveRejection.NOT_ASSIGNEE;
+        }
+        if (e instanceof InvalidCaseTransitionException) {
+            return SaveRejection.NOT_EDITABLE;
+        }
+        if (e instanceof CaseNotFoundException) {
+            return SaveRejection.CASE_NOT_FOUND;
+        }
+        return SaveRejection.OTHER;
     }
 
     /** 1·3번 공통 검사. 순서는 CaseChanges·AttachDraftToCase 와 같다. */
@@ -159,4 +207,11 @@ public class RefreshCaseSummary {
     }
 
     private record Prepared(long caseId, CaseSummaryRequest request, CaseSummaryInput input) {}
+
+    /** AI 를 기다리는 사이 요약 입력 해시가 바뀜. 응답은 다른 version 충돌과 같은 409 CONCURRENT_UPDATE — 지표만 나눈다. */
+    static final class SummaryInputChangedException extends OptimisticLockException {
+        SummaryInputChangedException(String caseNo) {
+            super("요약을 만드는 사이 요약 입력(경보·점수·근거)이 바뀌었습니다: " + caseNo);
+        }
+    }
 }

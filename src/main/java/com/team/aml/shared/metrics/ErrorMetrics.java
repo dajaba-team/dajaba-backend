@@ -47,6 +47,14 @@ public class ErrorMetrics {
         }
     }
 
+    /**
+     * AI 가 준 코드를 지표 태그 값으로 — 위 AI 코드 표에 없으면 AI_OTHER, 형식이 아니면 OTHER.
+     * 기능 지표(예 aml.cases.summary.refreshes, SCRUM-276)가 AI 코드를 태그로 쓸 때 표를 하나만 두려고 연다.
+     */
+    public static String aiCodeTag(String code) {
+        return tagCode(code, AI_PASS_THROUGH_STATUS);
+    }
+
     static String tagCode(String code, int status) {
         if (code == null || !CODE.matcher(code).matches()) {
             return "OTHER";
