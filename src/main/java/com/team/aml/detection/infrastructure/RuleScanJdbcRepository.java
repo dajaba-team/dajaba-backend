@@ -114,6 +114,8 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
      *    그중 그날 모든 분의 지금 창에 공통으로 들어가는 [D+1 00:00 - H, D 00:01) 에서 이미 상한을 넘는 계좌는 뺀다
      *    — 그날 어느 분에도 지금 창이 참일 수 없다(결과는 같고 대형 계좌를 분마다 세지 않음). H < 24시간이면 구간이 비어 거르지 않는다.
      * ② 그 계좌의 그날 거래 분 E(입금·출금) 마다 지금 창·1분 전 창의 송신·수신 계좌 수. 자기 계좌 거래는 모두 뺀다.
+     *    E 는 legs 가 아니라 거래 표에서 후보마다 그날 거래를 찾는다(입금 transactions_to_ts_idx, 출금 transactions_from_ts_idx).
+     *    legs 를 다시 쓰면 플래너가 후보를 1개로 짐작해 후보마다 legs(5일치) 전체를 훑는다 — 9/4 32.0초 → 7.9초(SCRUM-311, rules.md 2.3).
      *    송신 수는 transactions_to_ts_idx, 수신 수는 transactions_from_ts_idx 를 탄다.
      */
     private static final String GATHER_SCATTER_MINUTES = """
@@ -135,9 +137,13 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
                    and count(distinct counterparty) filter (where not inbound and ts >= ? and ts < ?) <= ?
             ),
             minutes as (
-                select distinct l.account_key, date_trunc('minute', l.ts) as e
-                from legs l join candidates c on c.account_key = l.account_key
-                where l.ts >= ?
+                select t.to_account_key as account_key, date_trunc('minute', t.ts) as e
+                from candidates c join ops.transactions t on t.to_account_key = c.account_key
+                where t.ts >= ? and t.ts < ? and not t.is_self_transfer
+                union
+                select t.from_account_key, date_trunc('minute', t.ts)
+                from candidates c join ops.transactions t on t.from_account_key = c.account_key
+                where t.ts >= ? and t.ts < ? and not t.is_self_transfer
             )
             select m.account_key, m.e,
                    (select count(distinct x.from_account_key) from ops.transactions x
@@ -267,6 +273,9 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
      * ② 계좌 고리 후보: 돌아오는 엣지 z→a(그 구간에 거래)에서 출발, a→b 를 붙여 b=z(2홉)·b→z(3홉)·b→c→z(4홉).
      *    앞 엣지의 첫 거래 분 < 다음 엣지의 마지막 거래 분인 것만 (시간순 가능성). 중간 계좌는 서로 다르고 a 가 아님.
      * ③ 후보만 거래 단위로 펼친다: 돌아오는 거래 tk ∈ [closeFrom, closeTo), 앞 거래마다 창 시작(tk분+1분-H) 이상·다음 거래 분보다 이른 분.
+     *    앞 거래는 lateral 로 계좌 쌍마다 따로 찾는다(transactions_from_ts_idx). 평범한 join 이면 플래너가 후보를 1행으로 짐작해
+     *    거래 표 전체를 후보마다 다시 읽는다 — 9/8 88.3초 → 6.3초(SCRUM-311, rules.md 2.3). offset 0 은 하위 쿼리를 풀어 다시 join 으로 합치지 못하게 막는다.
+     *    ②는 forEachCycleGroup 이 merge join 을 끄고 돌린다(hash join) — 9/2·9/9 처럼 start 가 큰 날 디스크 정렬을 막는다.
      * 9/5 측정(rules.md R04 구현 1단계 기준선): 엣지 55만, 후보 2홉 425·3홉 26·4홉 7, 4홉 후보 조인이 약 21초.
      */
     private static final String CYCLES = """
@@ -312,8 +321,9 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
                    array[t1.to_account_key, tk.to_account_key] as tos
             from cand c
             join closes tk on tk.from_account_key = c.z and tk.to_account_key = c.a
-            join ops.transactions t1 on t1.from_account_key = c.a and t1.to_account_key = c.b and not t1.is_self_transfer
-                 and t1.ts >= tk.ws and t1.ts < date_trunc('minute', tk.ts)
+            cross join lateral (select x.transaction_id, x.ts, x.from_account_key, x.to_account_key from ops.transactions x
+                 where x.from_account_key = c.a and x.to_account_key = c.b and not x.is_self_transfer
+                   and x.ts >= tk.ws and x.ts < date_trunc('minute', tk.ts) offset 0) t1
             where c.k = 2
             union all
             select array[t1.transaction_id, t2.transaction_id, tk.transaction_id], array[t1.ts, t2.ts, tk.ts],
@@ -321,10 +331,12 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
                    array[t1.to_account_key, t2.to_account_key, tk.to_account_key]
             from cand c
             join closes tk on tk.from_account_key = c.z and tk.to_account_key = c.a
-            join ops.transactions t2 on t2.from_account_key = c.b and t2.to_account_key = c.z and not t2.is_self_transfer
-                 and t2.ts >= tk.ws and t2.ts < date_trunc('minute', tk.ts)
-            join ops.transactions t1 on t1.from_account_key = c.a and t1.to_account_key = c.b and not t1.is_self_transfer
-                 and t1.ts >= tk.ws and t1.ts < date_trunc('minute', t2.ts)
+            cross join lateral (select x.transaction_id, x.ts, x.from_account_key, x.to_account_key from ops.transactions x
+                 where x.from_account_key = c.b and x.to_account_key = c.z and not x.is_self_transfer
+                   and x.ts >= tk.ws and x.ts < date_trunc('minute', tk.ts) offset 0) t2
+            cross join lateral (select x.transaction_id, x.ts, x.from_account_key, x.to_account_key from ops.transactions x
+                 where x.from_account_key = c.a and x.to_account_key = c.b and not x.is_self_transfer
+                   and x.ts >= tk.ws and x.ts < date_trunc('minute', t2.ts) offset 0) t1
             where c.k = 3
             union all
             select array[t1.transaction_id, t2.transaction_id, t3.transaction_id, tk.transaction_id],
@@ -333,12 +345,15 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
                    array[t1.to_account_key, t2.to_account_key, t3.to_account_key, tk.to_account_key]
             from cand c
             join closes tk on tk.from_account_key = c.z and tk.to_account_key = c.a
-            join ops.transactions t3 on t3.from_account_key = c.c and t3.to_account_key = c.z and not t3.is_self_transfer
-                 and t3.ts >= tk.ws and t3.ts < date_trunc('minute', tk.ts)
-            join ops.transactions t2 on t2.from_account_key = c.b and t2.to_account_key = c.c and not t2.is_self_transfer
-                 and t2.ts >= tk.ws and t2.ts < date_trunc('minute', t3.ts)
-            join ops.transactions t1 on t1.from_account_key = c.a and t1.to_account_key = c.b and not t1.is_self_transfer
-                 and t1.ts >= tk.ws and t1.ts < date_trunc('minute', t2.ts)
+            cross join lateral (select x.transaction_id, x.ts, x.from_account_key, x.to_account_key from ops.transactions x
+                 where x.from_account_key = c.c and x.to_account_key = c.z and not x.is_self_transfer
+                   and x.ts >= tk.ws and x.ts < date_trunc('minute', tk.ts) offset 0) t3
+            cross join lateral (select x.transaction_id, x.ts, x.from_account_key, x.to_account_key from ops.transactions x
+                 where x.from_account_key = c.b and x.to_account_key = c.c and not x.is_self_transfer
+                   and x.ts >= tk.ws and x.ts < date_trunc('minute', t3.ts) offset 0) t2
+            cross join lateral (select x.transaction_id, x.ts, x.from_account_key, x.to_account_key from ops.transactions x
+                 where x.from_account_key = c.a and x.to_account_key = c.b and not x.is_self_transfer
+                   and x.ts >= tk.ws and x.ts < date_trunc('minute', t2.ts) offset 0) t1
             where c.k = 4""";
     /** 같은 (대상 계좌, 닫힌 분) 고리가 이어서 오게 — 묶음이 끝날 때마다 저장한다. 묶음 안은 첫 거래 시각·거래 id 순. */
     private static final String CYCLES_GROUPED = "select * from (" + CYCLES + ") q "
@@ -421,7 +436,7 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
                 rule.minSenders(), rule.minReceivers(), dayStart,
                 alwaysNowFrom, alwaysNowTo, rule.maxSenders(),
                 alwaysNowFrom, alwaysNowTo, rule.maxReceivers(),
-                dayStart, h, h, h, h);
+                dayStart, dayEnd, dayStart, dayEnd, h, h, h, h);
     }
 
     @Override
@@ -497,22 +512,31 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
         Object[] args = {closeFrom.plusMinutes(1).minusHours(h), closeTo, closeFrom,
                 rule.maxHops(), rule.maxHops(), h, closeFrom, closeTo};
         List<CyclePath> current = new ArrayList<>();
-        jdbc.query(con -> {
-            PreparedStatement ps = con.prepareStatement(CYCLES_GROUPED);
-            ps.setFetchSize(CYCLE_FETCH_SIZE);
-            new ArgumentPreparedStatementSetter(args).setValues(ps);
-            return ps;
-        }, (RowCallbackHandler) rs -> {
-            CyclePath p = cyclePath(rs);
-            if (!current.isEmpty() && !(current.get(0).accountKey().equals(p.accountKey())
-                    && current.get(0).closeMinute().equals(p.closeMinute()))) {
+        // SCRUM-311: 고리 후보(② start, 9/2 1,027만 행)를 3·4홉과 합칠 때 플래너가 merge join 을 골라 수백 MB 를 디스크에서 정렬한다
+        // — 9/2 63.4초 → 15.7초. 실행 방법만 바꾸는 설정이라 결과는 같다. set local 은 이 트랜잭션 안에서만이고, 끝나면 기본값으로 돌린다
+        // (같은 스캔의 다음 룰 쿼리는 원래 설정). 중간에 실패하면 트랜잭션이 롤백되며 같이 사라진다.
+        jdbc.execute("set local enable_mergejoin = off");
+        try {
+            jdbc.query(con -> {
+                PreparedStatement ps = con.prepareStatement(CYCLES_GROUPED);
+                ps.setFetchSize(CYCLE_FETCH_SIZE);
+                new ArgumentPreparedStatementSetter(args).setValues(ps);
+                return ps;
+            }, (RowCallbackHandler) rs -> {
+                CyclePath p = cyclePath(rs);
+                if (!current.isEmpty() && !(current.get(0).accountKey().equals(p.accountKey())
+                        && current.get(0).closeMinute().equals(p.closeMinute()))) {
+                    group.accept(List.copyOf(current));
+                    current.clear();
+                }
+                current.add(p);
+            });
+            if (!current.isEmpty()) {
                 group.accept(List.copyOf(current));
-                current.clear();
             }
-            current.add(p);
-        });
-        if (!current.isEmpty()) {
-            group.accept(List.copyOf(current));
+        } finally {
+
+            jdbc.execute("set local enable_mergejoin to default");
         }
     }
 
