@@ -53,7 +53,8 @@
 | `InvalidRequestException` (`shared/domain`) — `@Valid`로는 못 보고 지금 값과 비교해야 아는 입력 오류 | 400 | `INVALID_REQUEST` — `details`는 던진 쪽이 준 `{요청 JSON 이름: 메시지}` 그대로. 예: `User.changeRole`에서 조사역 ↔ 승인자가 아님(같은 역할·관리자에서 등) → `details.role`. `shared/domain`이라 엔티티도 던질 수 있음 [SCRUM-135 ②] |
 | `NotFoundException` 하위 | 404 | 하위 클래스가 정함 (`CASE_NOT_FOUND`, `DRAFT_NOT_FOUND` …) |
 | `ForbiddenException` 하위 | **403** | 클래스 이름 UPPER_SNAKE (`NOT_APPROVER`, `NOT_ASSIGNEE` …) [SCRUM-67] |
-| `DomainException` 하위 전부 (위 둘 제외) | **409** | 클래스 이름 UPPER_SNAKE (`INVALID_CASE_TRANSITION`, `SELF_APPROVAL` …) |
+| `TooManyRequestsException` 하위 (`shared/domain`) — 기능 규칙의 횟수 제한 | **429** | 클래스 이름 UPPER_SNAKE (`QUESTION_RATE_LIMITED`). `details.retry_after_seconds` 는 던진 쪽이 줘요. 인프라 수준 제한은 여전히 범위 밖 [SCRUM-302] |
+| `DomainException` 하위 전부 (위 셋 제외) | **409** | 클래스 이름 UPPER_SNAKE (`INVALID_CASE_TRANSITION`, `SELF_APPROVAL` …) |
 | 낙관적 락 충돌 | 409 | `CONCURRENT_UPDATE` |
 | `AiClientException` | 502 | AI가 준 코드 그대로. **예외:** AI 409 `GENERATION_IN_PROGRESS`는 `AiClient`가 409 `DRAFT_IN_PROGRESS`로 바꿔 보내요("생성 중" ≠ AI 장애) [10/29]. 백엔드 자체 코드와 이름이 같은 AI 4xx 셋은 `AI_`를 붙여 502로 — 아래 줄 [SCRUM-128] |
 | AI 404 `DRAFT_NOT_FOUND` (AI가 `generation_id`를 모름) | 502 | `AI_DRAFT_NOT_FOUND` — 백엔드 404 `DRAFT_NOT_FOUND`(초안 없음)와 다른 뜻. 백엔드엔 초안이 있는데 AI가 생성본을 모름 = 데이터 어긋남 [SCRUM-128] |
@@ -78,7 +79,7 @@
 | 400 | `INVALID_REQUEST` | 공통 (반려 코드·사유 누락 포함) | 확정 |
 | 401 | `UNAUTHENTICATED`, `LOGIN_FAILED` | 인증 — `LOGIN_FAILED`는 없는 ID·틀린 비밀번호·비활성·비밀번호 UTF-8 72바이트 초과 모두 같은 응답(04 §3·§7). `UNAUTHENTICATED`는 관리자가 역할 변경·비활성화·초기화로 끊은 세션의 다음 요청도(`UserSessions`) | 확정 [계정·권한 §3, SCRUM-135 ②-b] |
 | 403 | `FORBIDDEN`, `CSRF_INVALID`, `NOT_ASSIGNEE`, `NOT_APPROVER` | 권한 (`NOT_ASSIGNEE`·`NOT_APPROVER`는 `ForbiddenException` 하위) | 확정 [계정·권한 §5, SCRUM-67] |
-| 404 | `NOT_FOUND` | 공통 — 없는 경로(`NotFoundException` 하위가 아님) | 확정 [SCRUM-157] |
+| 404 | `NOT_FOUND` | 공통 — 없는 경로(`NotFoundException` 하위가 아님). 질문 답변이 꺼져 있을 때(`aml.ai.ask-enabled=false`) A8·C9도 이 응답 | 확정 [SCRUM-157 · SCRUM-302] |
 | 405 | `METHOD_NOT_ALLOWED` | 공통 — 안 되는 메서드, `Allow` 헤더 | 확정 [SCRUM-157] |
 | 404 | `CASE_NOT_FOUND`, `USER_NOT_FOUND`, `ALERT_NOT_FOUND`, `BATCH_RUN_NOT_FOUND` | cases·user·detection·batch (`NotFoundException` 하위) | 확정 [예외 클래스 — `CaseNotFoundException`·`UserNotFoundException`·`AlertNotFoundException`·`BatchRunNotFoundException`] |
 | 404 | `DRAFT_NOT_FOUND`, `EVIDENCE_NOT_FOUND`, `RULE_NOT_FOUND` | 각 기능 | 〔초안〕 |
@@ -94,6 +95,7 @@
 | 400·409 | `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
 | 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |
 | 409 | `CASE_ALREADY_OPENED` | detection `MarkCaseOpened` — 이미 케이스가 생긴 경보. 케이스 생성 트랜잭션째 롤백 | 확정 [SCRUM-108] |
+| 429 | `QUESTION_RATE_LIMITED` (`details.retry_after_seconds`) | cases 질문하기(A8) — 한 사람이 최근 60초에 `aml.ai.ask-per-minute`(5)번 이상 물음. `case_questions` 행 수로 셈 | 확정 [계약서 3절 11/19, 설계 문서 13절 6번, SCRUM-302] |
 | 409 | `LOGIN_ID_TAKEN`, `ASSIGNEE_HAS_ACTIVE_CASES` (`details.active_case_count`), `ACCOUNT_CHANGE_NOT_ALLOWED` (`details.reason` = `SELF`·`SYSTEM`) | user 계정 관리 — 아이디 중복(DB unique 위반도 같은 409) · 진행 중 담당이 남은 조사역을 승인자로 · 관리자 본인·SYSTEM 계정 변경 | 확정 [SCRUM-135 ②, 11/10 진희] |
 | 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 실패 — 연결 거부·이름 조회 실패·보낸 뒤 끊김, SCRUM-229), `AI_TIMEOUT`, `AI_BAD_RESPONSE`, `AI_DRAFT_NOT_FOUND`·`AI_INVALID_REQUEST`·`AI_UNAUTHENTICATED`(AI 404·400·401 이름 바꿈, SCRUM-128), `SUMMARY_CODE_CHECK_FAILED` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정. 〔제안〕 `SUMMARY_CODE_CHECK_FAILED` — 요약 응답은 200인데 `code_checks` 중 `match=false`가 있어 저장하지 않음(`details.failed_checks`), 기존 요약 유지 [규약 v0.4 §6.1, RefreshCaseSummary] |
 | 500 | `INTERNAL_ERROR` | 공통 | 확정 |
@@ -190,7 +192,8 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   - AI 스키마와 다르게 두는 곳: 모르는 칸은 받아요(AI 는 거부 — 원칙 4). `produced_at` 은 `Z` 만 받아요(AI 는 시간대가 있으면 받아 UTC 로 바꿈)
   - `ai_call_logs.ai_version` 에 넣는 질문 답변 버전은 문자열이고 64자(칸 길이) 이하일 때만 — 아니면 null(성공·실패 행 둘 다)
   - **목업**(`aml.ai.mock=true`)은 질문 낱말로 상태를 골라요 — 위에서부터 처음 맞는 것: `수정` → OUT_OF_SCOPE·EDIT_REQUEST, `다른 케이스` → OUT_OF_SCOPE·OUTSIDE_CASE, `판단` → OUT_OF_SCOPE·JUDGMENT, `없는` → NO_DATA, `불일치` → UNVERIFIED, `왜` → ANSWERED·WHY, 그 밖 → ANSWERED·FACT. 목업 응답도 위 확인을 통과하는 모양이에요
-  - **켜기 설정** `aml.ai.ask-enabled`(환경 변수 `AML_AI_ASK_ENABLED`, 기본 false) — `AmlProperties.ai().askEnabled()`. 이 칸을 읽고 꺼져 있을 때 어떻게 할지는 cases 유스케이스가 정해요
+  - **켜기 설정** `aml.ai.ask-enabled`(환경 변수 `AML_AI_ASK_ENABLED`, 기본 false) — `AmlProperties.ai().askEnabled()`. 이 칸을 읽고 꺼져 있을 때 어떻게 할지는 cases 유스케이스가 정해요 — 꺼져 있으면 상세에 `ASK_QUESTION` 없음, A8·C9는 404 `NOT_FOUND`(SCRUM-302)
+  - **횟수 한도** `aml.ai.ask-per-minute`(기본 5, 1 이상 — 0 이하면 기동 실패) — `AmlProperties.ai().askPerMinute()`. 세는 쪽은 cases `AskCaseQuestion`(SCRUM-302)
 
 **트랜잭션 패턴 — "DB → HTTP → DB"** 네 군데 [레퍼런스 §8.4]
 1. 점수 요청: `RequestScores` (500개 묶음마다 커밋)
@@ -232,6 +235,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 |---|---|---|
 | 경보 | `ALT-{배치일 YYYYMMDD}-{6자리}` | `ops.alert_no_seq` (V005) |
 | 케이스 | `CASE-{경보 기준 연도}-{6자리}` | `ops.case_no_seq` (V006) |
+| 질문 | `QST-{6자리}` (`QST-000041`) — `case_questions.id` 그대로 [계약서 5.3 A8, SCRUM-302] | 없음 (identity) |
 | 초안 | `DRF-{6자리}` (`DRF-000123`) ✅ [계약서 2.2, 11/4 채영] — 백엔드가 AI 호출 **전에** 시퀀스로 먼저 발급 [안건 23] | `ops.str_draft_id_seq` (V008, 머지됨 #28) |
 
 - 시퀀스는 날짜별로 리셋하지 않아요. `MAX(id)+1` 방식은 금지(두 트랜잭션이 같은 번호를 받을 수 있음).

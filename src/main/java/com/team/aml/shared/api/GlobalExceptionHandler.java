@@ -6,6 +6,7 @@ import com.team.aml.shared.domain.DomainException;
 import com.team.aml.shared.domain.InvalidRequestException;
 import com.team.aml.shared.domain.ForbiddenException;
 import com.team.aml.shared.domain.NotFoundException;
+import com.team.aml.shared.domain.TooManyRequestsException;
 import com.team.aml.shared.metrics.ErrorMetrics;
 import jakarta.persistence.OptimisticLockException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -46,6 +47,7 @@ import java.util.Set;
  *  InvalidRequestException        → 400 INVALID_REQUEST (지금 값과 비교해야 아는 입력 오류, details 그대로 — SCRUM-135 ②)
  *  *NotFoundException              → 404 <CLASS_NAME>
  *  ForbiddenException 하위         → 403 <CLASS_NAME> (역할·담당자 같은 업무 권한, SCRUM-67)
+ *  TooManyRequestsException 하위   → 429 <CLASS_NAME> (기능 규칙의 횟수 제한 — 질문하기, SCRUM-302)
  *  DomainException 나머지          → 409 <CLASS_NAME>
  *  OptimisticLock                  → 409 CONCURRENT_UPDATE
  *  AiClientException               → e.httpStatus() (기본 502 AI 코드 그대로, 409 GENERATION_IN_PROGRESS→DRAFT_IN_PROGRESS, 이름 겹치는 AI 4xx 셋은 AI_ 붙임)
@@ -136,6 +138,13 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> domainForbidden(ForbiddenException e, HttpServletRequest req) {
         warnDenied(e.code(), req);   // 메시지는 찍지 않는다 — 번호·이름이 들어갈 수 있다
         return counted(ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of(e.code(), e.getMessage(), e.details())));
+    }
+
+    @ExceptionHandler(TooManyRequestsException.class)
+    public ResponseEntity<ErrorResponse> tooManyRequests(TooManyRequestsException e) {
+        log.warn("rate limited: {}", e.code());   // 메시지엔 케이스 번호가 있어 찍지 않는다
+        return counted(ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .body(ErrorResponse.of(e.code(), e.getMessage(), e.details())));
     }
 

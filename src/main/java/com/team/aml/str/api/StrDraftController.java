@@ -1,6 +1,7 @@
 package com.team.aml.str.api;
 
 import com.team.aml.str.application.CloseCaseWithStrDraft;
+import com.team.aml.str.application.DownloadStrReportPdf;
 import com.team.aml.str.application.GetStrDraft;
 import com.team.aml.str.application.ListStrRevisions;
 import com.team.aml.str.application.PreviewStrReportPdf;
@@ -32,11 +33,13 @@ public class StrDraftController {
     private final SubmitStrDraft submitStrDraft;
     private final CloseCaseWithStrDraft closeCaseWithStrDraft;
     private final PreviewStrReportPdf previewStrReportPdf;
+    private final DownloadStrReportPdf downloadStrReportPdf;
 
     public StrDraftController(RequestStrDraft requestStrDraft, GetStrDraft getStrDraft,
                               ReviseStrDraft reviseStrDraft, ListStrRevisions listStrRevisions,
                               VerifyStrDraft verifyStrDraft, SubmitStrDraft submitStrDraft,
-                              CloseCaseWithStrDraft closeCaseWithStrDraft, PreviewStrReportPdf previewStrReportPdf) {
+                              CloseCaseWithStrDraft closeCaseWithStrDraft, PreviewStrReportPdf previewStrReportPdf,
+                              DownloadStrReportPdf downloadStrReportPdf) {
         this.requestStrDraft = requestStrDraft;
         this.getStrDraft = getStrDraft;
         this.reviseStrDraft = reviseStrDraft;
@@ -45,6 +48,7 @@ public class StrDraftController {
         this.submitStrDraft = submitStrDraft;
         this.closeCaseWithStrDraft = closeCaseWithStrDraft;
         this.previewStrReportPdf = previewStrReportPdf;
+        this.downloadStrReportPdf = downloadStrReportPdf;
     }
 
     @Operation(summary = "STR 초안 생성·재생성 (최대 90초)",
@@ -139,5 +143,15 @@ public class StrDraftController {
     @GetMapping("/str-drafts/{draftNo}/report/preview.pdf")
     public ResponseEntity<byte[]> previewPdf(@PathVariable String draftNo) {
         return StrPdfResponse.inline(previewStrReportPdf.execute(draftNo));
+    }
+
+    @Operation(summary = "확정본 PDF (S8)",
+            description = "담당 조사역·승인자만(그 밖 403 NOT_ASSIGNEE). 케이스 REPORTED 에서만(아니면 409 INVALID_CASE_TRANSITION, "
+                    + "details.action DOWNLOAD_PDF). 아직 없으면 409 REPORT_PDF_NOT_READY(details.pdf_status PENDING·FAILED — "
+                    + "PENDING 이면 3초마다 다시, FAILED 면 승인자가 P5). 모의 제출 때 만들어 보관한 파일을 그대로 준다. "
+                    + "성공은 200 application/pdf(inline), 열람 기록 PDF_DOWNLOAD")
+    @GetMapping("/str-drafts/{draftNo}/report.pdf")
+    public ResponseEntity<byte[]> reportPdf(@PathVariable String draftNo) {
+        return StrPdfResponse.inline(downloadStrReportPdf.execute(draftNo));
     }
 }

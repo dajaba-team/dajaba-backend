@@ -20,9 +20,26 @@ public enum CaseAction {
     ESCALATE,          // 담당, REVIEWING
     CLOSE,             // 담당, 종결 가능 + 초안 없음 → POST /cases/{case_no}/close
     CLOSE_WITH_DRAFT,  // 담당, 종결 가능 + 초안 있음 → POST /cases/{case_no}/close-with-draft (str)
-    GENERATE_DRAFT;    // 담당, ESCALATED·DRAFTED(재생성)·REJECTED+NEED_REVISION
+    GENERATE_DRAFT,    // 담당, ESCALATED·DRAFTED(재생성)·REJECTED+NEED_REVISION
+    /**
+     * 담당 조사역·승인자, 상태 무관 → POST·GET /cases/{case_no}/questions (계약서 4절·5.3 A8, SCRUM-302).
+     * 켜기 설정(aml.ai.ask-enabled)을 봐야 해서 {@link #availableFor} 에는 넣지 않고, 상세(GetCaseDetail)가 {@link #canAsk} 로 붙인다.
+     */
+    ASK_QUESTION;
 
-    /** 화면에 줄 순서는 enum 순서. 로그인 사용자의 id·역할로 계산한다. */
+    /**
+     * 이 사람이 이 케이스 근거에 물을 수 있나 (설계 문서 7.2) — 승인자는 어느 케이스든(담당자 없는 OPEN 포함),
+     * 조사역은 지금 담당일 때만, 관리자는 안 된다. 상태는 보지 않는다. A8·C9 권한 검사와 버튼이 같은 규칙.
+     */
+    public static boolean canAsk(Case c, long viewerId, Role viewerRole) {
+        return switch (viewerRole) {
+            case APPROVER -> true;
+            case INVESTIGATOR -> Objects.equals(c.getAssigneeId(), viewerId);
+            default -> false;
+        };
+    }
+
+    /** 화면에 줄 순서는 enum 순서. 로그인 사용자의 id·역할로 계산한다. ASK_QUESTION 은 넣지 않는다(위 참고). */
     public static List<CaseAction> availableFor(Case c, long viewerId, Role viewerRole) {
         List<CaseAction> actions = new ArrayList<>();
         CaseStatus status = c.getStatus();

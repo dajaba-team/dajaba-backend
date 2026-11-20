@@ -547,8 +547,16 @@ class GetStrDraftDbTest {
         login(admin, "ADMIN");
         assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
 
-        caseState(caseId, "REPORTED", null);                  // 제출 뒤 — 끝 상태
+        caseState(caseId, "REPORTED", null);                  // 제출 뒤 — 끝 상태, 확정본(S8)만
         login(approver, "APPROVER");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("DOWNLOAD_PDF");
+        login(otherApprover, "APPROVER");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("DOWNLOAD_PDF");
+        login(investigator, "INVESTIGATOR");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("DOWNLOAD_PDF");
+        login(otherInvestigator, "INVESTIGATOR");             // S8 이 403 인 사람에겐 버튼도 없다
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
+        login(admin, "ADMIN");
         assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
     }
 
