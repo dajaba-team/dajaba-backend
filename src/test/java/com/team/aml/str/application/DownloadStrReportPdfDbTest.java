@@ -9,6 +9,7 @@ import com.team.aml.shared.domain.DisplayNumber;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.str.domain.NarrativeHash;
 import com.team.aml.str.domain.ReportPdfNotReadyException;
+import com.team.aml.str.domain.ReportPdfStorage;
 import com.team.aml.str.domain.StrDraftRepository;
 import com.team.aml.str.domain.StrDraftRequest;
 import com.team.aml.str.domain.StrDraftRequestRepository;
@@ -22,12 +23,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -35,13 +38,17 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -87,6 +94,7 @@ class DownloadStrReportPdfDbTest {
     @Autowired StrDraftRepository drafts;
     @Autowired JdbcTemplate jdbc;
     @Autowired TransactionTemplate tx;
+    @SpyBean ReportPdfStorage storage;
     @Value("${aml.str.pdf.storage-dir}") String storageDir;
 
     long investigator;
@@ -166,6 +174,36 @@ class DownloadStrReportPdfDbTest {
 
         assertThatThrownBy(() -> download.execute(DisplayNumber.draftNo(draftId))).isInstanceOf(IllegalStateException.class);
         assertThat(pdfDownloads(draftId)).isZero();
+    }
+
+    // 4-1 (#154 리뷰)
+    @Test
+    void 실패_보관본이_없으면_500이고_기록_없음() throws IOException {
+        long draftId = reportedDraft();
+        generate.execute(draftId);
+        Files.delete(Path.of(storageDir).resolve((String) pdfRow(draftId).get("pdf_storage_key")));
+        login(approver, "APPROVER");
+
+        assertThatThrownBy(() -> download.execute(DisplayNumber.draftNo(draftId))).isInstanceOf(UncheckedIOException.class);
+        assertThat(pdfDownloads(draftId)).isZero();
+    }
+
+    // 4-2 (#154 리뷰) — 보관소가 MinIO 로 바뀌어도 네트워크 호출 동안 DB 연결을 잡지 않게
+    @Test
+    void 정상_보관본은_트랜잭션_밖에서_읽는다() {
+        long draftId = reportedDraft();
+        generate.execute(draftId);
+        AtomicBoolean inTx = new AtomicBoolean(true);
+        doAnswer(inv -> {
+            inTx.set(TransactionSynchronizationManager.isActualTransactionActive());
+            return inv.callRealMethod();
+        }).when(storage).get(anyString());
+        login(approver, "APPROVER");
+
+        download.execute(DisplayNumber.draftNo(draftId));
+
+        assertThat(inTx).isFalse();
+        assertThat(pdfDownloads(draftId)).isEqualTo(1);
     }
 
     // 5
