@@ -516,24 +516,28 @@ public class RuleScanJdbcRepository implements RuleScanRepository {
         // — 9/2 63.4초 → 15.7초. 실행 방법만 바꾸는 설정이라 결과는 같다. set local 은 이 트랜잭션 안에서만이고, 끝나면 기본값으로 돌린다
         // (같은 스캔의 다음 룰 쿼리는 원래 설정). 중간에 실패하면 트랜잭션이 롤백되며 같이 사라진다.
         jdbc.execute("set local enable_mergejoin = off");
-        jdbc.query(con -> {
-            PreparedStatement ps = con.prepareStatement(CYCLES_GROUPED);
-            ps.setFetchSize(CYCLE_FETCH_SIZE);
-            new ArgumentPreparedStatementSetter(args).setValues(ps);
-            return ps;
-        }, (RowCallbackHandler) rs -> {
-            CyclePath p = cyclePath(rs);
-            if (!current.isEmpty() && !(current.get(0).accountKey().equals(p.accountKey())
-                    && current.get(0).closeMinute().equals(p.closeMinute()))) {
+        try {
+            jdbc.query(con -> {
+                PreparedStatement ps = con.prepareStatement(CYCLES_GROUPED);
+                ps.setFetchSize(CYCLE_FETCH_SIZE);
+                new ArgumentPreparedStatementSetter(args).setValues(ps);
+                return ps;
+            }, (RowCallbackHandler) rs -> {
+                CyclePath p = cyclePath(rs);
+                if (!current.isEmpty() && !(current.get(0).accountKey().equals(p.accountKey())
+                        && current.get(0).closeMinute().equals(p.closeMinute()))) {
+                    group.accept(List.copyOf(current));
+                    current.clear();
+                }
+                current.add(p);
+            });
+            if (!current.isEmpty()) {
                 group.accept(List.copyOf(current));
-                current.clear();
             }
-            current.add(p);
-        });
-        if (!current.isEmpty()) {
-            group.accept(List.copyOf(current));
+        } finally {
+
+            jdbc.execute("set local enable_mergejoin to default");
         }
-        jdbc.execute("set local enable_mergejoin to default");
     }
 
     private static CyclePath cyclePath(ResultSet rs) throws SQLException {
