@@ -1,0 +1,153 @@
+{
+  "uid": "cases",
+  "title": "CASES",
+  "description": "목록·상세 응답 시간 · 동시 수정 충돌 · AI 조사 요약 실패 (docs/06_features/cases.md 지표, SCRUM-276)",
+  "tags": [
+    "backend",
+    "cases"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "목록·상세 p95 응답 시간",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{job=\"app\", method=\"GET\", uri=~\"/api/v1/cases|/api/v1/cases/[{]caseNo[}]\"}[5m])))",
+          "legendFormat": "{{uri}}"
+        }
+      ],
+      "description": "C1 목록(/api/v1/cases)·C2 상세(/api/v1/cases/{caseNo}). 공통 HTTP 지표(SCRUM-271)를 그대로 쓴다 — 전용 Timer 없음"
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "목록·상세 요청 수 (초당, 상태별)",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (uri, status) (rate(http_server_requests_seconds_count{job=\"app\", method=\"GET\", uri=~\"/api/v1/cases|/api/v1/cases/[{]caseNo[}]\"}[5m]))",
+          "legendFormat": "{{uri}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "동시 수정 충돌 (CONCURRENT_UPDATE, 동작별)",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (action) (increase(aml_cases_conflicts_total{job=\"app\"}[5m]))",
+          "legendFormat": "{{action}}"
+        }
+      ],
+      "description": "케이스 변경 API 가 409 CONCURRENT_UPDATE 로 끝난 건수. 다른 409(INVALID_CASE_TRANSITION 등)는 안 섞인다 — 그건 「백엔드 공통」 에러 코드별 건수"
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "AI 조사 요약 실패 (단계·이유별)",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (stage, reason) (increase(aml_cases_summary_failures_total{job=\"app\"}[5m]))",
+          "legendFormat": "{{stage}} {{reason}}"
+        }
+      ],
+      "description": "A7 요약 갱신이 저장하지 못한 건수. AI_CALL = AI 호출 실패(AI 코드), RESPONSE_CHECK = 응답 확인 실패, SAVE = 저장 단계 다시 검사(version·입력 해시·담당·상태)"
+    }
+  ]
+}
