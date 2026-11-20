@@ -22,13 +22,16 @@ import com.team.aml.str.domain.NarrativeSection;
 import com.team.aml.str.domain.StrDraft;
 import com.team.aml.str.domain.StrDraftRepository;
 import com.team.aml.str.domain.StrDraftStatus;
+import com.team.aml.str.domain.StrReport;
 import com.team.aml.str.domain.StrReportRepository;
 import com.team.aml.user.domain.Role;
 import com.team.aml.user.domain.User;
 import com.team.aml.user.domain.UserRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -57,11 +60,13 @@ public class GetStrDraft {
     private final UserRepository users;
     private final WasCaseAssignee wasCaseAssignee;
     private final StrReportRepository reports;
+    private final Duration staleAfter;
 
     public GetStrDraft(StrDraftRepository drafts, CaseRepository cases, LatestVerificationRepository verifications,
                        CurrentUser currentUser, AccessLogWriter accessLog, CurrentNarrative currentNarrative,
                        ApprovalRepository approvals, UserRepository users, WasCaseAssignee wasCaseAssignee,
-                       StrReportRepository reports) {
+                       StrReportRepository reports,
+                       @Value(StrReportPdfAccess.STALE_PENDING_AFTER) Duration staleAfter) {
         this.drafts = drafts;
         this.cases = cases;
         this.verifications = verifications;
@@ -72,6 +77,7 @@ public class GetStrDraft {
         this.users = users;
         this.wasCaseAssignee = wasCaseAssignee;
         this.reports = reports;
+        this.staleAfter = staleAfter;
     }
 
     /** readOnly 아님 — accessLog.strView 가 MANDATORY·쓰기 트랜잭션을 요구한다. */
@@ -91,12 +97,18 @@ public class GetStrDraft {
         // 예전 담당 조회는 버튼이 걸린 경우(승인자 + 승인 대기)에만 — 그 밖엔 결과가 같아 쿼리를 아낀다
         boolean wasAssignee = role == Role.APPROVER && c.getStatus() == CaseStatus.PENDING_APPROVAL
                 && wasCaseAssignee.execute(c.getId(), me.userId());
-        // 승인한 사람 조회도 버튼이 걸린 경우(승인자 + 승인됨 + 잠긴 초안)에만 — 확정 보고서 created_by = 승인자
-        boolean approvedByMe = role == Role.APPROVER && c.getStatus() == CaseStatus.APPROVED
+        // 확정 보고서 조회는 버튼이 걸린 경우(승인자 + 승인됨·보고됨 + 잠긴 초안)에만 — 승인한 사람인지는 읽어 봐야 안다.
+        // APPROVED 는 REPORT(승인한 사람), REPORTED 는 REGENERATE_PDF(승인한 사람 + 다시 만들 수 있는 상태)에만 쓴다
+        Optional<StrReport> report = role == Role.APPROVER
+                && (c.getStatus() == CaseStatus.APPROVED || c.getStatus() == CaseStatus.REPORTED)
                 && draft.getStatus() == StrDraftStatus.LOCKED
-                && reports.findByDraftId(draftId).map(r -> Objects.equals(r.getCreatedBy(), me.userId())).orElse(false);
+                ? reports.findByDraftId(draftId) : Optional.empty();
+        boolean approvedByMe = c.getStatus() == CaseStatus.APPROVED
+                && report.map(r -> r.isApprovedBy(me.userId())).orElse(false);
+        boolean canRegenerate = c.getStatus() == CaseStatus.REPORTED && report
+                .map(r -> StrReportPdfAccess.canRegenerate(role, r, me.userId(), Instant.now(), staleAfter)).orElse(false);
         List<String> actions = StrDraftActions.of(draftId, draft.getStatus(), c, me.userId(), role, wasAssignee,
-                approvedByMe);
+                approvedByMe, canRegenerate);
         return Result.full(draft, c, verification, currentNarrative.of(draft), lastRejection, actions);
     }
 

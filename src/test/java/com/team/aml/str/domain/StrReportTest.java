@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -19,6 +20,8 @@ class StrReportTest {
     private static final ObjectMapper OM = new ObjectMapper();
     private static final Instant APPROVED_AT = Instant.parse("2026-11-17T05:00:00Z");   // 서울 11-17(화) 14:00
     private static final Instant DUE_AT = Instant.parse("2026-11-20T14:59:59Z");        // 서울 11-20(금) 23:59:59
+    private static final Instant NOW = Instant.parse("2026-11-18T03:00:00Z");
+    private static final Duration STALE = Duration.ofMinutes(10);
     private static final String SHA = "b".repeat(64);
 
     private static StrDraft newDraft() {
@@ -291,7 +294,7 @@ class StrReportTest {
         assertThat(r.getPdfFailureCode()).isEqualTo("RENDER_ERROR");
         assertThat(r.isReported()).isTrue();   // 제출은 되돌리지 않는다
 
-        r.retryPdf();
+        assertThat(r.retryPdf(NOW, STALE)).isEqualTo("RENDER_ERROR");   // 직전 실패 이유를 돌려준다(DB 칸은 비움)
         assertThat(r.getPdfStatus()).isEqualTo(ReportPdfStatus.PENDING);
         assertThat(r.getPdfFailureCode()).isNull();
 
@@ -323,14 +326,14 @@ class StrReportTest {
         StrReport ready = reportedReport();
         ready.pdfReady("k", SHA, 1L, "tpl_v1", Instant.parse("2026-11-18T03:00:00Z"));
 
-        assertThatThrownBy(pending::retryPdf)
+        assertThatThrownBy(() -> pending.retryPdf(NOW, STALE))
                 .isInstanceOfSatisfying(ReportPdfRetryNotAllowedException.class, e -> {
                     assertThat(e.code()).isEqualTo("INVALID_CASE_TRANSITION");
                     assertThat(e.details()).containsEntry("action", "REGENERATE_PDF")
                             .containsEntry("draft_no", "DRF-000100")
                             .containsEntry("pdf_status", "PENDING");
                 });
-        assertThatThrownBy(ready::retryPdf)
+        assertThatThrownBy(() -> ready.retryPdf(NOW, STALE))
                 .isInstanceOfSatisfying(ReportPdfRetryNotAllowedException.class,
                         e -> assertThat(e.details()).containsEntry("pdf_status", "READY"));
     }
@@ -341,7 +344,7 @@ class StrReportTest {
         StrReport r = approvedReport();
 
         assertThatThrownBy(r::requirePdfReady).isInstanceOf(IllegalStateException.class);
-        assertThatThrownBy(r::retryPdf).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> r.retryPdf(NOW, STALE)).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> r.pdfFailed("X")).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> r.pdfReady("k", SHA, 1L, "tpl_v1", Instant.now())).isInstanceOf(IllegalStateException.class);
     }
@@ -358,5 +361,39 @@ class StrReportTest {
         r.pdfReady("k", SHA, 1L, "tpl_v1", Instant.parse("2026-11-18T03:00:00Z"));
         assertThatThrownBy(() -> r.pdfFailed("X")).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> r.pdfReady("k", SHA, 1L, "tpl_v1", Instant.now())).isInstanceOf(IllegalStateException.class);
+    }
+
+    // 18
+    @Test
+    void 정상_PENDING이_오래되면_다시_만들_수_있고_끊긴_시도도_센다() {   // 만드는 도중 서버가 죽음 (11/20 코드 리뷰)
+        StrReport r = reportedReport();
+        ReflectionTestUtils.setField(r, "updatedAt", NOW.minus(STALE));               // PENDING 이 된 지 딱 10분
+
+        assertThat(r.isPdfRetryable(NOW, STALE)).isTrue();
+        assertThat(r.retryPdf(NOW, STALE)).isEqualTo(StrReport.STALE_PENDING);
+        assertThat(r.getPdfStatus()).isEqualTo(ReportPdfStatus.PENDING);
+        assertThat(r.getPdfAttempts()).isEqualTo(1);                                    // 다음 보관 키는 -2.pdf
+    }
+
+    // 19
+    @Test
+    void 경계_PENDING이_아직_새것이면_다시_만들기는_409() {
+        StrReport r = reportedReport();
+        ReflectionTestUtils.setField(r, "updatedAt", NOW.minus(STALE).plusSeconds(1));  // 9분 59초
+
+        assertThat(r.isPdfRetryable(NOW, STALE)).isFalse();
+        assertThatThrownBy(() -> r.retryPdf(NOW, STALE)).isInstanceOf(ReportPdfRetryNotAllowedException.class);
+        assertThat(r.getPdfAttempts()).isZero();
+    }
+
+    // 20
+    @Test
+    void 정상_승인한_사람인지는_created_by_한_곳으로_본다() {   // P4·P5·버튼이 같이 쓴다
+        StrReport r = approvedReport();
+        ReflectionTestUtils.setField(r, "createdBy", 21L);
+
+        assertThat(r.isApprovedBy(21L)).isTrue();
+        assertThat(r.isApprovedBy(22L)).isFalse();
+        assertThat(approvedReport().isPdfRetryable(NOW, STALE)).isFalse();             // 제출 전엔 PDF 가 없다
     }
 }

@@ -23,7 +23,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.Objects;
 
 /**
  * STR 모의 제출 (계약서 P4, SCRUM-240). 실제 기관 전송은 없다 — 승인된 보고서를 "제출됨"으로 기록한다.
@@ -108,7 +107,7 @@ public class ReportStrDraft {
 
     /** 확정 보고서를 만든 사람(= 승인자, created_by)이 지금 사용자인가. 아니면 403 NOT_DRAFT_APPROVER. */
     private static void requireApprovedBy(StrReport report, AppUserDetails me) {
-        if (!Objects.equals(report.getCreatedBy(), me.userId())) {
+        if (!report.isApprovedBy(me.userId())) {
             throw new NotDraftApproverException();
         }
     }
