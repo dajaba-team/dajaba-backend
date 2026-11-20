@@ -40,6 +40,7 @@ class AmlPropertiesDefaultsTest {
             assertThat(ai.askTimeoutSeconds()).as(profile).isEqualTo(30);
             assertThat(ai.timeoutSeconds()).as(profile).isEqualTo(90);
             assertThat(ai.maxBatch()).as(profile).isEqualTo(500);
+            assertThat(ai.askPerMinute()).as(profile).isEqualTo(5);   // SCRUM-302
         }
     }
 
@@ -54,6 +55,7 @@ class AmlPropertiesDefaultsTest {
         AmlProperties props = Binder.get(env).bind("aml", AmlProperties.class).get();
         assertThat(props.ai().askTimeoutSeconds()).isEqualTo(30);
         assertThat(props.ai().askEnabled()).isFalse();
+        assertThat(props.ai().askPerMinute()).isEqualTo(5);
         assertThat(props.ai().timeoutSeconds()).isEqualTo(90);   // SCRUM-321 — 칸이 빠져도 0 이 아니라 90·500
         assertThat(props.ai().maxBatch()).isEqualTo(500);
     }
@@ -99,6 +101,15 @@ class AmlPropertiesDefaultsTest {
         assertThatThrownBy(() -> ai("local", Map.of(envName, "0")))
                 .isInstanceOf(BindException.class)
                 .rootCause().hasMessageContaining(key);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "ask-per-minute=\"{0}\"")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"0", "-1"})
+    void 실패_ask_per_minute가_0_이하면_묶기에_실패한다(String value) {   // 0 이면 아무도 못 묻는데 버튼은 보인다 (SCRUM-302)
+        MockEnvironment env = new MockEnvironment().withProperty("aml.ai.ask-per-minute", value);
+        assertThatThrownBy(() -> Binder.get(env).bind("aml", AmlProperties.class))
+                .isInstanceOf(BindException.class)
+                .rootCause().hasMessageContaining("ask-per-minute");
     }
 
     @org.junit.jupiter.params.ParameterizedTest(name = "ask-timeout-seconds=\"{0}\"")

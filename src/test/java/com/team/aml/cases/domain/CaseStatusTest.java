@@ -223,9 +223,10 @@ class CaseStatusTest {
             for (RejectionReasonCode code : codes) {
                 String key = status + (code == null ? "" : "+" + code);
                 for (CaseAction action : CaseAction.values()) {
+                    // ASK_QUESTION 은 조회만이라 모든 상태에서 참 — 누가는 CaseAction.canAsk (SCRUM-302)
                     assertThat(status.allows(action, code))
                             .as(key + ":" + action)
-                            .isEqualTo(allowed.contains(key + ":" + action));
+                            .isEqualTo(action == CaseAction.ASK_QUESTION || allowed.contains(key + ":" + action));
                 }
             }
         }

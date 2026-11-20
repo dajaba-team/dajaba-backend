@@ -20,6 +20,7 @@ import com.team.aml.detection.application.GetAlertSummary;
 import com.team.aml.detection.domain.AlertSummary;
 import com.team.aml.shared.audit.AccessLogWriter;
 import com.team.aml.shared.audit.TargetType;
+import com.team.aml.shared.config.AmlProperties;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.shared.security.CurrentUser;
 import com.team.aml.user.domain.Role;
@@ -93,11 +94,12 @@ public class GetCaseDetail {
     private final GetCaseSummary caseSummary;
     private final CaseNotes notes;
     private final CaseTransactions transactions;
+    private final AmlProperties properties;
 
     public GetCaseDetail(CaseRepository cases, CaseHistoryRepository histories, UserRefs userRefs,
                          AccessLogWriter accessLog, CurrentUser currentUser, GetAlertSummary alertSummary,
                          CasePolicySource policySource, GetCaseSummary caseSummary, CaseNotes notes,
-                         CaseTransactions transactions) {
+                         CaseTransactions transactions, AmlProperties properties) {
         this.cases = cases;
         this.histories = histories;
         this.userRefs = userRefs;
@@ -108,6 +110,7 @@ public class GetCaseDetail {
         this.caseSummary = caseSummary;
         this.notes = notes;
         this.transactions = transactions;
+        this.properties = properties;
     }
 
     @Transactional
@@ -124,7 +127,11 @@ public class GetCaseDetail {
         List<History> history = recent.stream().map(h -> new History(h.getAction(), h.getFromStatus(), h.getToStatus(),
                 h.getReasonCode(), h.getComment(), loginIdOf(refs.get(h.getCreatedBy())),
                 h.getCreatedAt().truncatedTo(ChronoUnit.SECONDS))).toList();
-        List<CaseAction> actions = CaseAction.availableFor(c, me.userId(), Role.valueOf(me.role()));
+        List<CaseAction> actions = new ArrayList<>(CaseAction.availableFor(c, me.userId(), Role.valueOf(me.role())));
+        // 질문 답변 — 켜져 있고 담당 조사역·승인자일 때만. 목록 한 줄에는 붙이지 않는다(계약서 C2, SCRUM-302)
+        if (properties.ai().askEnabled() && CaseAction.canAsk(c, me.userId(), Role.valueOf(me.role()))) {
+            actions.add(CaseAction.ASK_QUESTION);
+        }
         AlertSummary a = alertSummary.execute(c.getAlertId());   // alert_id 는 FK·NOT NULL 이라 늘 있다
         AlertSummary.Score s = a.score();
         ScoreClassification band = classify(s.score());

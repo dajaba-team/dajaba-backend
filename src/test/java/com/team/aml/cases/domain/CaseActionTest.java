@@ -122,4 +122,35 @@ class CaseActionTest {
         assertThatThrownBy(() -> c.closeWithoutDraft(INV, CloseReason.NO_ACTION, "종료"))
                 .isInstanceOf(InvalidCaseTransitionException.class);
     }
+
+    // ── 질문 답변 ASK_QUESTION (설계 문서 7.2, SCRUM-302) ─────────────
+
+    @Test
+    void canAsk_승인자는_어느_케이스든_조사역은_지금_담당만_관리자는_안_된다() {
+        for (Case c : java.util.List.of(opened(), reviewing(), escalated(), drafted(),
+                rejected(RejectionReasonCode.NOT_REPORTABLE))) {
+            assertThat(CaseAction.canAsk(c, APR, Role.APPROVER)).as(c.getStatus().name()).isTrue();
+            assertThat(CaseAction.canAsk(c, ADMIN, Role.ADMIN)).as(c.getStatus().name()).isFalse();
+            assertThat(CaseAction.canAsk(c, INV_B, Role.INVESTIGATOR)).as(c.getStatus().name()).isFalse();
+        }
+        assertThat(CaseAction.canAsk(opened(), INV, Role.INVESTIGATOR)).isFalse();   // 담당자 없는 OPEN
+        assertThat(CaseAction.canAsk(reviewing(), INV, Role.INVESTIGATOR)).isTrue();
+        assertThat(CaseAction.canAsk(rejected(RejectionReasonCode.NOT_REPORTABLE), INV, Role.INVESTIGATOR)).isTrue();
+    }
+
+    @Test
+    void ASK_QUESTION은_availableFor에_들어가지_않는다_켜기_설정을_보는_상세가_붙인다() {
+        assertThat(CaseAction.availableFor(reviewing(), INV, Role.INVESTIGATOR)).doesNotContain(ASK_QUESTION);
+        assertThat(CaseAction.availableFor(drafted(), APR, Role.APPROVER)).doesNotContain(ASK_QUESTION);
+    }
+
+    @Test
+    void ASK_QUESTION은_모든_상태에서_상태_표가_막지_않는다() {
+        for (CaseStatus status : CaseStatus.values()) {
+            for (RejectionReasonCode code : new RejectionReasonCode[]{null, RejectionReasonCode.NEED_REVISION,
+                    RejectionReasonCode.NOT_REPORTABLE}) {
+                assertThat(status.allows(ASK_QUESTION, code)).as(status + " " + code).isTrue();
+            }
+        }
+    }
 }

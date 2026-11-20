@@ -49,6 +49,7 @@ import java.util.List;
  *  GET  /api/v1/approvals/**                     → ADMIN·APPROVER (10/29)
  *  POST /api/v1/approvals/**                     → APPROVER
  *  POST /api/v1/cases/{case_no}/reassign        → ADMIN (권한 표 7, SCRUM-177)
+ *  /api/v1/cases/{case_no}/questions (A8·C9)    → INVESTIGATOR·APPROVER (설계 문서 7.2, SCRUM-302). 담당 여부는 유스케이스
  *  /api/**                                       → 로그인만
  *  그 외                                         → 거부
  * "담당 케이스만" 같은 객체 규칙은 여기서 못 막는다 → 유스케이스 안에서 (NotAssigneeException 403, SelfApprovalException 409).
@@ -106,6 +107,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/approvals/**").hasAnyRole("ADMIN", "APPROVER")
                 .requestMatchers("/api/v1/approvals/**").hasRole("APPROVER")
                 .requestMatchers(HttpMethod.POST, "/api/v1/cases/*/reassign").hasRole("ADMIN")   // 권한 표 7 (SCRUM-177)
+                .requestMatchers("/api/v1/cases/*/questions").hasAnyRole("INVESTIGATOR", "APPROVER")   // 질문 답변 — 관리자 403 (SCRUM-302)
                 .requestMatchers("/api/**").authenticated()
                 .anyRequest().denyAll())
             .sessionManagement(s -> s
