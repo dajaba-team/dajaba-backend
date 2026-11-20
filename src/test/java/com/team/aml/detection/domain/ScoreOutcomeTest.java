@@ -39,7 +39,8 @@ class ScoreOutcomeTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"TRANSACTION_NOT_FOUND", "HISTORY_NOT_SUPPORTED", "REQUIRED_INPUT_MISSING", "COMPUTE_ERROR"})
+    @ValueSource(strings = {"TRANSACTION_NOT_FOUND", "HISTORY_NOT_SUPPORTED", "REQUIRED_INPUT_MISSING", "COMPUTE_ERROR",
+            "RULE_NOT_SUPPORTED"})
     void FAILED는_코드를_그대로_다시_보내는_건_COMPUTE_ERROR만(String code) {
         ScoreOutcome o = ScoreOutcome.of(item("FAILED", null, null, code, META, AT));
 
@@ -49,7 +50,7 @@ class ScoreOutcomeTest {
     }
 
     @Test
-    void FAILED인데_코드가_없거나_모르는_값이면_코드_없음_다시_보낼_대상() {   // DB CHECK 4값 밖은 넣지 않는다
+    void FAILED인데_코드가_없거나_모르는_값이면_코드_없음_다시_보낼_대상() {   // DB CHECK 5값 밖은 넣지 않는다
         assertThat(ScoreOutcome.of(item("FAILED", null, null, null, META, AT)).failureCode()).isNull();
         ScoreOutcome unknown = ScoreOutcome.of(item("FAILED", null, null, "NEW_CODE", META, AT));
         assertThat(unknown.failureCode()).isNull();

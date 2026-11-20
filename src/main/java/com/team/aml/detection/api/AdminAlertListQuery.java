@@ -29,7 +29,8 @@ public record AdminAlertListQuery(
     public enum ScoreStatus { PENDING, SCORED, FAILED }
 
     /** alerts.score_failure_code (V005 CHECK). */
-    public enum ScoreFailureCode { TRANSACTION_NOT_FOUND, HISTORY_NOT_SUPPORTED, REQUIRED_INPUT_MISSING, COMPUTE_ERROR }
+    public enum ScoreFailureCode { TRANSACTION_NOT_FOUND, HISTORY_NOT_SUPPORTED, REQUIRED_INPUT_MISSING, COMPUTE_ERROR,
+        RULE_NOT_SUPPORTED }
 
     AlertReviewFilter toFilter() {
         return new AlertReviewFilter(date, ruleId, scoreStatus == null ? null : scoreStatus.name(),

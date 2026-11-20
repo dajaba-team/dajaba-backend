@@ -77,8 +77,9 @@ DB 구조는 **Flyway SQL 파일만이 정답**이에요. JPA가 테이블을 �
 | V015 | `str_reports` 확정 보고서 — 문서번호(`ops.str_report_no_seq`, `STR-{연도}-{6자리}`)·승인 시각·마감(`report_due_at`)·제출(`reported_at`·`reported_by`·`late`)·의심 유형·정도 스냅샷·서식 스냅샷(`form_snapshot`)·PDF(상태 PENDING/READY/FAILED, 보관 키·SHA-256·템플릿 버전). `approvals (draft_id, id)` unique 추가(복합 FK 대상). 지우기 회수 (서식 안건 1·2·5-2·5-3, 10/30 결정) | 채영 | W5 (11/17) | 예약 (11/17 #개발) | — |
 | V016 | 룰 시드 — `R01_FAN_OUT`·`R03_FX_RELAY`·`R04_CYCLE`·`R05_SCATTER_GATHER`·`R06_GATHER_SCATTER` 버전 1, rules.md v2 `params` 그대로, 켬. 구현 전 룰은 `RuleScanner`가 임시로 건너뜀(마지막 룰 R03 PR에서 되돌림) | 준혁 (SCRUM-260) | W5 (11/17) | 예약 (11/17 #개발, V015 뒤에 머지) | — |
 | V017 | `case_questions` 질문 답변 기록 — 추가만(UPDATE·DELETE 회수), 상태 4종·범위 밖 사유·답·근거 거래 CHECK, `(case_id, created_at desc, id desc)`·`(created_by, created_at)` 인덱스 | 지윤 (SCRUM-302) | W5 (11/19) | PR #150 (11/19 #개발 예약, V016 뒤에 머지) | — |
+| V018 | `alerts.score_failure_code` CHECK를 지우고 다시 넣어 `RULE_NOT_SUPPORTED` 추가(5값) — 모델이 점수를 내지 않는 룰, 재처리 안 함 (ML 규약 v0.4 11/19, AI #81) | 준혁 (SCRUM-326) | W5 (11/20) | 예약 (11/20 #개발, V017 뒤에 머지) | — |
 
-**머지 순서**: V004_1 → V004_2 → V004_3 → V005 → V005_1 → V005_2 → V006 → V008 → V009 → V010 → V011 → V012 → V013 → V014 → V015 → V016 → V017
+**머지 순서**: V004_1 → V004_2 → V004_3 → V005 → V005_1 → V005_2 → V006 → V008 → V009 → V010 → V011 → V012 → V013 → V014 → V015 → V016 → V017 → V018
 
 - **왜 이 순서** — `ai_call_logs`·`access_logs`는 탐지·케이스 테이블을 참조하지 않아서 V005 앞으로 당겼어요. 진희 PR이 준혁님 V005·지윤님 V006을 기다리지 않아도 돼요. 거의 다 된 `ai_call_logs`를 앞(4_2), 아직 안 만든 `access_logs`를 뒤(4_3)로 둬서 준비된 것부터 들어가요. 진희 파일이 늦어 V005를 막으면 §1 양보 규칙대로 진희가 옮겨요.
 - **`alert_scores`가 V005_1인 이유** — V005 바로 뒤라 채영님 V008·V009를 기다리지 않아요.

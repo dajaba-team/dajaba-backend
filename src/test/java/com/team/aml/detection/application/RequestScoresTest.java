@@ -194,6 +194,29 @@ class RequestScoresTest {
     }
 
     @Test
+    void RULE_NOT_SUPPORTED는_코드와_같이_남기고_배치는_성공_다시_눌러도_보내지_않는다() {   // ML 규약 v0.4 11/19, SCRUM-326
+        LocalDate d = newDate();
+        long run = scanned(d);
+        long ok = alert(run, d), unsupported = alert(run, d);
+        answers.put(alertNo(unsupported), "FAILED:RULE_NOT_SUPPORTED");
+
+        ScoreBatchResult first = runOnce(d);
+
+        assertThat(first.run().status()).isEqualTo(BatchStatus.SUCCEEDED);   // 다시 보낼 실패 없음
+        assertThat(first.summary().retryableFailed()).isZero();
+        assertThat(state(ok)).isEqualTo("SCORED/-");
+        assertThat(state(unsupported)).isEqualTo("FAILED/RULE_NOT_SUPPORTED");
+        assertThat(scoreRows(unsupported)).isZero();   // 0점·LOW 로 바꾸지 않음
+
+        answers.clear();
+        sent.clear();
+        runOnce(d);
+
+        assertThat(sent).isEmpty();   // 다시 보내도 같은 결과라 안 보냄
+        assertThat(state(unsupported)).isEqualTo("FAILED/RULE_NOT_SUPPORTED");
+    }
+
+    @Test
     void 묶음_호출이_실패하면_그_묶음만_FAILED_코드없음_앞_묶음은_그대로() {   // 11-2
         LocalDate d = newDate();
         long run = scanned(d);

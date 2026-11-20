@@ -39,7 +39,7 @@ public final class AiDtos {
      * `alert_scores` 한 행을 이 record 하나로 채운다. 같은 묶음 항목은 같은 `meta` 객체를 공유한다.
      *
      * - `score_band` 는 없다 — AI 가 주지 않고 cases `CasePolicy` 가 계산(안건 2).
-     * - 항목 실패는 `dataQualityStatus="FAILED"` + `score`·`predictionId` null + `failureCode`(4값). SCORED/FAILED
+     * - 항목 실패는 `dataQualityStatus="FAILED"` + `score`·`predictionId` null + `failureCode`(5값). SCORED/FAILED
      *   판단은 `dataQualityStatus` 로 [10/29 SCRUM-41].
      * - `reasons` 는 JsonNode — 저장·초안 요청에 그대로 넘기기만 함(원칙 4).
      * - `raw` 는 응답 항목 원문(`scoring_meta`·`produced_at` 없음).

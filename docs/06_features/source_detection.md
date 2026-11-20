@@ -129,7 +129,7 @@
   - 점수가 있으면(`OK`·`SHORT_HISTORY`·`MISSING_INPUT`) `alert_scores` 한 행 + `SCORED`. 이력 부족·일부 결측도 **실패가 아니에요**.
   - 항목이 `FAILED`면 `score_status = FAILED` + `score_failure_code` 저장, `alert_scores` 행은 만들지 않아요. 없는 거래 ID도 그 경보만 이렇게 와요(HTTP 200, 나머지는 정상).
   - 응답에 그 `alert_id`가 없거나 묶음 호출이 실패하면(503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`은 1회 재시도 뒤) `FAILED` + 코드 NULL. JSON 형식 오류는 요청 전체 400.
-  - `failure_code` 4값 — `TRANSACTION_NOT_FOUND`·`HISTORY_NOT_SUPPORTED`·`REQUIRED_INPUT_MISSING`은 다시 보내도 같은 결과라 재처리하지 않아요. `COMPUTE_ERROR`만 재처리.
+  - `failure_code` 5값 — `TRANSACTION_NOT_FOUND`·`HISTORY_NOT_SUPPORTED`·`REQUIRED_INPUT_MISSING`·`RULE_NOT_SUPPORTED`(모델이 점수를 내지 않는 룰 — 11/19 ML 규약 v0.4, rc1은 R03·R05·R06, V018·SCRUM-326)는 다시 보내도 같은 결과라 재처리하지 않아요. `COMPUTE_ERROR`만 재처리.
 - **FAILED는 저위험이 아니에요.** 0점·LOW로 바꾸지 않고, 케이스 생성 대상에서 빠지고, 지우지 않아요. [안건 4]
 - `score_status`(백엔드 처리 상태)와 `data_quality_status`(AI 입력 품질: OK·SHORT_HISTORY·MISSING_INPUT·FAILED)는 **다른 값**이에요. 합치지 않아요. [ML 규약 §4]
 - **`score_band`(HIGH/MEDIUM/LOW)는 AI가 주지 않아요.** AI는 `score`와 추천 `threshold`만 주고, 등급은 **cases의 `CasePolicy`**가 계산해요. [안건 2] 〔SD 명세 §13-8의 "등급 경계는 detection"은 그 전 안〕
