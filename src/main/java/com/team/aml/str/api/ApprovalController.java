@@ -3,11 +3,13 @@ package com.team.aml.str.api;
 import com.team.aml.shared.api.PageResponse;
 import com.team.aml.str.application.ApproveStrDraft;
 import com.team.aml.str.application.ListPendingApprovals;
+import com.team.aml.str.application.RegenerateStrReportPdf;
 import com.team.aml.str.application.RejectStrDraft;
 import com.team.aml.str.application.ReportStrDraft;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -15,6 +17,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -30,14 +33,16 @@ public class ApprovalController {
     private final ApproveStrDraft approveStrDraft;
     private final RejectStrDraft rejectStrDraft;
     private final ReportStrDraft reportStrDraft;
+    private final RegenerateStrReportPdf regenerateStrReportPdf;
 
     public ApprovalController(ListPendingApprovals listPendingApprovals, ApproveStrDraft approveStrDraft,
                               RejectStrDraft rejectStrDraft,
-                              ReportStrDraft reportStrDraft) {
+                              ReportStrDraft reportStrDraft, RegenerateStrReportPdf regenerateStrReportPdf) {
         this.listPendingApprovals = listPendingApprovals;
         this.approveStrDraft = approveStrDraft;
         this.rejectStrDraft = rejectStrDraft;
         this.reportStrDraft = reportStrDraft;
+        this.regenerateStrReportPdf = regenerateStrReportPdf;
     }
 
     @Operation(summary = "승인 대기 목록",
@@ -83,5 +88,18 @@ public class ApprovalController {
     public ReportStrDraftResponse report(@PathVariable String draftNo,
                                          @Valid @RequestBody ReportStrDraftRequest request) {
         return ReportStrDraftResponse.from(reportStrDraft.execute(draftNo, request.caseVersion()));
+    }
+
+    @Operation(summary = "확정본 PDF 다시 만들기 (P5)",
+            description = "이 초안을 승인한 사람만(역할이 승인자가 아니면 403 NOT_APPROVER, 다른 승인자는 403 NOT_DRAFT_APPROVER). "
+                    + "케이스 REPORTED·현재 초안이어야 한다(아니면 409 INVALID_CASE_TRANSITION, 대체된 초안은 409 DRAFT_SUPERSEDED). "
+                    + "PDF 가 FAILED 이거나 PENDING 이 오래됐을 때만(aml.str.pdf.stale-pending-after, 기본 10분 — 만드는 도중 서버가 죽은 경우) — "
+                    + "아니면 409 INVALID_CASE_TRANSITION(details.action REGENERATE_PDF·draft_no·pdf_status). "
+                    + "승인 때 고정한 스냅샷으로 다시 만든다(최신 정보로 다시 조립하지 않음). 본문 없음. "
+                    + "응답 202 {pdf_status: PENDING} — 만들기는 뒤에서, 화면은 S8 을 3초마다 다시 본다")
+    @PostMapping("/{draftNo}/report/pdf")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public RegenerateReportPdfResponse regeneratePdf(@PathVariable String draftNo) {
+        return RegenerateReportPdfResponse.from(regenerateStrReportPdf.execute(draftNo));
     }
 }

@@ -12,6 +12,7 @@ import jakarta.persistence.Version;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -25,7 +26,7 @@ import java.util.regex.Pattern;
  *       문서번호 연도는 UTC 가 아니라 서울 기준 승인일(11/17 결정).</li>
  *   <li>모의 제출(P4) — {@link #markReported}: 제출 시각·제출자·늦음 + PDF PENDING.</li>
  *   <li>PDF(제출 커밋 뒤) — {@link #pdfReady} / {@link #pdfFailed}. 실패해도 승인·제출은 그대로.</li>
- *   <li>다시 만들기(P5) — {@link #retryPdf}: FAILED → PENDING, 같은 스냅샷으로.</li>
+ *   <li>다시 만들기(P5) — {@link #retryPdf}: FAILED(또는 오래된 PENDING) → PENDING, 같은 스냅샷으로.</li>
  * </ul>
  * 상태는 메서드로만 바뀐다(setter 없음). 지우지 않는다(V015 가 DELETE 권한 회수 — 5년 보존).
  * 케이스 상태(APPROVED → REPORTED)는 cases 가 맡는다 — 여기는 STR 쪽 기록만.
@@ -37,6 +38,8 @@ public class StrReport extends BaseEntity {
 
     static final int MAX_SUSPICION_TYPE_LENGTH = 16;   // V015 suspicion_types varchar(16)[]
     static final int MAX_STORAGE_KEY_LENGTH = 512;     // V015 pdf_storage_key varchar(512)
+    /** 오래된 PENDING 에서 다시 만들 때 돌려주는 이유 (retryPdf). */
+    public static final String STALE_PENDING = "STALE_PENDING";
     static final int MAX_VERSION_LENGTH = 32;          // V015 snapshot_version·pdf_template_version varchar(32)
     static final int MAX_FAILURE_CODE_LENGTH = 64;     // V015 pdf_failure_code varchar(64)
     private static final Pattern SHA256 = Pattern.compile("^[0-9a-f]{64}$");
@@ -232,14 +235,42 @@ public class StrReport extends BaseEntity {
         this.pdfAttempts++;
     }
 
-    /** 다시 만들기(P5) — FAILED 일 때만, 아니면 409 INVALID_CASE_TRANSITION(프론트 목업과 같음). 같은 스냅샷으로 다시 만든다. */
-    public void retryPdf() {
+    /**
+     * 다시 만들 수 있는가 (P5 서버 검사·REGENERATE_PDF 버튼이 같이 쓰는 한 곳).
+     * FAILED 이거나, PENDING 이 staleAfter 넘게 그대로면(만드는 도중 서버가 죽음 — 커밋 뒤 작업은 다시 걸리지 않는다) true.
+     * "PENDING 이 된 때" = updated_at — P4(markReported)·P5(retryPdf) 저장 때 바뀌고, PENDING 인 동안 이 행을 고치는 곳은 없다.
+     */
+    public boolean isPdfRetryable(Instant now, Duration staleAfter) {
+        if (!isReported()) return false;
+        if (pdfStatus == ReportPdfStatus.FAILED) return true;
+        Instant since = getUpdatedAt();
+        return pdfStatus == ReportPdfStatus.PENDING && since != null && !since.plus(staleAfter).isAfter(now);
+    }
+
+    /**
+     * 다시 만들기(P5) — {@link #isPdfRetryable} 일 때만, 아니면 409 INVALID_CASE_TRANSITION(프론트 목업과 같음). 같은 스냅샷으로 다시 만든다.
+     * 오래된 PENDING 에서 다시 만들면 끊긴 시도도 하나로 센다(pdf_attempts + 1) — 혹시 살아 있던 옛 작업과 보관 키가 겹치지 않게.
+     *
+     * @return 이번 다시 만들기의 이유 — 직전 실패 코드, 오래된 PENDING 이면 {@link #STALE_PENDING}. 실패 코드 칸은 PENDING 이면 비워야 해서
+     *         (V015 CHECK) 여기서 돌려주고 부르는 쪽이 로그로 남긴다
+     */
+    public String retryPdf(Instant now, Duration staleAfter) {
         requireReported();
-        if (pdfStatus != ReportPdfStatus.FAILED) {
+        if (!isPdfRetryable(now, staleAfter)) {
             throw new ReportPdfRetryNotAllowedException(draftId, pdfStatus);
+        }
+        String previous = pdfStatus == ReportPdfStatus.FAILED ? pdfFailureCode : STALE_PENDING;
+        if (pdfStatus == ReportPdfStatus.PENDING) {
+            this.pdfAttempts++;
         }
         this.pdfStatus = ReportPdfStatus.PENDING;
         this.pdfFailureCode = null;
+        return previous;
+    }
+
+    /** 이 보고서를 승인한 사람인가 (created_by = 승인자). P4 모의 제출·P5 다시 만들기·버튼이 같이 쓰는 한 곳. */
+    public boolean isApprovedBy(long userId) {
+        return Objects.equals(getCreatedBy(), userId);
     }
 
     /** 확정본 받기(S8) 전에 — READY 가 아니면 409 REPORT_PDF_NOT_READY. 케이스 REPORTED 확인은 호출 쪽이 먼저 한다. */
