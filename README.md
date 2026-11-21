@@ -117,7 +117,29 @@ docker compose --profile ops up -d redis         # ops-env-check 가 비밀값�
 docker compose up -d --build app
 ```
 
-로그인한 뒤 `docker compose restart app`을 해도 로그인이 유지되면 붙은 거예요(키는 `docker compose --profile ops exec redis redis-cli -n 0 --scan --pattern 'aml:session:sessions:*'`, 비밀번호는 컨테이너의 `REDISCLI_AUTH`). 끄면(`false`) 앱은 Redis에 연결하지 않아요.
+로그인한 뒤 `docker compose restart app`을 해도 같은 브라우저의 `/api/v1/auth/me`가 200이면 세션 유지가 확인된 거예요. 끄면(`false`) 앱은 Redis에 연결하지 않아요.
+
+**적용 확인** — `PING`이나 health `UP`만으로는 세션 연동을 확인할 수 없어요. 로그인 전후 DB 0의 세션 키 개수와 같은 쿠키의 응답을 함께 봐요. 키 원문(세션 ID)은 출력·공유하지 않아요.
+
+```bash
+# Redis 서버 응답 확인 (인증은 컨테이너 REDISCLI_AUTH 사용)
+docker compose --profile ops exec -T redis redis-cli PING
+# 세션 키는 원문 대신 개수만 확인
+docker compose --profile ops exec -T redis redis-cli -n 0 --scan --pattern 'aml:session:sessions:*' | wc -l
+# 로그인한 브라우저를 유지한 채 앱만 재시작 → /api/v1/auth/me 200
+docker compose restart app
+```
+
+로컬 장애 확인은 `docker compose --profile ops stop redis` 뒤 **로그인한 쿠키로** `/api/v1/auth/me`를 호출해 503 `SESSION_STORE_UNAVAILABLE`을 확인하고, 반드시 `docker compose --profile ops start redis`로 복구해요. 세션이 만료되지 않았다면 같은 쿠키로 다시 200이어야 해요. 로그아웃 후에는 401이에요. Redis 장애 중 쿠키 없는 요청은 401일 수 있어요.
+
+**자동 테스트** — Docker를 켜고 아래를 실행해요. 테스트 전용 PostgreSQL·Redis 컨테이너에서 DB 0 저장, 앱 컨텍스트 재생성 후 세션 유지, 중복 로그인·로그아웃, Redis 장애·메모리 부족 503을 확인해요.
+
+```bash
+./gradlew test --tests '*RedisSession*Test' --tests '*MemorySessionDefaultTest' --tests '*SessionStore*Test'
+./gradlew test
+```
+
+`AML_SESSION_REDIS_ENABLED=false`는 메모리 모드로의 명시적 전환이에요. `true`인 상태에서 Redis가 죽는다고 메모리로 자동 전환하지 않아요.
 
 **로그 주의** — Alloy는 앱 로그를 **그대로** Loki로 옮겨요. 로그에 계좌번호·금액·본문·프롬프트 전문을 남기지 않는 규칙(NFR-COM-04)은 앱 쪽 로그 형식에서 지켜요.
 
