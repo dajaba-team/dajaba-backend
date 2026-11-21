@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
+import org.springframework.session.web.http.CookieSerializer;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -23,6 +24,9 @@ import java.util.Map;
  * 로그는 WARN 한 줄, 오류 클래스 이름만 — 원인 메시지(호스트·포트)·세션 ID·쿠키는 남기지 않는다.
  * 응답이 이미 나간 뒤면 바꿀 수 없어 로그만 남긴다.
  * 응답을 비울 때 X-Request-Id 와 CORS 헤더(보안 필터 안쪽에서 붙음)는 다시 붙인다 — 없으면 다른 출처의 프론트가 503 본문을 못 읽는다.
+ * 로그아웃이면 SESSION 만료 쿠키도 붙인다(#158 리뷰) — LogoutFilter 가 처리기를 부르기 전에 인증(세션)을 읽다 실패해서
+ * 세션 무효화도 쿠키 삭제도 안 돌았다. 쿠키가 남으면 Redis 가 돌아왔을 때 그 세션으로 다시 로그인 상태가 된다.
+ * 다른 요청은 쿠키를 그대로 둔다 — Redis 가 잠깐 흔들려도 모두 로그아웃되지 않게.
  */
 class SessionStoreFailureFilter extends OncePerRequestFilter {
 
@@ -30,10 +34,12 @@ class SessionStoreFailureFilter extends OncePerRequestFilter {
 
     private final ObjectMapper om;
     private final ErrorMetrics errorMetrics;
+    private final CookieSerializer sessionCookie;
 
-    SessionStoreFailureFilter(ObjectMapper om, ErrorMetrics errorMetrics) {
+    SessionStoreFailureFilter(ObjectMapper om, ErrorMetrics errorMetrics, CookieSerializer sessionCookie) {
         this.om = om;
         this.errorMetrics = errorMetrics;
+        this.sessionCookie = sessionCookie;
     }
 
     @Override
@@ -56,6 +62,9 @@ class SessionStoreFailureFilter extends OncePerRequestFilter {
             for (String[] h : kept) {
                 res.addHeader(h[0], h[1]);
             }
+            if (isLogout(req)) {
+                sessionCookie.writeCookieValue(new CookieSerializer.CookieValue(req, res, ""));   // 빈 값 = Max-Age=0
+            }
             SessionStoreUnavailableException wrapped = SessionStoreUnavailableException.find(e);
             boolean changeSaved = wrapped != null && wrapped.changeSaved();
             errorMetrics.record(SessionStoreUnavailableException.CODE, 503);
@@ -67,6 +76,11 @@ class SessionStoreFailureFilter extends OncePerRequestFilter {
                             SessionStoreUnavailableException.MESSAGE_CHANGE_SAVED, Map.of("change_saved", true))
                     : ErrorResponse.of(SessionStoreUnavailableException.CODE, SessionStoreUnavailableException.MESSAGE));
         }
+    }
+
+    private static boolean isLogout(HttpServletRequest req) {
+        return "POST".equals(req.getMethod())
+                && (req.getContextPath() + SecurityConfig.LOGOUT_URL).equals(req.getRequestURI());
     }
 
     /** reset 뒤에 다시 붙일 헤더 — X-Request-Id, CORS(Access-Control-*), 그리고 CORS 가 붙이는 Vary. */

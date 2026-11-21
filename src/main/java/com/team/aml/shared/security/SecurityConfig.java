@@ -60,6 +60,9 @@ import java.util.List;
 @EnableWebSecurity
 public class SecurityConfig {
 
+    /** 로그아웃 URL — Redis 장애 때 {@link SessionStoreFailureFilter} 도 이 경로만 쿠키를 지운다. */
+    static final String LOGOUT_URL = "/api/v1/auth/logout";
+
     private static final Logger log = LoggerFactory.getLogger(SecurityConfig.class);
     private final LoginAccessLogWriter accessLog;
 
@@ -126,7 +129,7 @@ public class SecurityConfig {
                 .successHandler(handlers.loginSuccess())
                 .failureHandler(handlers.loginFailure()))
             .logout(l -> l
-                .logoutUrl("/api/v1/auth/logout")
+                .logoutUrl(LOGOUT_URL)
                 .addLogoutHandler((req, res, auth) -> redisLogout.ifAvailable(h -> h.logout(req, res, auth)))   // Redis 모드만 (SCRUM-273)
                 .deleteCookies("SESSION")
                 .logoutSuccessHandler((req, res, auth) -> {

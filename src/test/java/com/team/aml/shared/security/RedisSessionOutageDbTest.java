@@ -31,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Redis 세션을 켰는데 Redis 가 없을 때 (SCRUM-273) — 앱은 뜨고, 세션이 필요한 요청만 503 SESSION_STORE_UNAVAILABLE JSON.
  * 로그에는 오류 클래스 이름만 — Redis 주소·비밀번호·세션 ID 는 없다.
+ * 로그아웃은 503 이어도 SESSION 쿠키를 지운다 — 다른 요청은 쿠키를 그대로 둔다 (#158 리뷰).
  */
 @Testcontainers
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {"aml.session.redis.enabled=true",
@@ -42,6 +43,7 @@ class RedisSessionOutageDbTest {
     static final String PASSWORD = "outage-login-pass-1234";
     static final String REDIS_PASSWORD = "outage-redis-pass";
     static final String SESSION_ID = "0b7f2c1e-0000-4000-8000-00000000abcd";
+    static final String CSRF_TOKEN = "outage-csrf-token";
     static final int DEAD_PORT = freePort();
 
     @Container
@@ -113,6 +115,26 @@ class RedisSessionOutageDbTest {
         assertThat(output).contains("session store unavailable error=RedisConnectionFailureException");
         assertNoSecretsIn(output);
         assertThat(output).doesNotContain(SESSION_ID).doesNotContain(cookie);
+        assertThat(me.headers().allValues("Set-Cookie")).noneMatch(c -> c.startsWith("SESSION="));   // Redis 가 돌아오면 세션은 다시 쓰인다
+    }
+
+    @Test
+    void 실패_로그아웃은_503이지만_SESSION_쿠키는_지워_다음_요청이_401() throws Exception {
+        String cookie = Base64.getEncoder().encodeToString(SESSION_ID.getBytes(StandardCharsets.UTF_8));
+        HttpResponse<String> logout = send(HttpRequest.newBuilder(uri(SecurityConfig.LOGOUT_URL))
+                .header("Cookie", "SESSION=" + cookie + "; XSRF-TOKEN=" + CSRF_TOKEN)
+                .header("X-XSRF-TOKEN", CSRF_TOKEN)
+                .POST(HttpRequest.BodyPublishers.noBody()));
+
+        assertThat(logout.statusCode()).isEqualTo(503);
+        assertThat(code(logout)).isEqualTo("SESSION_STORE_UNAVAILABLE");
+        assertThat(logout.headers().allValues("Set-Cookie")).filteredOn(c -> c.startsWith("SESSION="))
+                .singleElement().asString()
+                .startsWith("SESSION=;").contains("Max-Age=0").contains("Path=/").contains("HttpOnly").contains("SameSite=Lax");
+
+        // 브라우저가 쿠키를 지운 다음 요청 — 쿠키 없음이라 Redis 를 안 거쳐 401
+        HttpResponse<String> me = send(HttpRequest.newBuilder(uri("/api/v1/auth/me")).GET());
+        assertThat(me.statusCode()).isEqualTo(401);
     }
 
     private static void assertNoSecretsIn(CapturedOutput output) {

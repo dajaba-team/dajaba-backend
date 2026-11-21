@@ -64,7 +64,7 @@ JWT를 쓰지 않아요. 서버가 즉시 끊을 수 있는 **세션 쿠키**예
 - 로그인·로그아웃 기록은 **별도 트랜잭션**으로 남기고, 기록이 실패해도 로그인·로그아웃 응답은 그대로예요(경고 로그만, `login_id` 없이). **열람 기록(`VIEW`·`STR_VIEW`·`PDF_DOWNLOAD`·`EXPORT`)은 반대로, 저장이 실패하면 조회도 실패해요**(기록 없는 열람 금지, `03_shared.md` §9). IP는 `request.getRemoteAddr()` 그대로(프록시 헤더는 믿지 않음). [SCRUM-19]
 - **CSRF 켬.** `CookieCsrfTokenRepository.withHttpOnlyFalse()`.
 - **CORS** — `local` 프로파일에서만 `localhost:5173` 하나를 `allowCredentials(true)`. `*`는 어디에도 없음. 프론트는 `withCredentials: true`.
-- 쿠키 `Secure`는 `prod`에서만. 세션 저장소는 **설정에 따라** — 기본은 서버 메모리(재시작하면 모두 로그아웃 — 받아들임), `AML_SESSION_REDIS_ENABLED=true`면 Redis db 0(`aml:session:*`, 앱을 다시 띄워도 로그인 유지). 쿠키 이름·속성과 30분 만료는 두 방식이 같아요. Redis를 켠 채 Redis가 안 되면 세션이 필요한 요청(로그인 성공·로그인한 요청)만 503 `SESSION_STORE_UNAVAILABLE`, 쿠키 없는 요청·틀린 비밀번호는 지금처럼 401. [SCRUM-273, `03_shared.md` §12]
+- 쿠키 `Secure`는 `prod`에서만. 세션 저장소는 **설정에 따라** — 기본은 서버 메모리(재시작하면 모두 로그아웃 — 받아들임), `AML_SESSION_REDIS_ENABLED=true`면 Redis db 0(`aml:session:*`, 앱을 다시 띄워도 로그인 유지). 쿠키 이름·속성과 30분 만료는 두 방식이 같아요. Redis를 켠 채 Redis가 안 되면 세션이 필요한 요청(로그인 성공·로그인한 요청)만 503 `SESSION_STORE_UNAVAILABLE`, 쿠키 없는 요청·틀린 비밀번호는 지금처럼 401. 그때 **로그아웃도 503이지만 SESSION 쿠키는 지워요**(만료 쿠키) — 다음 요청은 401이고, Redis 안의 세션은 쿠키를 가진 사람이 없이 만료(30분)까지 남아요. [SCRUM-273, `03_shared.md` §2·§12]
 - 로그인 성공·실패 기록은 `shared/security`의 성공·실패 핸들러에서 남겨요. [레퍼런스 §3.4]
 - 로그인 5회 실패 잠금은 MVP 제외(기록만). [계정·권한 §3]
 - 로그인은 `shared/security`의 JSON 로그인 필터(`JsonLoginFilter`)가 받고, `JsonLoginConfigurer`로 등록해 세션 ID 교체·동시 세션 1개·세션 저장·CSRF 토큰 교체가 Spring 전략으로 걸려요. users는 `user/infrastructure/DbUserDetailsService`가 읽고, 비활성·SYSTEM은 없는 ID와 같은 401이에요. 목업 로그인(`MockLoginController`)은 SCRUM-19에서 지웠어요. [SCRUM-19]

@@ -31,6 +31,7 @@ class RedisSessionLogoutHandler implements LogoutHandler {
         }
         String id = session.getId();
         session.invalidate();
+        // 무효화와 이 삭제 사이에 Redis 가 끊기면 해시만 "만료 0초"로 TTL(5분)까지 남는다 — 읽혀도 만료로 판정돼 로그인에 안 쓰여 무해.
         redis.delete(sessionKeyPrefix + id);
     }
 }

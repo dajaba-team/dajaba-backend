@@ -16,6 +16,7 @@ import org.springframework.security.core.session.SessionRegistry;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
 import org.springframework.session.security.SpringSessionBackedSessionRegistry;
+import org.springframework.session.web.http.CookieSerializer;
 import org.springframework.session.web.http.SessionRepositoryFilter;
 
 /**
@@ -32,7 +33,7 @@ import org.springframework.session.web.http.SessionRepositoryFilter;
  *       Redis 가 없을 때 구독 대기 때문에 앱 기동이 실패하고, 구독 실패 로그에 호스트가, 이벤트 처리 경고에 세션 ID 가 찍힌다.
  *       만료는 읽을 때 만료 시각으로 판단하고, 남은 키는 Redis TTL(만료 + 5분)로 지워진다.</li>
  *   <li>로그아웃하면 세션 해시까지 바로 지운다({@link RedisSessionLogoutHandler}).</li>
- *   <li>Redis 가 안 되면 {@link SessionStoreFailureFilter} 가 503 SESSION_STORE_UNAVAILABLE.</li>
+ *   <li>Redis 가 안 되면 {@link SessionStoreFailureFilter} 가 503 SESSION_STORE_UNAVAILABLE. 로그아웃이면 SESSION 쿠키도 지운다.</li>
  * </ul>
  */
 @Configuration
@@ -76,11 +77,15 @@ public class RedisSessionConfig {
         return new RedisSessionLogoutHandler(redis, namespace);
     }
 
-    /** 세션 필터 바깥에 둬야 세션 읽기·저장에서 나는 Redis 오류를 잡는다. */
+    /**
+     * 세션 필터 바깥에 둬야 세션 읽기·저장에서 나는 Redis 오류를 잡는다.
+     * 쿠키는 Spring Boot 가 server.servlet.session.cookie 로 만든 CookieSerializer 로 지운다 — 세션 쿠키와 속성이 같아야 브라우저가 지운다.
+     */
     @Bean
-    FilterRegistrationBean<SessionStoreFailureFilter> sessionStoreFailureFilter(ObjectMapper om, ErrorMetrics errorMetrics) {
+    FilterRegistrationBean<SessionStoreFailureFilter> sessionStoreFailureFilter(ObjectMapper om, ErrorMetrics errorMetrics,
+                                                                                CookieSerializer sessionCookie) {
         FilterRegistrationBean<SessionStoreFailureFilter> reg =
-                new FilterRegistrationBean<>(new SessionStoreFailureFilter(om, errorMetrics));
+                new FilterRegistrationBean<>(new SessionStoreFailureFilter(om, errorMetrics, sessionCookie));
         reg.setOrder(SessionRepositoryFilter.DEFAULT_ORDER - 1);
         return reg;
     }
