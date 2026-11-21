@@ -13,7 +13,7 @@ import java.util.Objects;
  * 여기서는 누가(역할·담당자)와 초안 유무만 더 본다.
  */
 public enum CaseAction {
-    ASSIGN,            // OPEN — 조사역은 본인, ADMIN 은 지정
+    ASSIGN,            // OPEN — ADMIN 이 조사역 지정 (SCRUM-339)
     REASSIGN,          // ADMIN, REVIEWING·ESCALATED·DRAFTED·REJECTED
     UPDATE_NOTES,      // 담당, 편집 가능 상태
     REFRESH_SUMMARY,   // 담당, 편집 가능 상태
@@ -45,7 +45,7 @@ public enum CaseAction {
         CaseStatus status = c.getStatus();
         RejectionReasonCode code = c.getRejectionReasonCode();
 
-        if (status.allows(ASSIGN, code) && (viewerRole == Role.INVESTIGATOR || viewerRole == Role.ADMIN)) {
+        if (viewerRole == Role.ADMIN && status.allows(ASSIGN, code)) {   // SCRUM-339 — 배정은 관리자만
             actions.add(ASSIGN);
         }
         if (viewerRole == Role.ADMIN && status.allows(REASSIGN, code)) {
