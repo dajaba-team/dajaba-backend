@@ -1,6 +1,6 @@
 # 06. cases — 조사
 
-> v0.2 · 2026-11-19 · 초안(팀 확인 중) · 담당 지윤 · 정리 진희 · 11/19 질문 답변 A8·C9(SCRUM-302)
+> v0.3 · 2026-11-20 · 초안(팀 확인 중) · 담당 지윤 · 정리 진희 · 11/19 질문 답변 A8·C9(SCRUM-302) · 11/20 CASES 지표(SCRUM-276)
 
 담당자 문서는 아직 초안이라 `확정` / **〔초안〕** / **〔확인 필요〕**를 나눠 적었어요(뜻은 [`../README.md`](../README.md) "읽는 법"). 이 파일은 **담당자가 고쳐요.** 노션 초안을 바꾸면 같은 주에 이 파일도 PR로 갱신해 주세요.
 
@@ -205,5 +205,26 @@
 - CLOSED·`close_reason`·`CLOSE` 이력(`reason_code`=종결 사유), 반려 코드 지움. `current_draft_id`는 남겨요(V006 — CLOSED는 둘 다 허용).
 
 **아직 남은 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`(필요 여부 결정 — SCRUM-243). Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
+
+**지표 (Prometheus) — 구현됨 (SCRUM-276)** 이름·태그 규칙은 [`03_shared.md` §13](../03_shared.md). Grafana 「CASES」(`ops/grafana/dashboards/cases.json`).
+
+| 무엇 | Prometheus 이름 | 태그 | 세는 곳 |
+|---|---|---|---|
+| 목록·상세 응답 시간 | `http_server_requests_seconds_{count,bucket}` (공통) | `uri="/api/v1/cases"`·`"/api/v1/cases/{caseNo}"` | 공통 HTTP 지표로 충분해서 **전용 Timer 없음** |
+| 동시 수정 충돌 | `aml_cases_conflicts_total` | `action` 하나 — `ASSIGN`·`REASSIGN`·`ESCALATE`·`CLOSE`·`REFRESH_SUMMARY`·`UPDATE_NOTES` | `cases.api.CaseConflictCounter`(인터셉터) |
+| AI 조사 요약 실패 | `aml_cases_summary_failures_total` | `stage`·`reason` 두 개 (아래 표) | `RefreshCaseSummary` |
+
+- **충돌 건수** — `CaseController`의 변경 API(POST·PUT)에 `@CountsConflicts(CaseAction.…)`를 붙이고, 요청이 끝난 뒤 그 API가 **409 `CONCURRENT_UPDATE`**로 끝났을 때만 세요. 화면 version 비교(유스케이스 안)와 커밋 때 `@Version` 충돌(트랜잭션 밖) 둘 다 잡혀요 — 예외가 `GlobalExceptionHandler`를 거친 뒤 `DispatcherServlet`이 남긴 요청 속성에서 읽어요. `INVALID_CASE_TRANSITION`·`NOT_ASSIGNEE` 같은 다른 409·403은 안 세요(그건 공통 `aml_http_errors_total{code}`). 컨트롤러에 try-catch를 두지 않으려고(01 §4) 인터셉터로 했어요. 변경 API를 새로 만들고 표시를 깜박하면 `CaseConflictCounterTest`가 잡아요. str 쪽 API(초안·승인)의 충돌은 여기 안 들어가요 — 공통 지표로 봐요.
+- **요약 실패** — 저장하지 못하고 끝난 A7만 세요. AI를 부르기 전(①) 검사 실패는 안 세요(공통 에러 지표에 있음).
+
+  | `stage` | `reason` | 언제 |
+  |---|---|---|
+  | `AI_CALL` | AI 코드(§2 표 502 줄: `LLM_UNAVAILABLE`·`AI_TIMEOUT`·`AI_UNAVAILABLE`…), 그 밖·null은 `AI_OTHER`. 목록은 공통 에러 지표와 같은 `ErrorMetrics.isAiCode` 한 곳(따로 적지 않음) | ② `AiClient.caseSummary` 실패(재시도 다 쓴 뒤) |
+  | `RESPONSE_CHECK` | `AI_BAD_RESPONSE`·`SUMMARY_CODE_CHECK_FAILED` | ② AI는 답했지만 저장할 수 없는 응답 |
+  | `SAVE` | `VERSION_MISMATCH`(version 다름·커밋 때 충돌) · `INPUT_HASH_MISMATCH`(경보·점수·근거가 바뀜) · `ASSIGNEE_CHANGED` · `STATE_CHANGED` | ③ 저장 트랜잭션에서 다시 검사하다 막힘 — AI를 기다리는 사이 바뀐 것 |
+
+- **요약 저장 단계 충돌은 두 지표에 다 잡혀요.** `SAVE`의 `VERSION_MISMATCH`·`INPUT_HASH_MISMATCH`는 409 `CONCURRENT_UPDATE`로 나가서 `conflicts{action=REFRESH_SUMMARY}`에도 하나 더 세요. 두 지표는 묻는 게 달라요(요약이 왜 저장 못 됐나 / 어느 동작이 충돌했나) — **두 패널 숫자를 더하지 마세요**. `ASSIGNEE_CHANGED`(403)·`STATE_CHANGED`(409 `INVALID_CASE_TRANSITION`)는 충돌 지표에 안 잡혀요. [#157 리뷰]
+- 태그에 케이스 번호·사용자·예외 메시지 없음(NFR-COM-04). 세다가 예외가 나도 응답·예외는 그대로(fail-open, `CaseMetrics`). 낙관적·비관적 락 동작은 바꾸지 않았어요.
+- 확인: `docker compose --profile ops up -d app prometheus grafana` → Prometheus(`localhost:9090`)에서 `aml_cases_conflicts_total`·`aml_cases_summary_failures_total`, Grafana 「CASES」 대시보드. 카운터는 **처음 셀 때 생겨요** — 충돌·실패가 한 번도 없으면 Prometheus에 이름이 안 보여요(정상).
 
 **〔확인 필요〕** 상세 화면에 "현재 초안"을 합치는 위치(cases → str 의존 금지라 상위 조합 계층 필요 — 권장은 str 조회 유스케이스가 조합. 같은 시점 보장은 한 SQL·REPEATABLE READ·조합 후 버전 재확인 중 하나로, 기본 READ COMMITTED에선 한 트랜잭션만으로는 부족 — 노션 미결 17번), 메모·요약을 편집할 수 있는 상태 범위, 화면 집계 규칙(유입은 받은 금액, 유출은 보낸 금액, 자기계좌 제외 — STR facts와 같은 규칙인지). AI facts는 **같은 법인의 다른 계좌**와 오간 거래를 `internal`로 따로 빼서 입출금에 넣지 않아요(dajaba-AI `docs/str/04_facts.md`). 그래서 같은 경보라도 화면과 STR 숫자가 다를 수 있어요 — 각 숫자가 무엇을 포함하는지 이름·설명을 정하고, 같은 법인 계좌 간 이체·복수 통화 사례로 같이 확인해요.

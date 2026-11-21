@@ -23,11 +23,12 @@ import java.util.Objects;
  *       케이스 APPROVED·초안 LOCKED 이고 이 초안을 승인한 사람이면 REPORT (모의 제출 P4 — ReportStrDraft 의 403 NOT_DRAFT_APPROVER 와 같은 판단)</li>
  *   <li>PDF: 케이스 APPROVED·초안 LOCKED 면 승인자(누구나)와 담당 조사역에게 PREVIEW_PDF — 판단은 S7 403 검사와 같은
  *       {@link StrReportPdfAccess#canRead} 를 그대로 부른다(규칙 한 곳). 케이스 REPORTED·초안 LOCKED 면 같은 사람에게 DOWNLOAD_PDF
- *       (S8 — PDF 가 아직 PENDING 이어도 켠다. 화면이 409 REPORT_PDF_NOT_READY 로 "만드는 중"을 보여 준다)</li>
+ *       (S8 — PDF 가 아직 PENDING 이어도 켠다. 화면이 409 REPORT_PDF_NOT_READY 로 "만드는 중"을 보여 준다).
+ *       그중 {@link StrReportPdfAccess#canRegenerate} 면 REGENERATE_PDF 도 (P5 — PDF FAILED 또는 오래된 PENDING, 이 초안을 승인한 사람)</li>
  *   <li>그 밖(관리자·비담당·대체된 초안·다른 상태): []</li>
  * </ul>
  * SUBMIT 은 "상태상 가능"만 뜻한다 — 지금 본문 검증 통과 여부는 화면이 latest_verification.is_current·passed 로 함께 보고
- * 꺼진 이유 문구를 고른다(계약서 S6 켜는 조건). 아직 없는 동작: PDF 다시 만들기(P5) — 그 API 가 생길 때 더한다.
+ * 꺼진 이유 문구를 고른다(계약서 S6 켜는 조건).
  */
 final class StrDraftActions {
 
@@ -41,6 +42,7 @@ final class StrDraftActions {
     static final String REPORT = "REPORT";
     static final String PREVIEW_PDF = "PREVIEW_PDF";
     static final String DOWNLOAD_PDF = "DOWNLOAD_PDF";
+    static final String REGENERATE_PDF = "REGENERATE_PDF";
 
     private StrDraftActions() {}
 
@@ -48,10 +50,11 @@ final class StrDraftActions {
      * @param draftId           보고 있는 초안 (DB id) — 케이스의 현재 초안이 아니면(재생성으로 대체) 버튼 없음
      * @param draftStatus       조사역·승인 버튼은 ACTIVE 만, 모의 제출(REPORT)은 LOCKED 만
      * @param viewerWasAssignee   보는 사람이 이 케이스를 지금·예전에 담당했나 (cases WasCaseAssignee). 승인자일 때만 쓴다
-     * @param viewerApprovedDraft 보는 사람이 이 초안을 승인한 사람인가 (확정 보고서 created_by). REPORT 에만 쓴다
+     * @param viewerApprovedDraft 보는 사람이 이 초안을 승인한 사람인가 (StrReport.isApprovedBy). REPORT 에만 쓴다
+     * @param viewerCanRegenerate StrReportPdfAccess.canRegenerate 결과. REGENERATE_PDF 에만 쓴다
      */
     static List<String> of(long draftId, StrDraftStatus draftStatus, Case c, long viewerId, Role viewerRole,
-                           boolean viewerWasAssignee, boolean viewerApprovedDraft) {
+                           boolean viewerWasAssignee, boolean viewerApprovedDraft, boolean viewerCanRegenerate) {
         if (!Objects.equals(c.getCurrentDraftId(), draftId)) {
             return List.of();                                         // 재생성으로 대체된 옛 초안
         }
@@ -68,7 +71,12 @@ final class StrDraftActions {
         }
         if (draftStatus == StrDraftStatus.LOCKED && c.getStatus() == CaseStatus.REPORTED) {
             // 확정본(S8) — S8 의 403 검사와 같은 한 곳(StrReportPdfAccess.canRead)
-            return StrReportPdfAccess.canRead(viewerRole, c, viewerId) ? List.of(DOWNLOAD_PDF) : List.of();
+            if (!StrReportPdfAccess.canRead(viewerRole, c, viewerId)) {
+                return List.of();
+            }
+            return viewerCanRegenerate
+                    ? List.of(DOWNLOAD_PDF, REGENERATE_PDF)           // 다시 만들기(P5) — 서버 검사와 같은 한 곳(canRegenerate)
+                    : List.of(DOWNLOAD_PDF);
         }
         if (viewerRole == Role.APPROVER) {
             if (draftStatus == StrDraftStatus.ACTIVE && c.getStatus() == CaseStatus.PENDING_APPROVAL && !viewerWasAssignee) {

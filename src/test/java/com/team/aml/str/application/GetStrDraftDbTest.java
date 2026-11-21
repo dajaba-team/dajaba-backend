@@ -560,6 +560,36 @@ class GetStrDraftDbTest {
         assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
     }
 
+    // 22
+    @Test
+    void 버튼_보고됨이고_PDF가_FAILED이거나_오래된_PENDING이면_승인한_사람에게만_다시_만들기_REGENERATE_PDF() {   // P5
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        approve(caseId, draftId);
+        long otherApprover = user("get-apr-other-p5" + SEQ.incrementAndGet(), "APPROVER");
+        caseState(caseId, "REPORTED", null);                  // 제출·실패 기록은 SQL 로 (V015 CHECK 를 지키며) — 전이는 각 DB 테스트 몫
+        jdbc.update("update ops.str_reports set reported_at = now(), reported_by = ?, late = false, pdf_status = 'FAILED', "
+                + "pdf_failure_code = 'RENDER_FAILED' where draft_id = ?", approver, draftId);
+
+        login(approver, "APPROVER");
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions())
+                .containsExactly("DOWNLOAD_PDF", "REGENERATE_PDF");
+        login(otherApprover, "APPROVER");                     // 서버도 403 NOT_DRAFT_APPROVER
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("DOWNLOAD_PDF");
+        login(investigator, "INVESTIGATOR");                  // 다시 만들기는 승인자 버튼 (결정 2)
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("DOWNLOAD_PDF");
+        login(admin, "ADMIN");                                // S8·P5 둘 다 403 — 버튼 없음
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).isEmpty();
+
+        jdbc.update("update ops.str_reports set pdf_status = 'PENDING', pdf_failure_code = null where draft_id = ?", draftId);
+        login(approver, "APPROVER");                          // 막 만들기 시작한 PENDING 이면 없음 (서버는 409)
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions()).containsExactly("DOWNLOAD_PDF");
+
+        jdbc.update("update ops.str_reports set updated_at = now() - interval '11 minutes' where draft_id = ?", draftId);
+        assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).availableActions())   // 오래된 PENDING — 복구 버튼
+                .containsExactly("DOWNLOAD_PDF", "REGENERATE_PDF");
+    }
+
     // ---- 도우미 ----
 
     private void assertMetaOnly(GetStrDraft.Result r, long draftId, long caseId) {

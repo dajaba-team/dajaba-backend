@@ -373,7 +373,7 @@ Prometheus가 15초마다 앱의 지표를 **가져가요**(pull). Prometheus가
 - 응답 시간 버킷은 **고정 10개**: 50ms·100ms·250ms·500ms·1s·2s·5s·10s·30s·90s (+`+Inf`). 기본 히스토그램(버킷 70여 개)은 끄고, Prometheus 메모리 상한(256m) 때문에 줄였어요. 90s는 AI 호출 경로를 보려고 넣었어요.
 - `uri`에 실제 경로는 안 들어가요: 매핑 없는 주소는 `uri="/**"`, 로그인처럼 컨트롤러 밖에서 끝나는 요청은 `uri="UNKNOWN"`, 보안에서 막힌 요청도 템플릿(`/api/v1/admin/alerts/{alertNo}`)이에요.
 - 에러 카운터는 **에러 응답을 쓰는 두 곳**에서 세요: `GlobalExceptionHandler`(컨트롤러 안 예외)와 `JsonAuthHandlers`(보안 필터의 401 `UNAUTHENTICATED`·`LOGIN_FAILED`, 403 `FORBIDDEN`·`CSRF_INVALID`, 로그인 400·500). 셀 때 예외가 나도 에러 응답은 그대로 나가요(fail-open). Tomcat이 직접 거절하는 요청(HTTP 형식 오류)은 안 세져요.
-- `code` 태그 값은 §2 표의 코드만이에요. 대문자·숫자·`_` 형식이 아니면 `OTHER`, AI가 준 코드(502)가 §2 표에 없으면 `AI_OTHER`로 세요 — AI가 새 코드를 보내도 태그 값이 늘지 않게요.
+- `code` 태그 값은 §2 표의 코드만이에요. 대문자·숫자·`_` 형식이 아니면 `OTHER`, AI가 준 코드(502)가 §2 표에 없으면 `AI_OTHER`로 세요 — AI가 새 코드를 보내도 태그 값이 늘지 않게요. AI 코드 목록은 `ErrorMetrics.isAiCode` 한 곳이고 CASES 요약 실패 지표(`cases.md`)도 이걸 불러요 — 새 AI 코드는 §2 표에 넣고 여기 한 군데만 고쳐요. [SCRUM-276 #157 리뷰]
 
 ### 이름·태그 규칙 (NFR-COM-04)
 

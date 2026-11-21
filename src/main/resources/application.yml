@@ -121,6 +121,7 @@ aml:
     pdf:
       storage-dir: ${AML_STR_PDF_DIR:./data/str-reports}
       generate-after-report: true          # 모의 제출(P4)·다시 만들기(P5) 커밋 뒤 뒤에서 만들기. false 는 상태를 그대로 보는 테스트용
+      stale-pending-after: 10m             # PENDING 이 이만큼 그대로면 만드는 도중 죽은 것으로 보고 P5 다시 만들기를 받는다(보통 1~2초)
 
 springdoc:
   api-docs:

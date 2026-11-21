@@ -26,7 +26,7 @@ public class ErrorMetrics {
     private static final Pattern CODE = Pattern.compile("[A-Z][A-Z0-9_]{1,63}");
     private static final int AI_PASS_THROUGH_STATUS = 502;
 
-    /** 03_shared §2 표의 502 줄 — AI 규약 §6.3 코드 + 백엔드가 붙인 AI_ 코드. 새 AI 코드는 표에 먼저 넣고 여기에. */
+    /** 03_shared §2 표의 502 줄 — AI 규약 §6.3 코드 + 백엔드가 붙인 AI_ 코드. 새 AI 코드는 표에 먼저 넣고 여기에(여기 한 곳 — CASES 요약 지표도 {@link #isAiCode}). */
     private static final Set<String> AI_CODES = Set.of(
             "LLM_UNAVAILABLE", "LLM_INVALID_OUTPUT", "LLM_BUDGET_EXCEEDED", "MODEL_UNAVAILABLE", "DB_UNAVAILABLE",
             "AI_UNAVAILABLE", "AI_TIMEOUT", "AI_BAD_RESPONSE",
@@ -47,11 +47,16 @@ public class ErrorMetrics {
         }
     }
 
+    /** §2 표에 있는 AI 코드인가 — 지표 태그에 그대로 써도 되는 값. 다른 기능의 지표도 이걸 불러 목록을 한 곳에 둔다 (#157 리뷰). */
+    public static boolean isAiCode(String code) {
+        return code != null && AI_CODES.contains(code);
+    }
+
     static String tagCode(String code, int status) {
         if (code == null || !CODE.matcher(code).matches()) {
             return "OTHER";
         }
-        if (status == AI_PASS_THROUGH_STATUS && !AI_CODES.contains(code)) {
+        if (status == AI_PASS_THROUGH_STATUS && !isAiCode(code)) {
             return "AI_OTHER";
         }
         return code;
