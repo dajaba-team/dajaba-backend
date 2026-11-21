@@ -91,7 +91,7 @@
 | 409 | `DRAFT_REQUEST_CLOSED` | str `SaveStrDraft` — 끝난(만료·실패·성공) 초안 요청에 AI 응답이 늦게 옴. 저장하지 않음 | 확정 [SCRUM-154, 미결 21 ⑤] |
 | 409 | `REPORT_PDF_NOT_READY` (`details.pdf_status` `PENDING`·`FAILED`) | str — 확정본 PDF가 아직 없음 | 확정 [계약서 Q7, 11/4 채영] |
 | 409 | `GENERATION_IN_PROGRESS` → 프론트엔 `DRAFT_IN_PROGRESS` | AI가 주는 409. 자동 재시도 안 함, `AiClient`가 409로 그대로 전달 | 확정 [안건 23, 10/29] |
-| 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases — `INVALID_ASSIGNEE`는 `details.reason` = `NOT_ACTIVE_INVESTIGATOR`(비활성·조사역 아님) · `SELF_ONLY`(조사역이 남을 지정). `CLOSE_REQUIRES_STR`은 초안 있는 케이스는 close-with-draft로. `POLICY_NOT_CONFIGURED`는 운영 등급 경계 없음 — LOW로 대신하지 않음 | 확정 [CASES 명세, SCRUM-50 #18 · SCRUM-105 #57] |
+| 409 | `INVALID_ASSIGNEE`, `CLOSE_REQUIRES_STR`, `POLICY_NOT_CONFIGURED` | cases — `INVALID_ASSIGNEE`는 `details.reason` = `NOT_ACTIVE_INVESTIGATOR`(비활성·조사역 아님·ADMIN이 대상 비움). `SELF_ONLY`는 배정이 ADMIN 전용이 되며 없앰(SCRUM-339). `CLOSE_REQUIRES_STR`은 초안 있는 케이스는 close-with-draft로. `POLICY_NOT_CONFIGURED`는 운영 등급 경계 없음 — LOW로 대신하지 않음 | 확정 [CASES 명세, SCRUM-50 #18 · SCRUM-105 #57] |
 | 409 | `DATASET_NOT_LOADED`, `DATE_OUT_OF_RANGE`, `NO_ACTIVE_RULES`, `INVALID_RULE_PARAMS` | detection 룰 스캔 — 앞의 셋은 시작 전 거절(행 안 남김), `INVALID_RULE_PARAMS`는 `rules.params` 키가 없거나 잘못됨(배치 FAILED). 켜진 룰에 구현이 없으면 이와 달리 500 | 확정 [SCRUM-99] |
 | 400·409 | `DATASET_FILES_MISSING`, `RULE_SCAN_NOT_DONE`, `SCORE_NOT_DONE` | source·detection | 〔초안〕 SD 명세 "신규 제안" |
 | 409 | `SOURCE_FILE_ALREADY_LOADED` | source — 같은 파일(SHA-256)을 다시 적재. 배치 재실행 `BATCH_ALREADY_DONE`과 구분 | 확정 [SCRUM-44] |

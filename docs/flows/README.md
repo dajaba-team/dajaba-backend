@@ -5,7 +5,7 @@
 | 파일 | 무엇 | 누가 먼저 보나 |
 |---|---|---|
 | [01_batch_chain.md](01_batch_chain.md) | 적재 → 룰 스캔 → ML 특징·점수·근거 → 케이스 생성. `BatchRun`은 shared | 준혁, 준영, 지윤 |
-| [02_investigation.md](02_investigation.md) | 로그인 → 목록 → 상세(+요약) → 배정 → 에스컬레이션. 현재 초안은 프론트가 따로 부름 | 지윤, 프론트 |
+| [02_investigation.md](02_investigation.md) | 로그인 → 목록 → 상세(+요약) → 관리자 배정 → 에스컬레이션. 현재 초안은 프론트가 따로 부름 | 지윤, 프론트 |
 | [03_str.md](03_str.md) | 초안 요청(트랜잭션 밖) → 저장 → 수정 → 검증 → 승인(한 트랜잭션) | 채영 |
 | [04_failure_paths.md](04_failure_paths.md) | 점수의 통신·경보별 품질 실패와 재시도(시나리오 9), 초안 요청 실패(시나리오 7) | 준혁, 준영, 채영 |
 | [05_login_auth.md](05_login_auth.md) | 로그인·세션·CSRF, 권한이 막히는 네 지점, 계정 발급 | 프론트, user 담당 |

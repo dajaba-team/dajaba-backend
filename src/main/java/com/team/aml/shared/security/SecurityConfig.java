@@ -50,6 +50,7 @@ import java.util.List;
  *  /api/v1/admin/**                              → ADMIN
  *  GET  /api/v1/approvals/**                     → ADMIN·APPROVER (10/29)
  *  POST /api/v1/approvals/**                     → APPROVER
+ *  POST /api/v1/cases/{case_no}/assign          → ADMIN (권한 표 6, SCRUM-339 — 조사역 자기 배정 없음)
  *  POST /api/v1/cases/{case_no}/reassign        → ADMIN (권한 표 7, SCRUM-177)
  *  /api/v1/cases/{case_no}/questions (A8·C9)    → INVESTIGATOR·APPROVER (설계 문서 7.2, SCRUM-302). 담당 여부는 유스케이스
  *  /api/**                                       → 로그인만
@@ -112,6 +113,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/v1/approvals/**").hasAnyRole("ADMIN", "APPROVER")
                 .requestMatchers("/api/v1/approvals/**").hasRole("APPROVER")
+                .requestMatchers(HttpMethod.POST, "/api/v1/cases/*/assign").hasRole("ADMIN")     // 권한 표 6 (SCRUM-339)
                 .requestMatchers(HttpMethod.POST, "/api/v1/cases/*/reassign").hasRole("ADMIN")   // 권한 표 7 (SCRUM-177)
                 .requestMatchers("/api/v1/cases/*/questions").hasAnyRole("INVESTIGATOR", "APPROVER")   // 질문 답변 — 관리자 403 (SCRUM-302)
                 .requestMatchers("/api/**").authenticated()
