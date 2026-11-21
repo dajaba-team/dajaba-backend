@@ -2,7 +2,10 @@ package com.team.aml.cases.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.team.aml.cases.application.CaseMetrics;
 import com.team.aml.shared.security.AppUserDetails;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -58,6 +61,7 @@ class CaseApiTest {
 
     @Autowired MockMvc mvc;
     @Autowired JdbcTemplate jdbc;
+    @Autowired MeterRegistry meters;
 
     private final ObjectMapper json = new ObjectMapper();
     private AppUserDetails inv;
@@ -184,6 +188,8 @@ class CaseApiTest {
     void 실패_업무_규칙_위반은_403_404_409이고_케이스는_그대로() throws Exception {
         String caseNo = newOpenCase("010_RULE%05d".formatted(SEQ.incrementAndGet()));
         assign(caseNo, inv);
+        double escalateConflicts = conflicts("ESCALATE");
+        double assignConflicts = conflicts("ASSIGN");
 
         assertThat(code(post("/api/v1/cases/{caseNo}/escalate", caseNo).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"comment\": \"남의 케이스\", \"version\": 1}").with(as(inv2)).with(csrf()), 403))
@@ -192,6 +198,12 @@ class CaseApiTest {
                 .content("{\"comment\": \"오래된 화면\", \"version\": 0}").with(as(inv)).with(csrf()), 409))
                 .isEqualTo("CONCURRENT_UPDATE");
         assertThat(code(assignBy(caseNo, inv2.loginId(), 1, assigner), 409)).isEqualTo("INVALID_CASE_TRANSITION");
+
+        // SCRUM-276 — CONCURRENT_UPDATE 만 동작별로 센다. 403·다른 409(INVALID_CASE_TRANSITION)는 안 섞인다
+        assertThat(conflicts("ESCALATE")).isEqualTo(escalateConflicts + 1);
+        assertThat(conflicts("ASSIGN")).isEqualTo(assignConflicts);
+        assertThat(meters.get(CaseMetrics.CONFLICTS).tag("action", "ESCALATE").counter().getId().getTags())
+                .extracting(t -> t.getKey()).containsExactly("action");   // 케이스 번호·사용자 태그 없음
         assertThat(code(get("/api/v1/cases/{caseNo}", "CASE-2099-999999").with(as(inv)), 404))
                 .isEqualTo("CASE_NOT_FOUND");
         assertThat(mvc.perform(post("/api/v1/cases/{caseNo}/escalate", caseNo).contentType(MediaType.APPLICATION_JSON)
@@ -617,6 +629,12 @@ class CaseApiTest {
                 insert into ops.users (login_id, display_name, role, created_by, updated_by)
                 values (?, ?, ?, 1, 1) returning id""", Long.class, loginId, "이름 " + loginId, role);
         return new AppUserDetails(id, loginId, "이름 " + loginId, role);
+    }
+
+    /** aml.cases.conflicts{action} 지금 값. 컨텍스트를 테스트끼리 같이 써서 차이로 본다. */
+    private double conflicts(String action) {
+        Counter c = meters.find(CaseMetrics.CONFLICTS).tag("action", action).counter();
+        return c == null ? 0 : c.count();
     }
 
     /** OPEN 케이스 + OPEN 이력. 엔티티 대신 SQL — api 테스트가 리포지토리에 기대지 않게. */

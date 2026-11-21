@@ -13,6 +13,7 @@ import com.team.aml.cases.application.ListCases;
 import com.team.aml.cases.application.ReassignCase;
 import com.team.aml.cases.application.RefreshCaseSummary;
 import com.team.aml.cases.application.UpdateCaseNotes;
+import com.team.aml.cases.domain.CaseAction;
 import com.team.aml.shared.api.PageResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -127,6 +128,7 @@ public class CaseController {
                     + "없는 login_id(공백만 포함) 404 USER_NOT_FOUND, 비활성·조사역 아님 409 INVALID_ASSIGNEE. "
                     + "버전 다르면 409 CONCURRENT_UPDATE")
     @PostMapping("/{caseNo}/assign")
+    @CountsConflicts(CaseAction.ASSIGN)
     public CaseChangeResponse assign(@PathVariable String caseNo, @Valid @RequestBody AssignCaseRequest request) {
         return CaseChangeResponse.from(assignCase.execute(caseNo, request.version(), request.assignee()));
     }
@@ -136,6 +138,7 @@ public class CaseController {
                     + "없는 login_id 404 USER_NOT_FOUND, 비활성·조사역 아님 409 INVALID_ASSIGNEE, 버전 다르면 409. "
                     + "같은 담당자면 그대로(version 안 오름). 이력 REASSIGN 에 넘긴·받은 사람")
     @PostMapping("/{caseNo}/reassign")
+    @CountsConflicts(CaseAction.REASSIGN)
     public CaseChangeResponse reassign(@PathVariable String caseNo, @Valid @RequestBody ReassignCaseRequest request) {
         return CaseChangeResponse.from(
                 reassignCase.execute(caseNo, request.version(), request.assignee(), request.comment()));
@@ -144,6 +147,7 @@ public class CaseController {
     @Operation(summary = "에스컬레이션",
             description = "REVIEWING → ESCALATED, 담당만(403 NOT_ASSIGNEE). AI·초안 생성은 부르지 않는다")
     @PostMapping("/{caseNo}/escalate")
+    @CountsConflicts(CaseAction.ESCALATE)
     public CaseChangeResponse escalate(@PathVariable String caseNo, @Valid @RequestBody EscalateCaseRequest request) {
         return CaseChangeResponse.from(escalateCase.execute(caseNo, request.version(), request.comment()));
     }
@@ -151,6 +155,7 @@ public class CaseController {
     @Operation(summary = "종료 (초안 없음)",
             description = "REVIEWING·ESCALATED → CLOSED, 담당만. 초안이 있으면 409 CLOSE_REQUIRES_STR — close-with-draft 로")
     @PostMapping("/{caseNo}/close")
+    @CountsConflicts(CaseAction.CLOSE)
     public CaseChangeResponse close(@PathVariable String caseNo, @Valid @RequestBody CloseCaseRequest request) {
         return CaseChangeResponse.from(
                 closeCase.execute(caseNo, request.version(), request.closeReason(), request.comment()));
@@ -161,6 +166,7 @@ public class CaseController {
                     + "버전 다르면 409 CONCURRENT_UPDATE. AI 실패·코드 검사 실패(502 SUMMARY_CODE_CHECK_FAILED)는 "
                     + "기존 요약을 그대로 둔다. 성공하면 201, case_version 은 +1 (이력 행 없음)")
     @PostMapping("/{caseNo}/refresh-summary")
+    @CountsConflicts(CaseAction.REFRESH_SUMMARY)
     @ResponseStatus(HttpStatus.CREATED)
     public CaseSummaryResult refreshSummary(@PathVariable String caseNo,
                                             @Valid @RequestBody RefreshSummaryRequest request) {
@@ -179,6 +185,7 @@ public class CaseController {
                     + "0~10,000자, 빈 문자열은 비우기, null·초과는 400. 버전 다르면 내용이 같아도 409 CONCURRENT_UPDATE. "
                     + "바뀌면 NOTE 이력 + version +1, 같은 내용이면 그대로(version 안 오름)")
     @PutMapping("/{caseNo}/notes")
+    @CountsConflicts(CaseAction.UPDATE_NOTES)
     public CaseChangeResponse updateNotes(@PathVariable String caseNo, @Valid @RequestBody UpdateNotesRequest request) {
         return CaseChangeResponse.from(
                 updateCaseNotes.execute(caseNo, request.version(), request.investigatorNotes()));
