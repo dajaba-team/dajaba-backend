@@ -3,6 +3,7 @@ package com.team.aml.str.infrastructure;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.team.aml.str.domain.ReportDeadline;
 import com.team.aml.str.domain.ReportPdfContent;
+import com.team.aml.str.domain.SuspicionTypes;
 
 import java.math.BigDecimal;
 import java.text.DecimalFormat;
@@ -192,12 +193,36 @@ final class ReportPdfHtml {
 
     private static void suspicion(StringBuilder h, JsonNode v) {
         List<String> types = new ArrayList<>();
-        v.path("types").forEach(t -> types.add(t.asText()));
+        v.path("types").forEach(t -> {
+            if (t.isTextual() && !t.asText().isBlank()) types.add(t.asText());   // null·숫자는 건너뜀 — "(null)" 로 찍히지 않게
+        });
         h.append("<h2>VI. 의심되는 거래 유형 및 의심 정도</h2><table>");
-        row(h, "의심 유형", types.isEmpty() ? missing(SOURCE_MISSING) : esc(String.join(", ", types)));
+        row(h, "의심 유형", types.isEmpty() ? missing(SOURCE_MISSING) : suspicionTypes(types));
         row(h, "의심 정도 (지점용)", level(v.path("level_branch")));
         row(h, "의심 정도 (본점용)", level(v.path("level_hq")));
         h.append("</table>");
+    }
+
+    /**
+     * 고른 유형을 서식 순서로, 분류 제목 아래 이름표로 (11/21 리뷰 — 코드가 그대로 찍히던 버그).
+     * 이름표는 {@link SuspicionTypes} (프론트와 같은 목록). 모르는 코드는 숨기지 않고 맨 끝에 "확인 필요한 유형 (코드)".
+     */
+    static String suspicionTypes(List<String> codes) {
+        StringBuilder b = new StringBuilder();
+        SuspicionTypes.Group group = null;
+        for (SuspicionTypes.Entry e : SuspicionTypes.known(codes)) {
+            if (e.group() != group) {
+                group = e.group();
+                if (!b.isEmpty()) b.append("<br/>");
+                b.append("<b>").append(esc(group.title())).append("</b>");
+            }
+            b.append("<br/>· ").append(esc(e.label()));
+        }
+        for (String code : SuspicionTypes.unknown(codes)) {
+            if (!b.isEmpty()) b.append("<br/>");
+            b.append(esc(SuspicionTypes.unknownLabel(code)));
+        }
+        return b.toString();
     }
 
     private static String level(JsonNode n) {

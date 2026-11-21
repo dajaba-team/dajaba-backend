@@ -29,7 +29,7 @@ import java.io.UncheckedIOException;
 public class HtmlReportPdfRenderer implements ReportPdfRenderer {
 
     /** str_reports.pdf_template_version. ReportPdfHtml 모양을 바꾸면 올린다(지난 PDF 는 그 모양 그대로 보관). */
-    static final String TEMPLATE_VERSION = "pdf_v1";
+    static final String TEMPLATE_VERSION = "pdf_v2";   // v2(11/21): VI 의심 유형을 코드 대신 서식 순서 이름표로
 
     private static final Logger log = LoggerFactory.getLogger(HtmlReportPdfRenderer.class);
 
