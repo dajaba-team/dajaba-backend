@@ -18,8 +18,14 @@ public final class JobQueues {
     /** 케이스 생성 단계 — 메시지 {@link BatchRunMessage}(OPEN_CASES batch_run_id). 담당: 지윤 */
     public static final String CASE_OPEN_CASES = "case.open-cases";
 
+    /** 배치 잇기 — 성공한 룰 스캔 뒤 같은 날짜 점수. 메시지 {@link BatchRunMessage}(RULE_SCAN batch_run_id). 담당: 준혁(SCRUM-349) */
+    public static final String BATCH_SCORE = "batch.score";
+
+    /** 배치 잇기 — 성공한 점수 뒤 같은 날짜 케이스 생성. 메시지 {@link BatchRunMessage}(SCORE_REQUEST batch_run_id). 받는 곳 cases(SCRUM-349) */
+    public static final String BATCH_OPEN_CASES = "batch.open-cases";
+
     /** 선언할 큐 전부. 큐를 추가하면 여기에도. */
-    public static final List<String> ALL = List.of(CASE_OPEN_CASES);
+    public static final List<String> ALL = List.of(CASE_OPEN_CASES, BATCH_SCORE, BATCH_OPEN_CASES);
 
     private JobQueues() {
     }

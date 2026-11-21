@@ -15,7 +15,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.OptionalLong;
 
 /**
  * 점수 배치(SCORE_REQUEST)의 batch_runs 기록. 점수는 묶음마다 따로 커밋되므로 기록도 따로(REQUIRES_NEW) 커밋한다.
@@ -39,6 +41,24 @@ public class ScoreBatchRecorder {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public long start(LocalDate date, long triggeredBy) {
         scores.lockScoreStart();
+        return startLocked(date, triggeredBy);
+    }
+
+    /**
+     * 배치 잇기(SCRUM-349)용 — 같은 시작 잠금 안에서 "since 뒤에 그 날짜 점수가 이미 시작됐나"를 먼저 본다. 시작됐으면(직접 실행이 그새
+     * 시작해 끝났어도) 아무것도 남기지 않고 빈 값. 잠금 밖에서 보면 확인과 시작 사이에 직접 실행이 끝나 한 번 더 돌 수 있다.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public OptionalLong startUnlessStartedSince(LocalDate date, long triggeredBy, Instant since) {
+        scores.lockScoreStart();
+        if (batchRuns.existsByBatchTypeAndBatchDateAndStartedAtGreaterThanEqual(BatchType.SCORE_REQUEST, date, since)) {
+            return OptionalLong.empty();
+        }
+        return OptionalLong.of(startLocked(date, triggeredBy));
+    }
+
+    /** 시작 잠금을 쥔 채로만. */
+    private long startLocked(LocalDate date, long triggeredBy) {
         if (!batchRuns.existsByBatchTypeAndBatchDateAndStatus(BatchType.RULE_SCAN, date, BatchStatus.SUCCEEDED)) {
             throw new RuleScanNotDoneException(date);
         }

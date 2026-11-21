@@ -13,6 +13,8 @@ import com.team.aml.shared.ai.AiDtos.ScoringMeta;
 import com.team.aml.shared.batch.BatchRunningException;
 import com.team.aml.shared.batch.BatchStatus;
 import com.team.aml.shared.security.CurrentUser;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,6 +31,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -46,6 +49,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -79,6 +83,8 @@ class RequestScoresTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired ObjectMapper om;
     @MockBean AiClient ai;
+    @SpyBean BatchChain chain;
+    @Autowired MeterRegistry meters;
 
     /** 경보 번호 → 답. 없으면 OK. "FAILED:코드" 는 항목 실패, "NO_PREDICTION" 은 prediction_id 없는 OK. */
     private final Map<String, String> answers = new HashMap<>();
@@ -109,6 +115,88 @@ class RequestScoresTest {
 
         assertThatThrownBy(() -> requestScores.start(d, SYSTEM)).isInstanceOf(BatchRunningException.class);
         assertThat(scoreRuns(d, null)).isEqualTo(1);
+    }
+
+    @Test
+    void 경보_결과와_묶음_결과를_지표로_세고_끝난_상태로_배치_잇기를_부른다() {   // SCRUM-349
+        LocalDate d = newDate();
+        long run = scanned(d);
+        alert(run, d);
+        long unsupported = alert(run, d);
+        alert(run, d);
+        answers.put(alertNo(unsupported), "FAILED:RULE_NOT_SUPPORTED");   // 다시 보내도 같은 실패 — failed_final
+        failingCalls.add(2);                                              // 두 번째 묶음 호출 실패 — failed_retryable
+        Map<String, Double> before = scoreMetrics();
+
+        ScoreBatchResult r = runOnce(d);
+
+        Map<String, Double> after = scoreMetrics();
+        assertThat(after.get("alerts.scored") - before.get("alerts.scored")).isEqualTo(1);
+        assertThat(after.get("alerts.failed_final") - before.get("alerts.failed_final")).isEqualTo(1);
+        assertThat(after.get("alerts.failed_retryable") - before.get("alerts.failed_retryable")).isEqualTo(1);
+        assertThat(after.get("chunks.ok") - before.get("chunks.ok")).isEqualTo(1);
+        assertThat(after.get("chunks.ai_failed") - before.get("chunks.ai_failed")).isEqualTo(1);
+        assertThat(r.run().status()).isEqualTo(BatchStatus.FAILED);
+        verify(chain).afterScore(r.run().batchRunId(), BatchStatus.FAILED);   // 다시 보낼 실패가 남아 잇기는 멈춤
+    }
+
+    @Test
+    void 뒤_묶음에서_배치가_실패해도_이미_커밋한_묶음은_지표에_남는다() {   // SCRUM-349 리뷰 — 끝에 한 번 세면 빠짐
+        LocalDate d = newDate();
+        long run = scanned(d);
+        alert(run, d);
+        alert(run, d);
+        alert(run, d);
+        when(ai.scores(anyLong(), anyList()))
+                .thenAnswer(inv -> respond(inv.getArgument(1)))
+                .thenThrow(new IllegalStateException("저장 전 오류"));   // 두 번째 묶음 — AI 오류가 아닌 실패 → 배치 FAILED·예외
+        Map<String, Double> before = scoreMetrics();
+
+        long id = requestScores.start(d, SYSTEM);
+        assertThatThrownBy(() -> requestScores.run(id, d)).isInstanceOf(IllegalStateException.class);
+
+        Map<String, Double> after = scoreMetrics();
+        assertThat(after.get("alerts.scored") - before.get("alerts.scored")).isEqualTo(2);   // 첫 묶음 2건
+        assertThat(after.get("chunks.ok") - before.get("chunks.ok")).isEqualTo(1);
+        assertThat(scoreRuns(d, "FAILED")).isEqualTo(1);
+    }
+
+    @Test
+    void 점수_지표는_배치_전에도_0으로_보인다() {   // 첫 실행이 Prometheus increase() 에서 빠지지 않게
+        for (String result : List.of("scored", "failed_final", "failed_retryable")) {
+            assertThat(meters.find("aml.score.alerts").tag("result", result).counter()).as(result).isNotNull();
+        }
+        for (String result : List.of("ok", "ai_failed")) {
+            assertThat(meters.find("aml.score.chunks").tag("result", result).counter()).as(result).isNotNull();
+        }
+    }
+
+    @Test
+    void 배치_잇기_시작은_그_시각_뒤_시작된_점수가_있으면_잠금_안에서_건너뛰고_행을_남기지_않는다() {   // SCRUM-349 리뷰
+        LocalDate d = newDate();
+        scanned(d);
+        Instant before = Instant.now();
+        jdbc.update("insert into ops.batch_runs(batch_type, batch_date, status, triggered_by, started_at, finished_at) "
+                + "values ('SCORE_REQUEST', ?, 'SUCCEEDED', 1, now(), now())", d);   // 직접 실행이 그새 시작해 끝남
+
+        assertThat(requestScores.startUnlessStartedSince(d, SYSTEM, before)).isEmpty();
+        assertThat(scoreRuns(d, null)).isEqualTo(1);
+
+        assertThat(requestScores.startUnlessStartedSince(d, SYSTEM, Instant.now().plusSeconds(60))).isPresent();
+        assertThat(scoreRuns(d, "RUNNING")).isEqualTo(1);
+    }
+
+    private Map<String, Double> scoreMetrics() {
+        Map<String, Double> out = new HashMap<>();
+        for (String result : List.of("scored", "failed_final", "failed_retryable")) {
+            Counter c = meters.find("aml.score.alerts").tag("result", result).counter();
+            out.put("alerts." + result, c == null ? 0 : c.count());
+        }
+        for (String result : List.of("ok", "ai_failed")) {
+            Counter c = meters.find("aml.score.chunks").tag("result", result).counter();
+            out.put("chunks." + result, c == null ? 0 : c.count());
+        }
+        return out;
     }
 
     @Test

@@ -14,6 +14,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +51,21 @@ class OpenCasesFromAlertsDbTest {
 
     @Autowired OpenCasesFromAlerts openCases;
     @Autowired JdbcTemplate jdbc;
+
+    @Test
+    void 배치_잇기_시작은_그_시각_뒤_시작된_케이스_생성이_있으면_잠금_안에서_건너뛰고_행을_남기지_않는다() {   // SCRUM-349 리뷰
+        LocalDate date = newDate();
+        Instant before = Instant.now();
+        jdbc.update("insert into ops.batch_runs(batch_type, batch_date, status, triggered_by, started_at, finished_at) "
+                + "values ('OPEN_CASES', ?, 'SUCCEEDED', 1, now(), now())", date);   // 직접 실행이 그새 시작해 끝남
+
+        assertThat(openCases.startUnlessStartedSince(date, CurrentUser.SYSTEM_ID, before)).isEmpty();
+        assertThat(jdbc.queryForObject("select count(*) from ops.batch_runs where batch_type = 'OPEN_CASES' and batch_date = ?",
+                Integer.class, date)).isEqualTo(1);
+
+        assertThat(openCases.startUnlessStartedSince(date, CurrentUser.SYSTEM_ID, Instant.now().plusSeconds(60)))
+                .isPresent();   // 그 시각 뒤엔 없음 — 새로 시작
+    }
 
     @Test
     void 정상_HIGH만_케이스를_만들고_OPEN_이력과_경보_표시를_남기고_SUCCEEDED() {
