@@ -45,8 +45,8 @@ class HtmlReportPdfRendererTest {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             String text = new PDFTextStripper().getText(doc);
             assertThat(text).contains("의심스러운 거래보고서", "STR-2026-000123", "한빛무역", "전신송금",
-                    "거래자 한빛무역은 법인임.", "7) 종합의견", "원천 미제공");
-            assertThat(text).doesNotContain("#####");
+                    "거래자 한빛무역은 법인임.", "7) 종합의견", "원천 미제공", "불특정다수와의 거래");
+            assertThat(text).doesNotContain("#####", "DEMO_VI");                       // VI 유형은 코드가 아니라 이름표
         }
     }
 
@@ -104,8 +104,8 @@ class HtmlReportPdfRendererTest {
 
     // 5
     @Test
-    void 정상_템플릿_버전은_pdf_v1이고_str_reports_칸_길이_안() {
-        assertThat(RENDERER.templateVersion()).isEqualTo("pdf_v1").hasSizeLessThanOrEqualTo(32);
+    void 정상_템플릿_버전은_pdf_v2이고_str_reports_칸_길이_안() {   // v2: VI 이름표 (11/21)
+        assertThat(RENDERER.templateVersion()).isEqualTo("pdf_v2").hasSizeLessThanOrEqualTo(32);
     }
 
     // 6

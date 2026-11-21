@@ -70,7 +70,7 @@ final class ReportPdfFixtures {
         cp.addObject().put("account_key", "10_80001").put("same_bank", true).putNull("bank_name");
 
         ObjectNode v = root.putObject("suspicion");
-        v.putArray("types").add("VI-2-9").add("VI-4-26");
+        v.putArray("types").add("DEMO_VI4_12").add("DEMO_VI2_09");   // 고른 순서 ≠ 서식 순서
         v.put("level_branch", 3);
         v.put("level_hq", 4);
 

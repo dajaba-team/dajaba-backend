@@ -127,7 +127,7 @@ class GenerateStrReportPdfDbTest {
         Map<String, Object> row = pdfRow(draftId);
         String key = (String) row.get("pdf_storage_key");
         assertThat(key).isEqualTo(reportNo.substring(4, 8) + "/" + reportNo + "-1.pdf");
-        assertThat(row).containsEntry("pdf_status", "READY").containsEntry("pdf_template_version", "pdf_v1")
+        assertThat(row).containsEntry("pdf_status", "READY").containsEntry("pdf_template_version", "pdf_v2")
                 .containsEntry("pdf_attempts", 1).containsEntry("pdf_failure_code", null);
         byte[] stored = Files.readAllBytes(Path.of(storageDir).resolve(key));
         assertThat(row.get("pdf_sha256")).isEqualTo(StrPdfDigest.sha256(stored));
