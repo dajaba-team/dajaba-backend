@@ -102,7 +102,7 @@
 | 유스케이스 | API | 검사 순서·오류 |
 |---|---|---|
 | `ListCases` (readOnly) | 01 `GET /cases` | `status` 비면 전체, `assignee` = `me`·login_id(없는 login_id면 빈 목록), `from`·`to` = **한국 날짜** 케이스 생성일 양 끝 포함. 정렬 `score`·`created_at`·`status`, 동률 `created_at DESC, id DESC`. 형식 검사(size ≤ 100, 정렬 화이트리스트, from ≤ to)는 컨트롤러 |
-| `GetCaseDetail` (readOnly 아님) | 02 `GET /cases/{case_no}` | 404 `CASE_NOT_FOUND`(기록 안 함) → `accessLog.view(CASE)` → 최근 이력 20건(최신 먼저, 작성자 login_id) · `available_actions` |
+| `GetCaseDetail` (readOnly 아님) | 02 `GET /cases/{case_no}` | 404 `CASE_NOT_FOUND`(기록 안 함) → `accessLog.view(CASE)` → 최근 이력 20건(최신 먼저, 작성자 login_id, **ASSIGN·REASSIGN은 `from_assignee`·`to_assignee`** `{login_id, display_name}` — 그 밖은 null, SCRUM-348) · `available_actions` |
 | `AssignCase` | 03 `POST …/assign` | 404 → version 409 `CONCURRENT_UPDATE` → 대상: 조사역이 남 지정 409 `INVALID_ASSIGNEE`(`details.reason = SELF_ONLY`), 없는 login_id 404 `USER_NOT_FOUND`, 비활성·조사역 아님 409 `INVALID_ASSIGNEE` → 상태 409 `INVALID_CASE_TRANSITION`. 조사역은 `assignee` 생략 = 본인, ADMIN은 필수 |
 | `EscalateCase` | 07 `POST …/escalate` | 404 → version 409 → 담당 403 `NOT_ASSIGNEE` → 상태 409 → 사유 |
 | `CloseCase` | 06 `POST …/close` | 404 → version 409 → 담당 403 → 상태 409 → **초안 있으면 409 `CLOSE_REQUIRES_STR`**(`Case.closeWithoutDraft`) → 사유. 초안 있는 종결은 str `close-with-draft`가 공개 기능 `CloseCaseWithDraft`(SCRUM-235)를 불러요 |
@@ -110,7 +110,7 @@
 | `CaseTransactions.list` (SCRUM-179) | 08 `GET …/transactions?scope&sort&page&size` | 404 → detection `ListAlertTransactions`(경보에 묶인 거래). `direction`은 케이스 계좌 기준 `TransactionDirection`(받음 INBOUND·보냄 OUTBOUND·둘 다 아님 INDIRECT, 자기계좌는 INBOUND). `scope=CONTEXT`는 저장소가 없어 빈 목록 〔참고 거래 등록 방식 미정〕. sort `ts`·`transaction_id` asc·desc, 계좌는 `AccountDisplay` |
 | `CaseTransactions.evidence` (SCRUM-179) | 09 `GET …/evidence/{transaction_id}` | 404 `CASE_NOT_FOUND` → 이 경보의 거래가 아니면(없는 거래 포함) 404 `EVIDENCE_NOT_FOUND` → 열람 기록(`access_logs`에 거래 대상이 없어 CASE로) → `{case_no, transaction, source{dataset, record_id, is_synthetic}, eligible_for_str}` |
 | `CaseTransactions.graph` (SCRUM-179) | 10 `GET …/graph?limit` | limit 기본 200(1~1,000), 시각 순. 노드 account_ref 중복 제거, 선은 거래마다(금액 = 받은 쪽). 넘치면 `truncated` |
-| `ListCaseHistories` (SCRUM-179) | 11 `GET …/histories?action&page&size` | 최신 먼저, NOTE 제외(`action=NOTE`는 400 — C8로). 한 줄 모양은 상세 `history`와 같음 |
+| `ListCaseHistories` (SCRUM-179) | 11 `GET …/histories?action&page&size` | 최신 먼저, NOTE 제외(`action=NOTE`는 400 — C8로). 한 줄 모양은 상세 `history`와 같음(`from_assignee`·`to_assignee` 포함, SCRUM-348) |
 | 상세 `aggregates` (SCRUM-179) | 02 | 근거 거래 전체로 `CaseAggregates`: 통화별 유입(amount_received)·유출(amount_paid), 경유·자기계좌 거래 제외, 환산 없음. `transaction_count`·`first_ts`·`last_ts`는 전체 기준 |
 
 - 세 변경 유스케이스는 공통 변경 응답(`CaseChangeResult` — 계약서 5.3 M)을 돌려줘요. `version`·`updated_at`은 flush 뒤 값. 요청 `version` 비교 뒤 커밋 때 `@Version`이 한 번 더 막아서 동시에 맡기면 뒤 요청은 409 `CONCURRENT_UPDATE`.

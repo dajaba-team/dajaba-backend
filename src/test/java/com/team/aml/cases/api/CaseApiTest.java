@@ -393,6 +393,25 @@ class CaseApiTest {
                 .isEqualTo("NOT_ASSIGNEE");
         JsonNode detail = json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(admin)), 200));
         assertThat(texts(detail.get("available_actions"))).contains("REASSIGN");
+
+        // SCRUM-348 — 이력 한 줄에 누구에게서 누구로. 상세(C2)와 이력 목록(C6)이 같은 모양
+        JsonNode list = json.readTree(body(get("/api/v1/cases/{caseNo}/histories", caseNo).with(as(admin)), 200));
+        for (JsonNode items : List.of(detail.get("history"), list.get("items"))) {
+            JsonNode reassigned = items.get(0);   // 최신이 먼저
+            assertThat(reassigned.get("action").asText()).isEqualTo("REASSIGN");
+            assertThat(reassigned.get("from_assignee").get("login_id").asText()).isEqualTo(inv.loginId());
+            assertThat(reassigned.get("from_assignee").get("display_name").asText()).isEqualTo(inv.displayName());
+            assertThat(reassigned.get("to_assignee").get("login_id").asText()).isEqualTo(inv2.loginId());
+            JsonNode assigned = items.get(1);
+            assertThat(assigned.get("action").asText()).isEqualTo("ASSIGN");
+            assertThat(assigned.get("from_assignee").isNull()).isTrue();   // 배정은 받은 사람만
+            assertThat(assigned.get("to_assignee").get("login_id").asText()).isEqualTo(inv.loginId());
+            JsonNode opened = items.get(items.size() - 1);
+            assertThat(opened.get("action").asText()).isEqualTo("OPEN");
+            assertThat(opened.get("from_assignee").isNull()).isTrue();     // 담당이 안 바뀐 줄은 둘 다 null
+            assertThat(opened.get("to_assignee").isNull()).isTrue();
+            assertThat(reassigned.has("from_assignee_id")).isFalse();      // 내부 id 는 안 내보냄
+        }
     }
 
     @Test
