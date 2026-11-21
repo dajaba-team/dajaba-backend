@@ -1,0 +1,361 @@
+{
+  "uid": "batches",
+  "title": "배치",
+  "description": "배치 4단계(적재·룰 스캔·점수·케이스 생성) 실행 시간·건수 · 룰별 스캔 시간 · 점수 결과 (docs/06_features/source_detection.md 지표, SCRUM-349)",
+  "tags": [
+    "backend",
+    "batches"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "bargauge",
+      "title": "단계별 실행 횟수 (성공·실패)",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (type, result) (increase(aml_batch_duration_seconds_count{job=\"app\"}[$__range]))",
+          "legendFormat": "{{type}} {{result}}",
+          "instant": true
+        }
+      ],
+      "description": "고른 기간에 끝난 실행 수. type = LOAD_DATASET·RULE_SCAN·SCORE_REQUEST·OPEN_CASES, result = SUCCEEDED·FAILED. 커밋된 뒤 한 번 센다(롤백·앱 재시작 정리는 안 셈)",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 2,
+      "type": "bargauge",
+      "title": "단계별 평균 실행 시간",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (type) (increase(aml_batch_duration_seconds_sum{job=\"app\"}[$__range])) / sum by (type) (increase(aml_batch_duration_seconds_count{job=\"app\"}[$__range]))",
+          "legendFormat": "{{type}}",
+          "instant": true
+        }
+      ],
+      "description": "started_at ~ finished_at 평균(성공·실패 합침). 점수는 AI 호출 시간이 대부분",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "단계별 최대 실행 시간 (최근)",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (type) (aml_batch_duration_seconds_max{job=\"app\"})",
+          "legendFormat": "{{type}}"
+        }
+      ],
+      "description": "Micrometer max 는 최근 몇 분 안의 최댓값이라 실행이 없으면 0으로 내려가요"
+    },
+    {
+      "id": 4,
+      "type": "bargauge",
+      "title": "단계별 처리 건수 (성공한 실행)",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (type, kind) (increase(aml_batch_rows_total{job=\"app\"}[$__range]))",
+          "legendFormat": "{{type}} {{kind}}",
+          "instant": true
+        }
+      ],
+      "description": "rows_in(in)·rows_out(out). 적재 = 파일 행·거래, 룰 스캔 = 그날 거래·경보, 점수 = 보낸 경보·점수 낸 경보, 케이스 생성 = 대상 경보·만든 케이스",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 5,
+      "type": "bargauge",
+      "title": "룰별 평균 스캔 시간",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (rule) (increase(aml_rule_scan_duration_seconds_sum{job=\"app\"}[$__range])) / sum by (rule) (increase(aml_rule_scan_duration_seconds_count{job=\"app\"}[$__range]))",
+          "legendFormat": "{{rule}}",
+          "instant": true
+        }
+      ],
+      "description": "룰 하나의 쿼리·경보 저장을 합친 시간(rules.md §2.3). 날짜·배치 번호는 로그 rule_scan_timing 에",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 6,
+      "type": "bargauge",
+      "title": "점수 결과 (경보 수)",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (result) (increase(aml_score_alerts_total{job=\"app\"}[$__range]))",
+          "legendFormat": "{{result}}",
+          "instant": true
+        }
+      ],
+      "description": "scored = 점수 저장, failed_retryable = 다시 보낼 실패(코드 없음·COMPUTE_ERROR, 묶음 호출 실패 포함), failed_final = 다시 보내도 같은 실패(RULE_NOT_SUPPORTED 등). 실패를 0점·저위험으로 보지 않아요",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "점수 실패율",
+      "gridPos": {
+        "x": 18,
+        "y": 16,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(aml_score_alerts_total{job=\"app\", result=~\"failed_.*\"}[$__range])) / sum(increase(aml_score_alerts_total{job=\"app\"}[$__range]))",
+          "legendFormat": "실패율",
+          "instant": true
+        }
+      ],
+      "description": "(failed_retryable + failed_final) / 전체 보낸 경보",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal"
+      }
+    },
+    {
+      "id": 8,
+      "type": "bargauge",
+      "title": "점수 묶음 (AI 호출)",
+      "gridPos": {
+        "x": 18,
+        "y": 20,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (result) (increase(aml_score_chunks_total{job=\"app\"}[$__range]))",
+          "legendFormat": "{{result}}",
+          "instant": true
+        }
+      ],
+      "description": "묶음(최대 500건)마다 AI 호출 1번. ai_failed = 재시도 뒤에도 호출 실패 — 그 묶음 경보는 전부 failed_retryable",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal"
+      }
+    }
+  ]
+}
