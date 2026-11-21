@@ -1,5 +1,6 @@
 package com.team.aml.shared.security;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.core.session.SessionRegistry;
@@ -7,10 +8,11 @@ import org.springframework.security.core.session.SessionRegistryImpl;
 import org.springframework.security.web.session.HttpSessionEventPublisher;
 
 /**
- * 세션을 서버 메모리(Tomcat)에 둔다. 재시작하면 모두 로그아웃(받아들임).
- * SecurityConfig 에서 옮겨 왔다 — 다음 단계에서 세션 저장소(Redis)를 설정으로 바꿀 수 있게 (SCRUM-273).
+ * 세션을 서버 메모리(Tomcat)에 둘 때 — 기본값({@code aml.session.redis.enabled=false}). Redis 에 연결하지 않는다.
+ * 재시작하면 모두 로그아웃(받아들임). Redis 로 켜면 {@link RedisSessionConfig} 가 대신한다 (SCRUM-273).
  */
 @Configuration
+@ConditionalOnProperty(name = "aml.session.redis.enabled", havingValue = "false", matchIfMissing = true)
 public class MemorySessionConfig {
 
     /** 세션 만료·무효화를 SessionRegistry 에 알린다 — 없으면 maximumSessions 가 이미 끝난 세션도 센다. */

@@ -63,6 +63,7 @@
 | 권한 없음 | 403 | `FORBIDDEN` |
 | 없는 경로 (`NoResourceFoundException`, 로그인한 `/api/**` 요청) | 404 | `NOT_FOUND` — "요청한 주소가 없습니다", `details` `{}`(경로를 다시 넣지 않음), 경고 한 줄(`not found method=… uri=…`) [SCRUM-157] |
 | 안 되는 메서드 (`HttpRequestMethodNotSupportedException`) | 405 | `METHOD_NOT_ALLOWED` — "지원하지 않는 요청 방식입니다", `details` `{}`, `Allow` 헤더에 허용 메서드(Spring이 모르면 헤더 없음), 경고 한 줄(`method not allowed method=… uri=…`) [SCRUM-157] |
+| 세션 저장소(Redis) 장애 — 연결 실패·시간 초과·쓰기 거부(maxmemory `noeviction` OOM). Redis 세션을 켰을 때만 | 503 | `SESSION_STORE_UNAVAILABLE` — "로그인 세션 저장소에 연결할 수 없습니다. 잠시 뒤 다시 시도하세요", `details` `{}`. 관리자 변경이 커밋된 뒤 세션 끊기만 실패했으면 메시지 "변경은 저장됐지만 세션 저장소에 연결할 수 없어 그 사용자의 로그인을 끊지 못했습니다", `details` `{"change_saved": true}`(04 §7). Spring Session 필터 바깥의 `SessionStoreFailureFilter`가 내요(`GlobalExceptionHandler`는 다시 던짐 — 응답을 쓰면 세션 저장을 또 시도해서). 응답을 비울 때 `X-Request-Id`·CORS 헤더(`Access-Control-*`·`Vary`)는 다시 붙여요(다른 출처 프론트가 본문을 읽게). **로그아웃(`POST /api/v1/auth/logout`)만은 비운 뒤 SESSION 만료 쿠키(`Max-Age=0`, 세션 쿠키와 같은 속성)를 붙여요** — 로그아웃 필터가 인증을 읽다 처리기 전에 끊겨 세션도 쿠키도 못 지우는데, 쿠키라도 지워야 Redis가 돌아왔을 때 그 세션으로 다시 로그인 상태가 되지 않아요(다음 요청은 401). 다른 요청은 쿠키를 그대로 둬요(Redis가 잠깐 흔들려도 모두 로그아웃되지 않게). 경고 한 줄 `session store unavailable error={오류 클래스} method=… uri=…` — 호스트·세션 ID·원인 메시지 없음 [SCRUM-273] |
 | 그 밖 (위 어디에도 안 걸린 진짜 처리 안 된 예외만) | 500 | `INTERNAL_ERROR`, 메시지는 "알 수 없는 오류" 고정, 스택은 로그에만 |
 
 `/api/**` 밖은 `denyAll`이라 없는 경로여도 로그인 403 `FORBIDDEN`·비로그인 401 `UNAUTHENTICATED`예요. `/api/**` 안에서도 비로그인이면 404보다 401이 먼저예요(없는 주소인지 알려 주지 않음). [SCRUM-157]
@@ -99,6 +100,7 @@
 | 409 | `LOGIN_ID_TAKEN`, `ASSIGNEE_HAS_ACTIVE_CASES` (`details.active_case_count`), `ACCOUNT_CHANGE_NOT_ALLOWED` (`details.reason` = `SELF`·`SYSTEM`) | user 계정 관리 — 아이디 중복(DB unique 위반도 같은 409) · 진행 중 담당이 남은 조사역을 승인자로 · 관리자 본인·SYSTEM 계정 변경 | 확정 [SCRUM-135 ②, 11/10 진희] |
 | 502 | AI가 준 코드 그대로 (`LLM_UNAVAILABLE`, `LLM_INVALID_OUTPUT`, `LLM_BUDGET_EXCEEDED`, AI 503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`), `AI_UNAVAILABLE`(연결 실패 — 연결 거부·이름 조회 실패·보낸 뒤 끊김, SCRUM-229), `AI_TIMEOUT`, `AI_BAD_RESPONSE`, `AI_DRAFT_NOT_FOUND`·`AI_INVALID_REQUEST`·`AI_UNAUTHENTICATED`(AI 404·400·401 이름 바꿈, SCRUM-128), `SUMMARY_CODE_CHECK_FAILED` | AI 연동 | AI 코드는 확정 [규약 v0.2 §6.3]. 백엔드 매핑 `AI_UNAVAILABLE`·`AI_TIMEOUT`·`AI_BAD_RESPONSE`는 SCRUM-17 확정. 〔제안〕 `SUMMARY_CODE_CHECK_FAILED` — 요약 응답은 200인데 `code_checks` 중 `match=false`가 있어 저장하지 않음(`details.failed_checks`), 기존 요약 유지 [규약 v0.4 §6.1, RefreshCaseSummary] |
 | 500 | `INTERNAL_ERROR` | 공통 | 확정 |
+| 503 | `SESSION_STORE_UNAVAILABLE` | 공통 — Redis 세션 켰을 때 Redis 장애(§12). 프론트는 "잠시 뒤 다시"(로그인 화면으로 보내지 않음 — 세션은 살아 있을 수 있음) | 〔제안〕 [SCRUM-273] |
 
 AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지고 `LLM_UNAVAILABLE`로 합쳐졌어요. `VERIFY_UNAVAILABLE`은 에러가 아니라 **검증 결과의 `status` 값**(200 응답)이라 검증 결과 한 줄로 저장해요 [§5.3].
 
@@ -334,6 +336,7 @@ docker exec -it -e PGOPTIONS='-c default_transaction_read_only=on' aml-db psql -
 
 Prometheus·Grafana·Loki·Alloy·Redis·RabbitMQ·MinIO·Elasticsearch·Langfuse를 `compose.yaml`에 `profiles: [ops]`로 띄워요. 띄우는 법·도구별 표·`.env` 변수는 README "운영 도구"에 있어요. 규칙은 `ComposeStructureTest`가 CI에서 막아요: 도구는 전부 ops 프로필 · 호스트 포트 없음 · 이미지 태그(또는 digest) 고정 · healthcheck(Loki만 예외, distroless) · 메모리 상한 · app `depends_on`은 db뿐 · `${VAR:?}` 안 씀.
 
+- **Redis 세션** — `AML_SESSION_REDIS_ENABLED=true`일 때만(기본 꺼짐 = 메모리 세션, Redis에 연결 안 함). Spring Session indexed, db 0, 키 `aml:session:*`, 만료는 `server.servlet.session.timeout`(30m). 키 공간 알림은 안 써요(`RedisSessionConfig` — 구독을 띄우지 않아 compose redis 명령은 그대로). Redis가 죽어도 앱은 뜨고 세션이 필요한 요청만 503 `SESSION_STORE_UNAVAILABLE`(§2), health에는 안 넣어요(`08_decisions.md` 미결 33) [SCRUM-273]
 - **원본은 PostgreSQL 하나.** Redis는 세션만(db 0), RabbitMQ는 작업 ID만, MinIO는 PDF 파일만, Elasticsearch는 검색 색인만. 예외는 Langfuse 내부 저장(Redis db 1·MinIO `langfuse` 버킷·db의 `langfuse` DB)뿐.
 - **도구가 죽어도 그 기능만 멈춰요.** 붙일 때도 지표·추적 연결은 실패를 무시(fail-open)하고, app·ai `depends_on`에 도구를 넣지 않아요.
 - 로그·지표·추적에 계좌번호·금액·본문·프롬프트 전문을 넣지 않아요(NFR-COM-04, §8). Alloy는 표준출력을 그대로 옮겨요.
