@@ -20,6 +20,8 @@ import com.team.aml.shared.ai.AiDtos.CaseSummaryRequest;
 import com.team.aml.shared.ai.AiDtos.CaseSummaryResponse;
 import com.team.aml.shared.ai.AiDtos.StrDraftResponse;
 import com.team.aml.shared.security.AppUserDetails;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.OptimisticLockException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -99,6 +101,7 @@ class RefreshCaseSummaryDbTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired ObjectMapper om;
     @Autowired PlatformTransactionManager transactionManager;
+    @Autowired MeterRegistry meters;
 
     private long inv;
     private long inv2;
@@ -230,9 +233,11 @@ class RefreshCaseSummaryDbTest {
     void 실패_화면이_읽은_version이_다르면_409() {
         Fixture f = caseWithAlert(CaseStatus.REVIEWING, true);
         loginAs(inv);
+        double before = failures("SAVE", "VERSION_MISMATCH");
         assertThatThrownBy(() -> refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion() - 1))
                 .isInstanceOf(OptimisticLockException.class);
         verify(aiClient, never()).caseSummary(any());
+        assertThat(failures("SAVE", "VERSION_MISMATCH")).isEqualTo(before);   // AI 부르기 전 검사는 요약 실패로 안 센다
     }
 
     @Test
@@ -261,10 +266,25 @@ class RefreshCaseSummaryDbTest {
         Fixture f = caseWithAlert(CaseStatus.REVIEWING, true);
         when(aiClient.caseSummary(any())).thenThrow(new AiClientException("LLM_UNAVAILABLE", "down"));
         loginAs(inv);
+        double before = failures("AI_CALL", "LLM_UNAVAILABLE");
 
         assertThatThrownBy(() -> refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion()))
                 .isInstanceOfSatisfying(AiClientException.class, e -> assertThat(e.code()).isEqualTo("LLM_UNAVAILABLE"));
         assertNothingSaved(f);
+        assertThat(failures("AI_CALL", "LLM_UNAVAILABLE")).isEqualTo(before + 1);   // SCRUM-276 — AI 호출 실패는 코드별로
+    }
+
+    @Test
+    void 경계_표에_없는_AI_코드는_지표에서_AI_OTHER로_센다() {
+        Fixture f = caseWithAlert(CaseStatus.REVIEWING, true);
+        when(aiClient.caseSummary(any())).thenThrow(new AiClientException("BRAND_NEW_AI_CODE", "new"));
+        loginAs(inv);
+        double before = failures("AI_CALL", "AI_OTHER");
+
+        assertThatThrownBy(() -> refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion()))
+                .isInstanceOfSatisfying(AiClientException.class, e -> assertThat(e.code()).isEqualTo("BRAND_NEW_AI_CODE"));
+        assertThat(failures("AI_CALL", "AI_OTHER")).isEqualTo(before + 1);
+        assertThat(meters.find(CaseMetrics.SUMMARY_FAILURES).tag("reason", "BRAND_NEW_AI_CODE").counter()).isNull();
     }
 
     @Test
@@ -277,6 +297,7 @@ class RefreshCaseSummaryDbTest {
             return raw;
         }));
         loginAs(inv);
+        double before = failures("RESPONSE_CHECK", "SUMMARY_CODE_CHECK_FAILED");
 
         assertThatThrownBy(() -> refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion()))
                 .isInstanceOfSatisfying(AiClientException.class, e -> {
@@ -285,6 +306,8 @@ class RefreshCaseSummaryDbTest {
                     assertThat(e.details()).containsEntry("failed_checks", List.of("AMOUNT_MATCH"));
                 });
         assertNothingSaved(f);
+        assertThat(failures("RESPONSE_CHECK", "SUMMARY_CODE_CHECK_FAILED")).isEqualTo(before + 1);
+        assertThat(failures("AI_CALL", "SUMMARY_CODE_CHECK_FAILED")).isZero();   // AI 호출 자체는 성공 — 단계가 다르다
     }
 
     @Test
@@ -298,6 +321,7 @@ class RefreshCaseSummaryDbTest {
                 raw -> { raw.remove("code_checks"); return raw; },
                 raw -> { raw.putArray("code_checks"); return raw; },   // 빈 code_checks 는 "전부 match" 가 아니다 (#65 리뷰)
                 raw -> { ArrayNode lines = raw.putArray("summary_lines"); for (int n = 0; n < 7; n++) lines.add("줄"); return raw; });
+        double before = failures("RESPONSE_CHECK", "AI_BAD_RESPONSE");
 
         for (Function<ObjectNode, ObjectNode> edit : broken) {
             reset(aiClient);
@@ -306,6 +330,7 @@ class RefreshCaseSummaryDbTest {
                     .isInstanceOfSatisfying(AiClientException.class, e -> assertThat(e.code()).isEqualTo("AI_BAD_RESPONSE"));
         }
         assertNothingSaved(f);
+        assertThat(failures("RESPONSE_CHECK", "AI_BAD_RESPONSE")).isEqualTo(before + broken.size());
     }
 
     // ── AI 대기 중 바뀐 경우 (늦게 온 응답은 저장하지 않는다) ─────────
@@ -323,9 +348,11 @@ class RefreshCaseSummaryDbTest {
             return ok(i.getArgument(0));
         });
         loginAs(inv);
+        double before = failures("SAVE", "VERSION_MISMATCH");
 
         assertThatThrownBy(() -> refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion()))
                 .isInstanceOf(OptimisticLockException.class);
+        assertThat(failures("SAVE", "VERSION_MISMATCH")).isEqualTo(before + 1);   // 종결이 version 을 올려 version 검사에서 먼저 막힘
         assertThat(summaryCount(f.c.getId())).isZero();
         assertThat(cases.findById(f.c.getId()).orElseThrow().getStatus()).isEqualTo(CaseStatus.CLOSED);
     }
@@ -338,10 +365,14 @@ class RefreshCaseSummaryDbTest {
             return ok(i.getArgument(0));
         });
         loginAs(inv);
+        double hash = failures("SAVE", "INPUT_HASH_MISMATCH");
+        double version = failures("SAVE", "VERSION_MISMATCH");
 
         assertThatThrownBy(() -> refreshSummary.execute(f.c.getCaseNo(), f.c.getVersion()))
                 .isInstanceOf(OptimisticLockException.class);
         assertNothingSaved(f);
+        assertThat(failures("SAVE", "INPUT_HASH_MISMATCH")).isEqualTo(hash + 1);
+        assertThat(failures("SAVE", "VERSION_MISMATCH")).isEqualTo(version);   // 같은 409 라도 이유가 섞이지 않는다
     }
 
     // ── 도우미 ────────────────────────────────────────────────
@@ -510,6 +541,12 @@ class RefreshCaseSummaryDbTest {
 
     private TransactionTemplate tx() {
         return new TransactionTemplate(transactionManager);
+    }
+
+    /** aml.cases.summary.failures{stage, reason} 지금 값. 컨텍스트를 테스트끼리 같이 써서 차이로 본다. */
+    private double failures(String stage, String reason) {
+        Counter c = meters.find(CaseMetrics.SUMMARY_FAILURES).tag("stage", stage).tag("reason", reason).counter();
+        return c == null ? 0 : c.count();
     }
 
     private void loginAs(long userId) {
