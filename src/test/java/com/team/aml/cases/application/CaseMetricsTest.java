@@ -2,6 +2,7 @@ package com.team.aml.cases.application;
 
 import com.team.aml.cases.application.CaseMetrics.SaveFailure;
 import com.team.aml.cases.domain.CaseAction;
+import com.team.aml.shared.metrics.ErrorMetrics;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -69,6 +70,19 @@ class CaseMetricsTest {
 
         assertThat(failures("AI_CALL", "AI_OTHER")).isEqualTo(3);
         assertThat(registry.find(CaseMetrics.SUMMARY_FAILURES).counters()).hasSize(1);
+    }
+
+    @Test
+    void 경계_AI_코드_목록은_공통_에러_지표와_같다() {
+        // CaseMetrics 에 따로 적던 목록엔 AI_DRAFT_NOT_FOUND 가 빠져 있었다 — 이제 ErrorMetrics.isAiCode 한 곳 (#157 리뷰)
+        metrics.summaryAiFailed("AI_DRAFT_NOT_FOUND");
+        metrics.summaryRejected("SUMMARY_CODE_CHECK_FAILED");
+
+        assertThat(failures("AI_CALL", "AI_DRAFT_NOT_FOUND")).isEqualTo(1);
+        assertThat(failures("RESPONSE_CHECK", "SUMMARY_CODE_CHECK_FAILED")).isEqualTo(1);
+        assertThat(ErrorMetrics.isAiCode("AI_DRAFT_NOT_FOUND")).isTrue();
+        assertThat(ErrorMetrics.isAiCode("BRAND_NEW_AI_CODE")).isFalse();
+        assertThat(ErrorMetrics.isAiCode(null)).isFalse();
     }
 
     // --- 실패 ---------------------------------------------------------------

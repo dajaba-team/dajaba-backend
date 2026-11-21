@@ -113,7 +113,7 @@
           "legendFormat": "{{action}}"
         }
       ],
-      "description": "케이스 변경 API 가 409 CONCURRENT_UPDATE 로 끝난 건수. 다른 409(INVALID_CASE_TRANSITION 등)는 안 섞인다 — 그건 「백엔드 공통」 에러 코드별 건수"
+      "description": "케이스 변경 API 가 409 CONCURRENT_UPDATE 로 끝난 건수. 다른 409(INVALID_CASE_TRANSITION 등)는 안 섞인다 — 그건 「백엔드 공통」 에러 코드별 건수. 요약 갱신(REFRESH_SUMMARY) 충돌은 「AI 조사 요약 실패」 SAVE 에도 같이 잡힌다 — 두 패널 숫자를 더하지 말 것"
     },
     {
       "id": 4,
@@ -147,7 +147,7 @@
           "legendFormat": "{{stage}} {{reason}}"
         }
       ],
-      "description": "A7 요약 갱신이 저장하지 못한 건수. AI_CALL = AI 호출 실패(AI 코드), RESPONSE_CHECK = 응답 확인 실패, SAVE = 저장 단계 다시 검사(version·입력 해시·담당·상태)"
+      "description": "A7 요약 갱신이 저장하지 못한 건수. AI_CALL = AI 호출 실패(AI 코드), RESPONSE_CHECK = 응답 확인 실패, SAVE = 저장 단계 다시 검사(version·입력 해시·담당·상태). SAVE 의 VERSION_MISMATCH·INPUT_HASH_MISMATCH 는 「동시 수정 충돌」 REFRESH_SUMMARY 에도 같이 잡힌다 — 두 패널 숫자를 더하지 말 것"
     }
   ]
 }

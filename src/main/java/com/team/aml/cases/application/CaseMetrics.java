@@ -1,12 +1,11 @@
 package com.team.aml.cases.application;
 
 import com.team.aml.cases.domain.CaseAction;
+import com.team.aml.shared.metrics.ErrorMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-
-import java.util.Set;
 
 /**
  * CASES 지표 (SCRUM-276, 03_shared §13 이름·태그 규칙, cases.md "지표").
@@ -43,11 +42,7 @@ public class CaseMetrics {
         STATE_CHANGED
     }
 
-    /** AI_CALL·RESPONSE_CHECK 의 reason 으로 그대로 쓰는 코드 — 03_shared §2 표의 502 줄. 그 밖은 AI_OTHER. */
-    static final Set<String> AI_CODES = Set.of(
-            "LLM_UNAVAILABLE", "LLM_INVALID_OUTPUT", "LLM_BUDGET_EXCEEDED", "MODEL_UNAVAILABLE", "DB_UNAVAILABLE",
-            "AI_UNAVAILABLE", "AI_TIMEOUT", "AI_BAD_RESPONSE", "AI_INVALID_REQUEST", "AI_UNAUTHENTICATED",
-            "SUMMARY_CODE_CHECK_FAILED");
+    /** AI_CALL·RESPONSE_CHECK 의 reason — 03_shared §2 표의 AI 코드({@link ErrorMetrics#isAiCode}, 목록은 거기 한 곳)는 그대로, 그 밖은 이것. */
     static final String AI_OTHER = "AI_OTHER";
 
     private static final Logger log = LoggerFactory.getLogger(CaseMetrics.class);
@@ -79,7 +74,7 @@ public class CaseMetrics {
     }
 
     static String aiReason(String code) {
-        return code != null && AI_CODES.contains(code) ? code : AI_OTHER;
+        return ErrorMetrics.isAiCode(code) ? code : AI_OTHER;
     }
 
     private void increment(String name, String... tags) {

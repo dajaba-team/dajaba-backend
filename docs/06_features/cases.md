@@ -219,10 +219,11 @@
 
   | `stage` | `reason` | 언제 |
   |---|---|---|
-  | `AI_CALL` | AI 코드(§2 표 502 줄: `LLM_UNAVAILABLE`·`AI_TIMEOUT`·`AI_UNAVAILABLE`…), 그 밖·null은 `AI_OTHER` | ② `AiClient.caseSummary` 실패(재시도 다 쓴 뒤) |
+  | `AI_CALL` | AI 코드(§2 표 502 줄: `LLM_UNAVAILABLE`·`AI_TIMEOUT`·`AI_UNAVAILABLE`…), 그 밖·null은 `AI_OTHER`. 목록은 공통 에러 지표와 같은 `ErrorMetrics.isAiCode` 한 곳(따로 적지 않음) | ② `AiClient.caseSummary` 실패(재시도 다 쓴 뒤) |
   | `RESPONSE_CHECK` | `AI_BAD_RESPONSE`·`SUMMARY_CODE_CHECK_FAILED` | ② AI는 답했지만 저장할 수 없는 응답 |
   | `SAVE` | `VERSION_MISMATCH`(version 다름·커밋 때 충돌) · `INPUT_HASH_MISMATCH`(경보·점수·근거가 바뀜) · `ASSIGNEE_CHANGED` · `STATE_CHANGED` | ③ 저장 트랜잭션에서 다시 검사하다 막힘 — AI를 기다리는 사이 바뀐 것 |
 
+- **요약 저장 단계 충돌은 두 지표에 다 잡혀요.** `SAVE`의 `VERSION_MISMATCH`·`INPUT_HASH_MISMATCH`는 409 `CONCURRENT_UPDATE`로 나가서 `conflicts{action=REFRESH_SUMMARY}`에도 하나 더 세요. 두 지표는 묻는 게 달라요(요약이 왜 저장 못 됐나 / 어느 동작이 충돌했나) — **두 패널 숫자를 더하지 마세요**. `ASSIGNEE_CHANGED`(403)·`STATE_CHANGED`(409 `INVALID_CASE_TRANSITION`)는 충돌 지표에 안 잡혀요. [#157 리뷰]
 - 태그에 케이스 번호·사용자·예외 메시지 없음(NFR-COM-04). 세다가 예외가 나도 응답·예외는 그대로(fail-open, `CaseMetrics`). 낙관적·비관적 락 동작은 바꾸지 않았어요.
 - 확인: `docker compose --profile ops up -d app prometheus grafana` → Prometheus(`localhost:9090`)에서 `aml_cases_conflicts_total`·`aml_cases_summary_failures_total`, Grafana 「CASES」 대시보드. 카운터는 **처음 셀 때 생겨요** — 충돌·실패가 한 번도 없으면 Prometheus에 이름이 안 보여요(정상).
 
