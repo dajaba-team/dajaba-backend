@@ -59,6 +59,9 @@ class MessagingConfigTest {
             String json = new String(converter.toMessage(new BatchRunMessage(42), new MessageProperties()).getBody(),
                     StandardCharsets.UTF_8);
             assertThat(json).isEqualTo("{\"batch_run_id\":42}");
+            String strJson = new String(converter.toMessage(new StrReportPdfMessage(73), new MessageProperties()).getBody(),
+                    StandardCharsets.UTF_8);
+            assertThat(strJson).isEqualTo("{\"draft_id\":73}");
         });
     }
 

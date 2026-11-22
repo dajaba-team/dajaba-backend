@@ -113,6 +113,10 @@ aml:
   messaging:
     enabled: ${AML_RABBITMQ_ENABLED:false}
     confirm-timeout: 3s
+  # 배치 자동 연쇄 켜기(true)·끄기(false, 기본) — 룰 스캔 성공 → 같은 날짜 점수 → 점수 SUCCEEDED → 케이스 생성.
+  # 위 messaging 도 켜져 있어야 이어진다. 끄면 단계마다 직접 실행 (SCRUM-349)
+  batch:
+    chain-enabled: ${AML_BATCH_CHAIN_ENABLED:false}
   # 운영 등급 경계값 (CasePolicy, 미결 23). 평가 뒤 확정이라 기본값 없음 — 비어 있으면 케이스 생성 배치가 POLICY_NOT_CONFIGURED
   case-policy:
     version: ${AML_CASE_POLICY_VERSION:}
