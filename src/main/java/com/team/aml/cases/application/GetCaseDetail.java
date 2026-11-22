@@ -106,6 +106,10 @@ public class GetCaseDetail {
             return ids;
         }
 
+        /**
+         * id 가 있는데 사용자 행이 없으면 null — "받은 사람 없음"과 구분되지 않는다.
+         * 사용자를 지우지 않는 설계라 실제로는 생기지 않는다(PR #162 리뷰).
+         */
         private static UserRef refOf(Map<Long, UserRef> refs, Long id) {
             return id == null ? null : refs.get(id);
         }
