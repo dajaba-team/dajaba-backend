@@ -228,4 +228,54 @@ class MockAiClientTest {
         ReferenceSearchResponse ok = client.searchReferences("DRF-000001", search(5, "CYCLE"));
         assertThat(ok.results()).extracting(ReferenceResult::sourceType).containsOnly("PUBLIC");
     }
+
+    // --- SCRUM-357 승인 STR 색인 목업 ---------------------------------------------
+
+    private static StrIndexRequest strIndex(List<String> typologies, String... texts) {
+        String[] names = {"SUBJECT", "DATE", "PLACE", "INSTRUMENT", "METHOD", "GROUNDS", "OPINION"};
+        List<StrIndexSection> sections = new java.util.ArrayList<>();
+        for (int i = 0; i < texts.length; i++) {
+            sections.add(new StrIndexSection(names[i], texts[i]));
+        }
+        return new StrIndexRequest("STR-2026-000012", "DRF-000312", "2026-11-24T01:00:00Z", typologies, sections);
+    }
+
+    private static final String LONG = "가".repeat(60);
+
+    @Test
+    void indexApprovedStr_indexes_non_blank_sections_and_passes_response_check() {
+        StrIndexRequest request = strIndex(List.of("FAN_IN"), LONG, LONG, "   ");
+        StrIndexResponse res = client.indexApprovedStr(request);
+
+        assertThat(res.status()).isEqualTo(StrIndexStatus.INDEXED);
+        assertThat(res.skipReason()).isNull();
+        assertThat(res.chunkCount()).isEqualTo(2);   // 공백만인 섹션은 청크가 아님(AI 와 같음)
+        assertThat(res.reportNo()).isEqualTo("STR-2026-000012");
+        assertThat(res.retrievalVersion()).isNotBlank();
+        assertThat(res.producedAt()).endsWith("Z");
+        WebClientAiClient.requireStrIndexResponse(request, res.raw());
+    }
+
+    @Test
+    void indexApprovedStr_scatter_gather_is_raw_account_before_too_short() {
+        StrIndexRequest request = strIndex(List.of("FAN_IN", "SCATTER_GATHER"), "짧음");
+        StrIndexResponse res = client.indexApprovedStr(request);
+
+        assertThat(res.status()).isEqualTo(StrIndexStatus.SKIPPED);
+        assertThat(res.skipReason()).isEqualTo(StrIndexSkipReason.RAW_ACCOUNT);   // AI 처럼 계좌 검사가 먼저
+        assertThat(res.chunkCount()).isZero();
+        WebClientAiClient.requireStrIndexResponse(request, res.raw());
+    }
+
+    @Test
+    void indexApprovedStr_under_100_non_space_chars_is_too_short_boundary() {
+        StrIndexRequest short99 = strIndex(List.of(), "가".repeat(50) + " \n\t", "가".repeat(49));
+        StrIndexResponse skipped = client.indexApprovedStr(short99);
+        assertThat(skipped.status()).isEqualTo(StrIndexStatus.SKIPPED);
+        assertThat(skipped.skipReason()).isEqualTo(StrIndexSkipReason.TOO_SHORT);
+        WebClientAiClient.requireStrIndexResponse(short99, skipped.raw());
+
+        StrIndexRequest exact100 = strIndex(List.of(), "가".repeat(50), "가".repeat(50));
+        assertThat(client.indexApprovedStr(exact100).status()).isEqualTo(StrIndexStatus.INDEXED);
+    }
 }

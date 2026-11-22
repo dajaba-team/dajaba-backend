@@ -310,6 +310,47 @@ class AiExamplesContractTest {
         assertThat(e.raw().toString()).isEqualTo(empty.toString());
     }
 
+    // --- SCRUM-357 승인 STR 색인 예시 (AI SCRUM-310) ------------------------------------
+
+    @Test
+    void str_index_request_roundtrip() throws Exception {
+        JsonNode original = readExample("str_index_request.json");
+        StrIndexRequest dto = om.treeToValue(original, StrIndexRequest.class);
+        assertThat(om.valueToTree(dto).toString()).isEqualTo(original.toString());
+        assertThat(dto.reportNo()).isEqualTo("STR-2026-000012");
+        assertThat(dto.draftId()).isEqualTo("DRF-000312");
+        assertThat(dto.approvedAt()).isEqualTo("2026-11-24T01:00:00Z");
+        assertThat(dto.typologies()).containsExactly("FAN_IN");
+        assertThat(dto.sections()).extracting(StrIndexSection::section)
+                .containsExactly("SUBJECT", "DATE", "METHOD", "GROUNDS");
+    }
+
+    @Test
+    void str_index_responses_pass_check_and_read_into_dto() throws Exception {
+        StrIndexRequest sent = om.treeToValue(readExample("str_index_request.json"), StrIndexRequest.class);
+
+        JsonNode indexed = readExample("str_index_response_indexed.json");
+        WebClientAiClient.requireStrIndexResponse(sent, indexed);
+        StrIndexResponse i = om.treeToValue(withRaw(indexed), StrIndexResponse.class);
+        assertThat(i.producedAt()).isEqualTo("2026-11-24T01:00:03Z");
+        assertThat(i.status()).isEqualTo(StrIndexStatus.INDEXED);
+        assertThat(i.skipReason()).isNull();
+        assertThat(i.chunkCount()).isEqualTo(4);
+        assertThat(i.retrievalVersion()).isEqualTo("text-embedding-3-small@36b5a2d5");
+        assertThat(i.raw().toString()).isEqualTo(indexed.toString());
+
+        // SKIPPED 예시는 다른 문서번호(STR-2026-000013) — 그 번호로 보낸 요청과 대조
+        JsonNode skipped = readExample("str_index_response_skipped.json");
+        StrIndexRequest sent13 = new StrIndexRequest("STR-2026-000013", sent.draftId(), sent.approvedAt(),
+                sent.typologies(), sent.sections());
+        WebClientAiClient.requireStrIndexResponse(sent13, skipped);
+        StrIndexResponse k = om.treeToValue(withRaw(skipped), StrIndexResponse.class);
+        assertThat(k.status()).isEqualTo(StrIndexStatus.SKIPPED);
+        assertThat(k.skipReason()).isEqualTo(StrIndexSkipReason.RAW_ACCOUNT);
+        assertThat(k.chunkCount()).isZero();
+        assertThat(k.reportNo()).isEqualTo("STR-2026-000013");
+    }
+
     /** contracts/MANIFEST.sha256 = AI 리포 기준 커밋의 해시. 사본이 몰래 바뀌거나 MANIFEST 에 빠진 예시가 있으면 깨진다. */
     @Test
     void manifest_hashes_match_copies_and_cover_every_example() throws Exception {
