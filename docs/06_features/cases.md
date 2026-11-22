@@ -1,6 +1,6 @@
 # 06. cases — 조사
 
-> v0.3 · 2026-11-20 · 초안(팀 확인 중) · 담당 지윤 · 정리 진희 · 11/19 질문 답변 A8·C9(SCRUM-302) · 11/20 CASES 지표(SCRUM-276) · 11/22 상세 `prior_alerts`(SCRUM-239)·`GetCaseEvidence` 안 만듦(SCRUM-243)·`scope=CONTEXT` MVP 빈 목록 확정(SCRUM-244)
+> v0.3 · 2026-11-22 · 초안(팀 확인 중) · 담당 지윤 · 정리 진희 · 11/19 질문 답변 A8·C9(SCRUM-302) · 11/20 CASES 지표(SCRUM-276) · 11/22 상세 `prior_alerts`(SCRUM-239)·`GetCaseEvidence` 안 만듦(SCRUM-243)·`scope=CONTEXT` MVP 빈 목록 확정(SCRUM-244)
 
 담당자 문서는 아직 초안이라 `확정` / **〔초안〕** / **〔확인 필요〕**를 나눠 적었어요(뜻은 [`../README.md`](../README.md) "읽는 법"). 이 파일은 **담당자가 고쳐요.** 노션 초안을 바꾸면 같은 주에 이 파일도 PR로 갱신해 주세요.
 

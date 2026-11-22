@@ -198,7 +198,11 @@ public class GetCaseDetail {
                 transactions.aggregatesOf(c), priorAlertsOf(c.getEntityId(), a.referenceTs()), history, actions);
     }
 
-    /** 법인이 없으면 [] — 계좌로 임의 연결하지 않는다. 케이스 번호는 한 쿼리로 찾는다. */
+    /**
+     * 법인이 없으면 [] — 계좌로 임의 연결하지 않는다. 케이스 번호는 한 쿼리로 찾는다.
+     * 목록은 케이스의 entity_id 로, 건수(prior_alert_count, findForDraft)는 경보의 entity_id 로 찾는다 —
+     * "건수와 같은 기준"은 OpenCaseForAlert 가 경보 법인을 케이스에 그대로 복사한다는 데 기댄다. 케이스 법인을 따로 고치는 기능이 생기면 둘이 어긋난다.
+     */
     private List<PriorAlertItem> priorAlertsOf(String entityId, LocalDateTime before) {
         List<PriorAlert> prior = alertsByEntity.execute(entityId, before, PRIOR_ALERTS_LIMIT);
         if (prior.isEmpty()) {
