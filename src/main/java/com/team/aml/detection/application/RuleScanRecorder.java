@@ -1,5 +1,6 @@
 package com.team.aml.detection.application;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.team.aml.detection.domain.DataRange;
 import com.team.aml.detection.domain.DatasetNotLoadedException;
 import com.team.aml.detection.domain.DateOutOfRangeException;
@@ -20,6 +21,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * 룰 스캔의 batch_runs 기록 (SD 명세 §5 처리 1·6). 적재의 DatasetLoadRecorder 와 같은 모양.
@@ -33,10 +35,12 @@ public class RuleScanRecorder {
 
     private final BatchRunRepository batchRuns;
     private final RuleScanRepository scans;
+    private final ObjectMapper objectMapper;
 
-    public RuleScanRecorder(BatchRunRepository batchRuns, RuleScanRepository scans) {
+    public RuleScanRecorder(BatchRunRepository batchRuns, RuleScanRepository scans, ObjectMapper objectMapper) {
         this.batchRuns = batchRuns;
         this.scans = scans;
+        this.objectMapper = objectMapper;
     }
 
     /** 거절 사유가 있으면 409 를 던지고 아무것도 남기지 않는다. 통과하면 RUNNING 행을 커밋한다. */
@@ -60,10 +64,18 @@ public class RuleScanRecorder {
         return batchRuns.save(BatchRun.start(BatchType.RULE_SCAN, date, triggeredBy)).getId();
     }
 
-    /** 스캔 트랜잭션 안에서만. 경보는 들어갔는데 상태가 RUNNING 으로 남는 일을 막는다. */
+    /**
+     * 스캔 트랜잭션 안에서만. 경보는 들어갔는데 상태가 RUNNING 으로 남는 일을 막는다.
+     * 룰별 경보 수(0건 룰 포함)는 summary 에 — 202 비동기라 응답 대신 상태 조회(B5)가 내려준다(SCRUM-349).
+     */
     @Transactional(propagation = Propagation.MANDATORY)
-    public void succeed(long batchRunId, int rowsIn, int rowsOut) {
-        batchRuns.findById(batchRunId).orElseThrow().succeed(rowsIn, rowsOut);
+    public void succeed(long batchRunId, int rowsIn, int rowsOut, List<RuleAlertCount> counts) {
+        batchRuns.findById(batchRunId).orElseThrow()
+                .succeed(rowsIn, rowsOut, objectMapper.valueToTree(new RuleScanSummary(counts)));
+    }
+
+    /** batch_runs.summary 모양 — {"alerts_by_rule":[{"rule_id","rule_version","alert_count"}]} (SNAKE_CASE). */
+    record RuleScanSummary(List<RuleAlertCount> alertsByRule) {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

@@ -80,7 +80,7 @@ public class RuleScanner {
             counts.add(new RuleAlertCount(rule.ruleId(), rule.version(), created));
         }
         int alerts = counts.stream().mapToInt(RuleAlertCount::alertCount).sum();
-        recorder.succeed(batchRunId, scans.countTransactionsOn(date), alerts);
+        recorder.succeed(batchRunId, scans.countTransactionsOn(date), alerts, counts);
         return counts;
     }
 

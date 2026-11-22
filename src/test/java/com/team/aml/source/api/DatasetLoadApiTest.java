@@ -40,6 +40,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -49,7 +50,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
-/** 적재 API(202·비동기)와 배치 조회 API (SCRUM-70). */
+/** 적재 API(202·비동기)와 배치 조회 API (SCRUM-70). 룰 스캔·점수도 202 (SCRUM-349). */
 @Testcontainers
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -111,6 +112,9 @@ class DatasetLoadApiTest {
     @BeforeEach
     void clean() throws IOException {
         jdbc.execute("truncate table ops.transactions_staging, ops.patterns_staging, ops.accounts_staging");
+        jdbc.update("delete from ops.alert_scores");        // 룰 스캔·점수 테스트가 남긴 것 (SCRUM-349)
+        jdbc.update("delete from ops.alert_transactions");
+        jdbc.update("delete from ops.alerts");
         jdbc.update("delete from ops.transactions");
         jdbc.update("delete from ops.source_files");
         jdbc.update("delete from ops.accounts");
@@ -135,6 +139,57 @@ class DatasetLoadApiTest {
         assertThat(done.get("error_message").isNull()).isTrue();
         assertThat(done.get("finished_at").asText()).matches(SYSTEM_TIME);
         assertThat(done.get("triggered_by").get("login_id").asText()).isEqualTo("system");
+        assertThat(done.get("summary").isNull()).isTrue();   // 결과 상세는 룰 스캔·점수만 (SCRUM-349)
+    }
+
+    @Test
+    void 룰_스캔과_점수도_202로_받고_결과_상세는_배치_조회의_summary로() throws Exception {   // SCRUM-349
+        waitUntilFinished(body(mvc.perform(post("/api/v1/admin/batches/load").with(admin()).with(csrf())).andReturn(), 202)
+                .get("batch_run_id").asLong());
+
+        JsonNode scan = body(mvc.perform(post("/api/v1/admin/batches/rule-scan").param("date", "2022-09-01")
+                .with(admin()).with(csrf())).andReturn(), 202);
+        assertThat(scan.get("batch_type").asText()).isEqualTo("RULE_SCAN");
+        assertThat(scan.get("status").asText()).isEqualTo("RUNNING");   // 실행기에 넘기기 전에 읽은 상태
+        assertThat(scan.get("summary").isNull()).isTrue();
+        JsonNode scanned = waitUntilFinished(scan.get("batch_run_id").asLong());
+        assertThat(scanned.get("status").asText()).isEqualTo("SUCCEEDED");
+        JsonNode byRule = scanned.get("summary").get("alerts_by_rule");
+        assertThat(byRule).hasSize(6);   // 0건 룰도 빠지지 않음
+        assertThat(byRule.get(0).get("rule_id").asText()).isEqualTo("R01_FAN_OUT");
+        assertThat(byRule.get(0).has("rule_version")).isTrue();
+        assertThat(byRule.get(0).has("alert_count")).isTrue();
+
+        JsonNode again = body(mvc.perform(post("/api/v1/admin/batches/rule-scan").param("date", "2022-09-01")
+                .with(admin()).with(csrf())).andReturn(), 409);   // 거절은 지금처럼 요청 때 바로
+        assertThat(again.get("error").get("code").asText()).isEqualTo("BATCH_ALREADY_DONE");
+
+        JsonNode score = body(mvc.perform(post("/api/v1/admin/batches/score").param("date", "2022-09-01")
+                .with(admin()).with(csrf())).andReturn(), 202);
+        assertThat(score.get("batch_type").asText()).isEqualTo("SCORE_REQUEST");
+        assertThat(score.get("status").asText()).isEqualTo("RUNNING");
+        JsonNode scored = waitUntilFinished(score.get("batch_run_id").asLong());
+        assertThat(scored.get("status").asText()).isEqualTo("SUCCEEDED");
+        JsonNode summary = scored.get("summary");
+        for (String field : List.of("requested", "scored", "failed", "retryable", "chunks", "model_versions")) {
+            assertThat(summary.has(field)).as(field).isTrue();
+        }
+        assertThat(summary.get("requested").asInt()).isEqualTo(scored.get("rows_in").asInt());
+
+        JsonNode listed = body(mvc.perform(get("/api/v1/admin/batches").param("type", "RULE_SCAN").with(admin()))
+                .andReturn(), 200);
+        assertThat(listed.get("items").get(0).get("summary").get("alerts_by_rule")).hasSize(6);   // 목록에도
+    }
+
+    @Test
+    void 룰_스캔_거절은_202_없이_409이고_배치_행을_남기지_않는다() throws Exception {   // SCRUM-349 — 적재 전
+        JsonNode error = body(mvc.perform(post("/api/v1/admin/batches/rule-scan").param("date", "2022-09-01")
+                .with(admin()).with(csrf())).andReturn(), 409);
+        assertThat(error.get("error").get("code").asText()).isEqualTo("DATASET_NOT_LOADED");
+        JsonNode scoreError = body(mvc.perform(post("/api/v1/admin/batches/score").param("date", "2022-09-01")
+                .with(admin()).with(csrf())).andReturn(), 409);
+        assertThat(scoreError.get("error").get("code").asText()).isEqualTo("RULE_SCAN_NOT_DONE");
+        assertThat(jdbc.queryForObject("select count(*) from ops.batch_runs", Long.class)).isZero();
     }
 
     @Test
@@ -254,7 +309,7 @@ class DatasetLoadApiTest {
             }
             Thread.sleep(200);
         }
-        throw new AssertionError("적재가 20초 안에 끝나지 않았습니다");
+        throw new AssertionError("배치가 20초 안에 끝나지 않았습니다");
     }
 
     private JsonNode body(MvcResult result, int expectedStatus) throws Exception {

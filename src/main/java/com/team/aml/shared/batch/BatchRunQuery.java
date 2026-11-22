@@ -1,5 +1,8 @@
 package com.team.aml.shared.batch;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -25,21 +28,36 @@ public class BatchRunQuery {
 
     private static final String SELECT = """
             select b.id, b.batch_type, b.batch_date, b.status, b.started_at, b.finished_at,
-                   b.rows_in, b.rows_out, b.error_message, u.login_id
+                   b.rows_in, b.rows_out, b.error_message, b.summary::text as summary, u.login_id
             from ops.batch_runs b
             join ops.users u on u.id = b.triggered_by""";
 
-    private static final RowMapper<BatchRunView> ROW = (rs, rowNum) -> new BatchRunView(
+    private final RowMapper<BatchRunView> ROW = (rs, rowNum) -> new BatchRunView(
             rs.getLong("id"), BatchType.valueOf(rs.getString("batch_type")),
             rs.getObject("batch_date", LocalDate.class), BatchStatus.valueOf(rs.getString("status")),
             seconds(rs.getTimestamp("started_at")), seconds(rs.getTimestamp("finished_at")),
             (Integer) rs.getObject("rows_in"), (Integer) rs.getObject("rows_out"),
-            rs.getString("error_message"), new BatchRunView.TriggeredBy(rs.getString("login_id")));
+            rs.getString("error_message"), json(rs.getString("summary")),
+            new BatchRunView.TriggeredBy(rs.getString("login_id")));
 
     private final JdbcTemplate jdbc;
+    private final ObjectMapper objectMapper;
 
-    public BatchRunQuery(JdbcTemplate jdbc) {
+    public BatchRunQuery(JdbcTemplate jdbc, ObjectMapper objectMapper) {
         this.jdbc = jdbc;
+        this.objectMapper = objectMapper;
+    }
+
+    /** summary(jsonb) — 앱이 쓴 값이라 읽기 실패는 버그다. 그대로 던진다. */
+    private JsonNode json(String text) {
+        if (text == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(text);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("batch_runs.summary 읽기 실패", e);
+        }
     }
 
     public Optional<BatchRunView> find(long batchRunId) {

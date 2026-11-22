@@ -101,9 +101,9 @@
 2. **판정은 Java**: `FanInRule`·`FanOutRule.fires(FanMinute)` — 지금 ≥ N이고 1분 전 < N(거짓→참)일 때만 경보 1건. R06 `GatherScatterRule.fires(GatherScatterMinute)` — 송신·수신 계좌 수가 둘 다 하한~상한 안이 되는 거짓→참. R03 `FxRelayRule.fires(FxRelayMinute)` — 쌍을 완성하는 출금 분에 1분 전 창에 쌍이 없을 때만. R05 `ScatterGatherRule.alerts` — 그날 M→T가 있는 분 E마다 중간 계좌 N 이상인 S가 생길 때만(1분 전 창엔 없을 때), 대표 경로·근거 거래도 여기서. R04 `CycleRule.alerts` — 사건형: 그날 고리가 닫힌 분 E마다 경보 1건(1분 전 창 비교 없음), `paths` = 그 분에 닫힌 고리. 기준값(`window_hours`·`min_distinct_senders`/`min_distinct_receivers`·R05 `min_intermediates`·R04 `max_hops` 2~4)이 없거나 정수가 아니거나 1 미만이면 409 `INVALID_RULE_PARAMS` — 기본값으로 조용히 돌지 않아요 [SCRUM-99]
 - 룰별 조건·창·기준값·`rule_facts`는 룰 명세 `rules.md`(SCRUM-73)가 기준이에요.
 
-**룰 스캔 — 구현됨 (SCRUM-99 R02, SCRUM-188 R01, SCRUM-189 R06, SCRUM-193 R03, SCRUM-192 R04, SCRUM-194 R05)** `POST /api/v1/admin/batches/rule-scan?date=` → 200 `{batch_run_id, batch_type, batch_date, status, rows_in(그날 거래 수), rows_out(경보 수), alerts_by_rule[{rule_id, rule_version, alert_count}], started_at, finished_at}`
+**룰 스캔 — 구현됨 (SCRUM-99 R02, SCRUM-188 R01, SCRUM-189 R06, SCRUM-193 R03, SCRUM-192 R04, SCRUM-194 R05)** `POST /api/v1/admin/batches/rule-scan?date=` → **202** `BatchRunView`(RUNNING) — 스캔은 앱 작업 실행기에서 돌고, 결과는 상태 조회(`GET /admin/batches/{id}`) `rows_in`(그날 거래 수)·`rows_out`(경보 수)·`summary.alerts_by_rule[{rule_id, rule_version, alert_count}]`(0건 룰 포함, rule_id 순). 〔원래 동기 200 — 30초~2분이라 9/1이 화면 제한 시간을 넘어 202로, SCRUM-349〕
 - 시작 전 거절(행 안 남김): 거래 없음 409 `DATASET_NOT_LOADED` · 거래 첫날~마지막 날 밖 409 `DATE_OUT_OF_RANGE` · 실행 중 409 `BATCH_RUNNING` · 이미 성공 409 `BATCH_ALREADY_DONE` · 켜진 룰 없음 409 `NO_ACTIVE_RULES`. 〔SD 명세 v0.3의 400 두 개는 409로 — 400은 요청 형식 오류에만〕
-- 룰 전체가 **한 트랜잭션**(하나라도 실패하면 그 실행의 경보 전부 롤백 → 다시 돌려도 두 번 생기지 않음), `SUCCEEDED`도 그 안에서. 실패는 `FAILED`를 따로 커밋. 앱이 죽어 남은 `RUNNING`은 기동 때 `FAILED`로.
+- 룰 전체가 **한 트랜잭션**(하나라도 실패하면 그 실행의 경보 전부 롤백 → 다시 돌려도 두 번 생기지 않음), `SUCCEEDED`·`summary`도 그 안에서. 실패는 `FAILED`를 따로 커밋 — 룰 기준값 오류(`INVALID_RULE_PARAMS`)도 스캔 중이라 응답 409가 아니라 `FAILED`·`error_message`로 남아요. 실행기가 작업을 거절하면 `FAILED`("룰 스캔 작업을 시작하지 못함")를 남기고 500. 앱이 죽어 남은 `RUNNING`은 기동 때 `FAILED`로.
 - 경보: `alert_no`는 시퀀스, `score_status = PENDING`, `case_opened = false`. R01·R02 창은 B7(11/2) 슬라이딩 `window_hours`(v2 96시간) — `window_end = reference_ts = E+1분`(뜻은 `(E-H, E]`), `batch_date` = 스캔 날짜(E의 날짜). 자기 계좌 거래 제외. `entity_id`는 `accounts`.
 - R02 `rule_facts` = `{distinct_senders, amounts_by_currency:[{currency, total_amount, transaction_count, transaction_ids}]}`(받은 쪽 금액, 통화 원문 그대로). `transaction_ids` = 창 안 입금 전부.
 - R01 `rule_facts` = `{distinct_receivers, amounts_by_currency:[{currency, total_amount, transaction_count, transaction_ids}]}`(보낸 쪽 금액 `amount_paid`·`currency_paid`, 통화 원문 그대로). `transaction_ids` = 창 안 송금 전부.
@@ -117,7 +117,7 @@
 
 **점수 요청** [레퍼런스 §11.1, 안건 2·4·14·21, ML 규약 §2·§3·§6]
 
-**점수 배치 — 구현됨 (SCRUM-100)** `POST /api/v1/admin/batches/score?date=` → 200 `{batch_run_id, batch_type, batch_date, status, requested, scored, failed, retryable, chunks{total, failed}, model_versions, started_at, finished_at}` (동기)
+**점수 배치 — 구현됨 (SCRUM-100)** `POST /api/v1/admin/batches/score?date=` → **202** `BatchRunView`(RUNNING) — 점수는 앱 작업 실행기에서 돌고, 건수는 상태 조회 `summary{requested, scored, failed, retryable, chunks{total, failed}, model_versions}`(예전 200 응답과 같은 이름 — 다시 보낼 실패가 남아 `FAILED`여도 남음). 화면의 [점수 재처리]도 같은 API. 〔원래 동기 200, SCRUM-349에서 202〕
 - 시작 전 거절(행 안 남김): 그 날짜 룰 스캔 성공 없음 409 `RULE_SCAN_NOT_DONE` · 실행 중 409 `BATCH_RUNNING`. **성공한 날도 다시 돌려요**(V012) — 대상이 없으면 AI를 부르지 않고 `requested: 0`으로 SUCCEEDED.
 - 대상을 경보 id 순으로 `aml.ai.max-batch`(500)개씩 잘라 묶음마다 `AiClient.scores()`(트랜잭션 밖) → 저장은 묶음마다 한 트랜잭션.
 - 묶음 호출이 실패하면(재시도 1회 뒤, `AI_BAD_RESPONSE` 포함) 그 묶음만 `FAILED` + 코드 NULL로 커밋하고 다음 묶음으로 가요. 앞 묶음의 `SCORED`는 그대로.
@@ -147,7 +147,7 @@
 | `GetAlertForDraft(alertId)` (명세 이름 GetAlertPayload) | str 초안 요청 (`RequestStrDraft`) | `AlertPayload`(규약 §2, `created_at` 포함) + `reasons`(점수 payload 그대로, 없으면 `[]`) + `prior_alert_count`(같은 법인·앞선 경보 수) [SCRUM-155] | 읽기 |
 | ~~`RecordScoreBand`~~ | — | 안 만듦. 등급·정책 버전은 cases가 케이스 생성 때 자기 행에 저장(계약서 Q2, SCRUM-152) | — |
 
-**관리자 API** 〔초안 — SD 명세〕 룰 스캔 `POST /admin/batches/rule-scan?date=`, 점수 `POST /admin/batches/score?date=`, 룰 `GET /admin/rules`·`PUT /admin/rules/{rule_id}/params`(새 버전 행 추가 + 이전 행 비활성을 한 트랜잭션, `(rule_id, version)` unique로 409).
+**관리자 API** 〔초안 — SD 명세〕 룰 스캔 `POST /admin/batches/rule-scan?date=`(202), 점수 `POST /admin/batches/score?date=`(202, SCRUM-349), 룰 `GET /admin/rules`·`PUT /admin/rules/{rule_id}/params`(새 버전 행 추가 + 이전 행 비활성을 한 트랜잭션, `(rule_id, version)` unique로 409).
 
 **경보 점검** (계약서 5.7 R1~R3 — 목록·상세·거래 조회) `AdminAlertController` → `AlertReview`. ADMIN만.
 - 목록 `GET /admin/alerts` — 필터 `date`·`rule_id`·`score_status`·`score_failure_code`·`case_opened`(전부 AND), 정렬 `alert_no`·`score`·`created_at`(기본 `score,desc`, 점수 없는 경보는 오름·내림 모두 맨 뒤), 공통 목록. 한 줄 = 경보 칸 + `transaction_count` + `retryable`(FAILED이고 코드 NULL·`COMPUTE_ERROR`) + `latest_score{score, threshold, data_quality_status, model_version}`(점수 없으면 `null`). 열람 기록 없음.

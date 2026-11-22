@@ -1,5 +1,7 @@
 package com.team.aml.detection.application;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.team.aml.detection.domain.AlertScoreRepository;
 import com.team.aml.detection.domain.RuleScanNotDoneException;
 import com.team.aml.shared.batch.BatchRun;
@@ -17,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.OptionalLong;
 
 /**
@@ -31,10 +34,12 @@ public class ScoreBatchRecorder {
 
     private final BatchRunRepository batchRuns;
     private final AlertScoreRepository scores;
+    private final ObjectMapper objectMapper;
 
-    public ScoreBatchRecorder(BatchRunRepository batchRuns, AlertScoreRepository scores) {
+    public ScoreBatchRecorder(BatchRunRepository batchRuns, AlertScoreRepository scores, ObjectMapper objectMapper) {
         this.batchRuns = batchRuns;
         this.scores = scores;
+        this.objectMapper = objectMapper;
     }
 
     /** 409 RULE_SCAN_NOT_DONE·BATCH_RUNNING 이면 아무것도 남기지 않는다. 통과하면 RUNNING 을 커밋한다. */
@@ -69,14 +74,33 @@ public class ScoreBatchRecorder {
         return batchRuns.save(BatchRun.start(BatchType.SCORE_REQUEST, date, triggeredBy)).getId();
     }
 
-    /** 다시 보낼 실패가 남았으면 FAILED(건수 메시지) — 다시 누르면 남은 것만 보낸다. 아니면 SUCCEEDED. */
+    /**
+     * 다시 보낼 실패가 남았으면 FAILED(건수 메시지) — 다시 누르면 남은 것만 보낸다. 아니면 SUCCEEDED.
+     * 둘 다 건수는 summary 에 — 202 비동기라 응답 대신 상태 조회(B5)가 내려준다(SCRUM-349).
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void finish(long batchRunId, ScoreBatchSummary summary) {
         BatchRun run = batchRuns.findById(batchRunId).orElseThrow();
+        JsonNode json = objectMapper.valueToTree(ScoreSummaryJson.of(summary));
         if (summary.retryableFailed() > 0) {
-            run.fail(summary.describe());
+            run.fail(summary.describe(), json);
         } else {
-            run.succeed(summary.requested(), summary.scored());
+            run.succeed(summary.requested(), summary.scored(), json);
+        }
+    }
+
+    /**
+     * batch_runs.summary 모양 (SNAKE_CASE) — 예전 점수 응답(SD 명세 v0.3 §6)과 같은 이름이라 화면이 그대로 쓴다.
+     * retryable = failed 중 다시 보내면 바뀔 수 있는 것(코드 NULL·COMPUTE_ERROR) — 화면 [점수 재처리] 건수(계약서 5.6 B3).
+     */
+    record ScoreSummaryJson(int requested, int scored, int failed, int retryable, Chunks chunks,
+                            List<String> modelVersions) {
+        record Chunks(int total, int failed) {
+        }
+
+        static ScoreSummaryJson of(ScoreBatchSummary s) {
+            return new ScoreSummaryJson(s.requested(), s.scored(), s.failed(), s.retryableFailed(),
+                    new Chunks(s.chunksTotal(), s.chunksFailed()), s.modelVersions());
         }
     }
 

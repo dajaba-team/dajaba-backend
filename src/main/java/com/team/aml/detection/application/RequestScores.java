@@ -6,12 +6,15 @@ import com.team.aml.shared.ai.AiClient;
 import com.team.aml.shared.ai.AiClientException;
 import com.team.aml.shared.ai.AiDtos.ScoreResult;
 import com.team.aml.shared.batch.BatchRunQuery;
+import com.team.aml.shared.batch.BatchRunView;
 import com.team.aml.shared.config.AmlProperties;
 import com.team.aml.shared.domain.DomainException;
 import com.team.aml.shared.security.CurrentUser;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -22,7 +25,8 @@ import java.util.SortedSet;
 import java.util.TreeSet;
 
 /**
- * 점수 배치 SCORE_REQUEST (SD 명세 API 4, flows/01 ③, SCRUM-100). 동기 — 응답에 건수 (안건 10).
+ * 점수 배치 SCORE_REQUEST (SD 명세 API 4, flows/01 ③, SCRUM-100). 화면 요청(execute)은 202 — 적재·룰 스캔과 같이 run 을
+ * 앱 실행기에 넘기고, 건수는 batch_runs.summary 에 남아 상태 조회(B5)가 내려준다(SCRUM-349. 예전엔 동기 200 — 안건 10).
  * start(RUNNING 커밋) → 대상을 max-batch 이하로 잘라 묶음마다 [AI 호출(트랜잭션 밖) → 저장(묶음 트랜잭션)] → finish.
  * <ul>
  *   <li>AiClient.scores() 는 넘긴 목록을 다 받은 뒤 돌려주므로 묶음 커밋을 위해 여기서 잘라 부른다(11/6 진희).</li>
@@ -39,6 +43,7 @@ import java.util.TreeSet;
 public class RequestScores {
 
     private static final Logger log = LoggerFactory.getLogger(RequestScores.class);
+    static final String NOT_STARTED_MESSAGE = "점수 작업을 시작하지 못함";
 
     private final ScoreBatchRecorder recorder;
     private final ScoreChunkWriter writer;
@@ -49,10 +54,12 @@ public class RequestScores {
     private final int chunkSize;
     private final MeterRegistry meters;
     private final BatchChain chain;
+    private final TaskExecutor executor;
 
     public RequestScores(ScoreBatchRecorder recorder, ScoreChunkWriter writer, AlertScoreRepository scores,
                          AiClient ai, BatchRunQuery batchRuns, CurrentUser currentUser, AmlProperties props,
-                         MeterRegistry meters, BatchChain chain) {
+                         MeterRegistry meters, BatchChain chain,
+                         @Qualifier("applicationTaskExecutor") TaskExecutor executor) {
         this.recorder = recorder;
         this.writer = writer;
         this.scores = scores;
@@ -62,14 +69,36 @@ public class RequestScores {
         this.chunkSize = props.ai().maxBatch();
         this.meters = meters;
         this.chain = chain;
+        this.executor = executor;
         // 앱이 뜰 때 0으로 등록 — 첫 배치가 Prometheus increase() 에서 빠지지 않게
         countAlerts(0, 0, 0);
         countChunk(0, 0);
     }
 
-    public ScoreBatchResult execute(LocalDate date) {
+    /**
+     * 202 (SCRUM-349) — RunRuleScan.execute 와 같은 모양. 화면의 [점수 재처리]도 이 경로(다시 보낼 실패·남은 대상만).
+     * 409 는 start 가 바로 던진다. 응답은 실행기에 넘기기 전에 읽고, 실행기가 거절하면 FAILED 로 기록하고 다시 던진다.
+     */
+    public BatchRunView execute(LocalDate date) {
         long batchRunId = start(date, currentUser.require().userId());
-        return run(batchRunId, date);
+        BatchRunView accepted = batchRuns.get(batchRunId);
+        try {
+            executor.execute(() -> runInApp(batchRunId, date));
+        } catch (RuntimeException e) {
+            recorder.fail(batchRunId, NOT_STARTED_MESSAGE + " (" + e.getClass().getSimpleName() + ")");
+            log.error("점수 작업 제출 실패 batch_run_id={} cause={}", batchRunId, e.getClass().getSimpleName());
+            throw e;
+        }
+        return accepted;
+    }
+
+    /** 앱 실행기 경로 — run() 이 FAILED 를 남기고 다시 던진 예외는 run() 이 이미 로그를 남겼으니 삼킨다. */
+    private void runInApp(long batchRunId, LocalDate date) {
+        try {
+            run(batchRunId, date);
+        } catch (RuntimeException ignored) {
+            // run() 의 catch 가 FAILED 기록·에러 로그를 남겼다
+        }
     }
 
     /** 409 RULE_SCAN_NOT_DONE·BATCH_RUNNING 이면 아무것도 남기지 않는다. */
