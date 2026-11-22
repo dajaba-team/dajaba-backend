@@ -30,6 +30,8 @@
 7. 검증 쿼리 — 하나라도 다르면 실패
 8. 스테이징 비우기, `batch_runs` SUCCEEDED
 
+**진행 단계 (SCRUM-349)** — 적재가 도는 동안 상태 조회(B5)·목록의 `progress`가 `{done, total: 4, current}`예요. `current`는 실제 실행 순서대로 `PATTERNS`(패턴 파일) → `ACCOUNTS`(계좌 파일) → `TRANSACTIONS`(거래 파일) → `VERIFY`(검증). 화면이 글자로 바꿔요. 행 단위 %는 없어요(COPY 중간 건수를 세지 않음).
+
 트랜잭션 세 개: ① RUNNING 기록(즉시 커밋) ② 적재 전체 ③ 결과 기록. ①·③은 `REQUIRES_NEW`. ②가 실패하면 원천 4개는 전부 롤백되고 FAILED 기록만 남아요.
 
 **검증값** 〔11/1 실제 파일 전체 적재로 확정 — `DatasetExpectation.HI_SMALL`, 규약 반영은 SCRUM-71〕
@@ -102,6 +104,7 @@
 - 룰별 조건·창·기준값·`rule_facts`는 룰 명세 `rules.md`(SCRUM-73)가 기준이에요.
 
 **룰 스캔 — 구현됨 (SCRUM-99 R02, SCRUM-188 R01, SCRUM-189 R06, SCRUM-193 R03, SCRUM-192 R04, SCRUM-194 R05)** `POST /api/v1/admin/batches/rule-scan?date=` → **202** `BatchRunView`(RUNNING) — 스캔은 앱 작업 실행기에서 돌고, 결과는 상태 조회(`GET /admin/batches/{id}`) `rows_in`(그날 거래 수)·`rows_out`(경보 수)·`summary.alerts_by_rule[{rule_id, rule_version, alert_count}]`(0건 룰 포함, rule_id 순). 〔원래 동기 200 — 30초~2분이라 9/1이 화면 제한 시간을 넘어 202로, SCRUM-349〕
+- 도는 동안 상태 조회·목록의 `progress`가 `{done, total, current}` — 룰 단위(`total` = 켜진 룰 수, `current` = 지금 룰 ID, 예 `R03_FX_RELAY`·`done` 2 → 화면 "R03 실행 중 3/6"). (SCRUM-349)
 - 시작 전 거절(행 안 남김): 거래 없음 409 `DATASET_NOT_LOADED` · 거래 첫날~마지막 날 밖 409 `DATE_OUT_OF_RANGE` · 실행 중 409 `BATCH_RUNNING` · 이미 성공 409 `BATCH_ALREADY_DONE` · 켜진 룰 없음 409 `NO_ACTIVE_RULES`. 〔SD 명세 v0.3의 400 두 개는 409로 — 400은 요청 형식 오류에만〕
 - 룰 전체가 **한 트랜잭션**(하나라도 실패하면 그 실행의 경보 전부 롤백 → 다시 돌려도 두 번 생기지 않음), `SUCCEEDED`·`summary`도 그 안에서. 실패는 `FAILED`를 따로 커밋 — 룰 기준값 오류(`INVALID_RULE_PARAMS`)도 스캔 중이라 응답 409가 아니라 `FAILED`·`error_message`로 남아요. 실행기가 작업을 거절하면 `FAILED`("룰 스캔 작업을 시작하지 못함")를 남기고 500. 앱이 죽어 남은 `RUNNING`은 기동 때 `FAILED`로.
 - 경보: `alert_no`는 시퀀스, `score_status = PENDING`, `case_opened = false`. R01·R02 창은 B7(11/2) 슬라이딩 `window_hours`(v2 96시간) — `window_end = reference_ts = E+1분`(뜻은 `(E-H, E]`), `batch_date` = 스캔 날짜(E의 날짜). 자기 계좌 거래 제외. `entity_id`는 `accounts`.

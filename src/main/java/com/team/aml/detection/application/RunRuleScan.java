@@ -1,5 +1,6 @@
 package com.team.aml.detection.application;
 
+import com.team.aml.shared.batch.BatchProgress;
 import com.team.aml.shared.batch.BatchRunQuery;
 import com.team.aml.shared.batch.BatchRunView;
 import com.team.aml.shared.domain.DomainException;
@@ -32,17 +33,19 @@ public class RunRuleScan {
     private final CurrentUser currentUser;
     private final BatchChain chain;
     private final TaskExecutor executor;
+    private final BatchProgress progress;
 
     /** Spring Boot 기본 작업 실행기 — 적재·케이스 생성과 같이 쓴다. */
     public RunRuleScan(RuleScanRecorder recorder, RuleScanner scanner, BatchRunQuery batchRuns,
                        CurrentUser currentUser, BatchChain chain,
-                       @Qualifier("applicationTaskExecutor") TaskExecutor executor) {
+                       @Qualifier("applicationTaskExecutor") TaskExecutor executor, BatchProgress progress) {
         this.recorder = recorder;
         this.scanner = scanner;
         this.batchRuns = batchRuns;
         this.currentUser = currentUser;
         this.chain = chain;
         this.executor = executor;
+        this.progress = progress;
     }
 
     /**
@@ -75,6 +78,8 @@ public class RunRuleScan {
         } catch (RuntimeException e) {
             recorder.fail(batchRunId, failureMessage(e));
             throw e;
+        } finally {
+            progress.clear(batchRunId);   // 진행 단계는 스캔이 끝나면(성공·실패) 지운다
         }
         chain.afterRuleScan(batchRunId);   // 켜져 있으면 같은 날짜 점수로 이어짐
         return new RuleScanResult(batchRuns.get(batchRunId), counts);

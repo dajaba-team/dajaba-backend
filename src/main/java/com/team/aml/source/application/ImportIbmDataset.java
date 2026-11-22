@@ -12,6 +12,7 @@ import com.team.aml.source.domain.PatternMatchStats;
 import com.team.aml.source.domain.PatternStagingRepository;
 import com.team.aml.source.domain.TransactionLoadRepository;
 import com.team.aml.source.domain.TransactionLoadResult;
+import com.team.aml.shared.batch.BatchProgress;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +23,8 @@ import java.util.List;
  * 파일 3개를 한 트랜잭션으로 적재하고 검증한다 (SD 명세 §3 ②).
  * 하나라도 실패하면 원천·source_files가 전부 롤백되어 따로 비울 것이 없다.
  * 성공 기록(SUCCEEDED)도 같은 트랜잭션이라 데이터와 상태가 어긋나지 않는다.
+ * 단계마다 진행(BatchProgress: PATTERNS → ACCOUNTS → TRANSACTIONS → VERIFY)을 적는다 — 화면 "거래 적재 중 3/4"(SCRUM-349).
+ * 지우는 건 부르는 쪽(LoadIbmDataset.run)이 끝난 뒤에.
  */
 @Service
 public class ImportIbmDataset {
@@ -35,12 +38,16 @@ public class ImportIbmDataset {
     private final DatasetRepository dataset;
     private final DatasetExpectation expectation;
     private final DatasetLoadRecorder recorder;
+    private final BatchProgress progress;
+
+    /** 진행 단계 이름(코드 값) — 순서대로. 화면이 글자로 바꾼다. */
+    static final List<String> STEPS = List.of("PATTERNS", "ACCOUNTS", "TRANSACTIONS", "VERIFY");
 
     public ImportIbmDataset(StagePatternFile stagePatternFile, LoadAccountFile loadAccountFile,
                             LoadTransactionFile loadTransactionFile, PatternStagingRepository patterns,
                             AccountLoadRepository accounts, TransactionLoadRepository transactions,
                             DatasetRepository dataset, DatasetExpectation expectation,
-                            DatasetLoadRecorder recorder) {
+                            DatasetLoadRecorder recorder, BatchProgress progress) {
         this.stagePatternFile = stagePatternFile;
         this.loadAccountFile = loadAccountFile;
         this.loadTransactionFile = loadTransactionFile;
@@ -50,15 +57,20 @@ public class ImportIbmDataset {
         this.dataset = dataset;
         this.expectation = expectation;
         this.recorder = recorder;
+        this.progress = progress;
     }
 
     @Transactional
     public DatasetLoadSummary execute(Path dir, long batchRunId) {
         // 거래 INSERT가 패턴 스테이징을 LEFT JOIN하고, 계좌가 법인을 FK로 가리켜서 이 순서다.
+        step(batchRunId, 0);
         stagePatternFile.execute(dir.resolve(DatasetFiles.PATTERNS));
+        step(batchRunId, 1);
         AccountLoadResult accountsLoaded = loadAccountFile.execute(dir.resolve(DatasetFiles.ACCOUNTS));
+        step(batchRunId, 2);
         TransactionLoadResult loaded = loadTransactionFile.execute(dir.resolve(DatasetFiles.TRANSACTIONS));
 
+        step(batchRunId, 3);
         PatternMatchStats match = patterns.matchStats();
         DatasetStats stats = dataset.collectStats();
         List<String> mismatches = expectation.mismatches(stats, match);
@@ -72,5 +84,9 @@ public class ImportIbmDataset {
         recorder.succeed(batchRunId, loaded.fileRows(), loaded.insertedRows());
         return new DatasetLoadSummary(loaded.fileRows(), loaded.insertedRows(), loaded.amountsRounded(),
                 accountsLoaded.unlistedCountryBanks());
+    }
+
+    private void step(long batchRunId, int done) {
+        progress.at(batchRunId, done, STEPS.size(), STEPS.get(done));
     }
 }

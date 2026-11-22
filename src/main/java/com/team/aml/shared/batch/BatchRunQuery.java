@@ -38,14 +38,22 @@ public class BatchRunQuery {
             seconds(rs.getTimestamp("started_at")), seconds(rs.getTimestamp("finished_at")),
             (Integer) rs.getObject("rows_in"), (Integer) rs.getObject("rows_out"),
             rs.getString("error_message"), json(rs.getString("summary")),
+            progressOf(rs.getLong("id"), rs.getString("status")),
             new BatchRunView.TriggeredBy(rs.getString("login_id")));
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
+    private final BatchProgress progress;
 
-    public BatchRunQuery(JdbcTemplate jdbc, ObjectMapper objectMapper) {
+    public BatchRunQuery(JdbcTemplate jdbc, ObjectMapper objectMapper, BatchProgress progress) {
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
+        this.progress = progress;
+    }
+
+    /** 진행 단계는 RUNNING 행에만 — 끝난 뒤 지우기 전 잠깐 남아 있어도 끝난 행엔 붙이지 않는다. */
+    private BatchProgress.Step progressOf(long batchRunId, String status) {
+        return BatchStatus.RUNNING.name().equals(status) ? progress.of(batchRunId).orElse(null) : null;
     }
 
     /** summary(jsonb) — 앱이 쓴 값이라 읽기 실패는 버그다. 그대로 던진다. */

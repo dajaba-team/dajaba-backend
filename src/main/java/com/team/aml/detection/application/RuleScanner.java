@@ -18,6 +18,7 @@ import com.team.aml.detection.domain.RuleScanRepository;
 import com.team.aml.detection.domain.ScatterGatherAlert;
 import com.team.aml.detection.domain.ScatterGatherLeg;
 import com.team.aml.detection.domain.ScatterGatherRule;
+import com.team.aml.shared.batch.BatchProgress;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +38,8 @@ import java.util.stream.Collectors;
  * 켜진 룰 전부를 한 트랜잭션으로 스캔한다 (SD 명세 §5). 하나라도 실패하면 그 실행의 경보가 전부 롤백 →
  * 다시 돌려도 두 번 생기지 않는다. alerts UNIQUE(rule_ref_id, account_key, window_start) 가 한 번 더 막는다.
  * 룰마다 걸린 시간을 지표 {@code aml.rule.scan.duration{rule}}와 로그 한 줄({@code rule_scan_timing})로 남긴다(SCRUM-349).
+ * 룰을 시작할 때마다 진행 단계(BatchProgress: 끝난 룰 수/켜진 룰 수, 지금 룰 ID)를 적는다 — 화면 "R03 실행 중 3/6"(SCRUM-349).
+ * 지우는 건 부르는 쪽(RunRuleScan.run)이 끝난 뒤에.
  */
 @Service
 public class RuleScanner {
@@ -46,11 +49,14 @@ public class RuleScanner {
     private final RuleScanRepository scans;
     private final RuleScanRecorder recorder;
     private final MeterRegistry meters;
+    private final BatchProgress progress;
 
-    public RuleScanner(RuleScanRepository scans, RuleScanRecorder recorder, MeterRegistry meters) {
+    public RuleScanner(RuleScanRepository scans, RuleScanRecorder recorder, MeterRegistry meters,
+                       BatchProgress progress) {
         this.scans = scans;
         this.recorder = recorder;
         this.meters = meters;
+        this.progress = progress;
         // 아는 룰은 앱이 뜰 때 0으로 등록 — 첫 스캔이 Prometheus increase() 에서 빠지지 않게
         try {
             for (String ruleId : List.of(FanOutRule.RULE_ID, FanInRule.RULE_ID, FxRelayRule.RULE_ID, CycleRule.RULE_ID,
@@ -65,7 +71,9 @@ public class RuleScanner {
     @Transactional
     public List<RuleAlertCount> scan(long batchRunId, LocalDate date) {
         List<RuleAlertCount> counts = new ArrayList<>();
-        for (ActiveRule rule : scans.findActiveRules()) {
+        List<ActiveRule> rules = scans.findActiveRules();
+        for (ActiveRule rule : rules) {
+            progress.at(batchRunId, counts.size(), rules.size(), rule.ruleId());
             long started = System.nanoTime();
             int created = switch (rule.ruleId()) {
                 case FanOutRule.RULE_ID -> scanFanOut(batchRunId, date, rule);

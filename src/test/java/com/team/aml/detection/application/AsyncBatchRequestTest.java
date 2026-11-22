@@ -3,6 +3,7 @@ package com.team.aml.detection.application;
 import com.team.aml.detection.domain.AlertScoreRepository;
 import com.team.aml.shared.ai.AiClient;
 import com.team.aml.shared.batch.BatchAlreadyDoneException;
+import com.team.aml.shared.batch.BatchProgress;
 import com.team.aml.shared.batch.BatchRunQuery;
 import com.team.aml.shared.batch.BatchRunView;
 import com.team.aml.shared.batch.BatchStatus;
@@ -46,6 +47,7 @@ class AsyncBatchRequestTest {
     private final CurrentUser currentUser = mock(CurrentUser.class);
     private final BatchRunQuery batchRuns = mock(BatchRunQuery.class);
     private final BatchChain chain = mock(BatchChain.class);
+    private final BatchProgress progress = mock(BatchProgress.class);
     private final List<Runnable> submitted = new ArrayList<>();
     private final TaskExecutor capturing = submitted::add;
     private final TaskExecutor rejecting = task -> { throw new TaskRejectedException("full"); };
@@ -73,6 +75,7 @@ class AsyncBatchRequestTest {
         submitted.get(0).run();
         verify(scanner).scan(7L, DATE);
         verify(chain).afterRuleScan(7L);
+        verify(progress).clear(7L);   // 진행 단계는 끝나면 지움
     }
 
     @Test
@@ -84,6 +87,7 @@ class AsyncBatchRequestTest {
         assertThatCode(() -> submitted.get(0).run()).doesNotThrowAnyException();
         verify(scanRecorder).fail(7L, "룰 스캔 실패 (IllegalStateException)");
         verify(chain, never()).afterRuleScan(anyLong());
+        verify(progress).clear(7L);   // 실패해도 지움
     }
 
     @Test
@@ -135,7 +139,7 @@ class AsyncBatchRequestTest {
     }
 
     private RunRuleScan ruleScan(TaskExecutor executor) {
-        return new RunRuleScan(scanRecorder, scanner, batchRuns, currentUser, chain, executor);
+        return new RunRuleScan(scanRecorder, scanner, batchRuns, currentUser, chain, executor, progress);
     }
 
     private RequestScores requestScores(TaskExecutor executor) {
@@ -147,6 +151,6 @@ class AsyncBatchRequestTest {
 
     private static BatchRunView view(long id, BatchType type) {
         return new BatchRunView(id, type, DATE, BatchStatus.RUNNING, Instant.parse("2026-11-22T00:00:00Z"), null,
-                null, null, null, null, new BatchRunView.TriggeredBy("admin"));
+                null, null, null, null, null, new BatchRunView.TriggeredBy("admin"));
     }
 }

@@ -235,6 +235,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 
 - 전부 **관리자가 API로 직접 실행**, 스케줄러 없음. 응답은 `batch_runs` 한 행. **네 배치 모두 202**(`batch_run_id`로 상태 조회) — RUNNING 을 커밋하고 응답할 상태를 읽은 뒤 앱 작업 실행기(`applicationTaskExecutor`)로 넘겨요. 실행기가 거절하면 FAILED 를 남기고 500. 거절(409)은 지금처럼 요청 때 바로. [레퍼런스 §11, 계약서 B4 — 11/4 준혁 제안·지윤 동의] 〔룰 스캔·점수는 원래 동기 200 — 룰 스캔이 30초~2분 걸려 화면 제한 시간(120초)을 넘는 날(9/1)이 생겨 202로 바꿈, SCRUM-349. 노션 계약서 B2·B3·B5 반영 필요〕
 - **결과 상세는 `batch_runs.summary`**(jsonb, V019, SCRUM-349) — 상태 조회·목록이 그대로 내려줘요. 룰 스캔 `{"alerts_by_rule":[{"rule_id","rule_version","alert_count"}]}`(0건 룰 포함), 점수 `{"requested","scored","failed","retryable","chunks":{"total","failed"},"model_versions"}`(예전 점수 응답과 같은 이름, 다시 보낼 실패가 남아 FAILED 여도 남음). 적재·케이스 생성·실행 중·예외로 끝난 실패는 `null`. 건수·룰·모델 이름만 — 계좌·금액·본문 없음.
+- **실행 중 진행 단계는 `progress`**(SCRUM-349) — 적재·룰 스캔이 `RUNNING`일 때만 `{done, total, current}`, 그 밖은 `null`. 적재는 파일 단계 4개(`PATTERNS`→`ACCOUNTS`→`TRANSACTIONS`→`VERIFY`), 룰 스캔은 룰 단위(`current` = 룰 ID). **앱 메모리**(`shared/batch/BatchProgress`)에만 둬요 — 룰 스캔은 한 트랜잭션이라 DB에 쓰면 커밋 전엔 안 보이고, 재시작하면 사라지지만 그때 `RUNNING`은 기동 정리로 `FAILED`가 돼요. 단일 서버 전제.
 - `batch_runs` 상태 기록은 본 작업과 **다른 트랜잭션**으로 커밋해요. 본 작업이 롤백돼도 "실패했다"는 기록이 남게. [SD 명세 §12 〔초안〕]
 - 앱이 배치 도중 죽으면 `RUNNING`이 남아요. **앱이 뜰 때 네 유형 모두 남은 `RUNNING`을 `FAILED`로 정리**해요 — 각 Recorder(`DatasetLoadRecorder`·`RuleScanRecorder`·`ScoreBatchRecorder`·`OpenCasesRecorder`)의 `ApplicationReadyEvent`. 단일 서버 전제라 시작 시각으로 거르지 않아요(뜰 때 RUNNING 은 전부 버려진 작업, 남기면 앱 안 실행기 경로에선 영원히 RUNNING). 여러 대로 늘리면 다시 정해야 해요. [SD 명세 §12 〔초안〕, CASES 명세 §8.3, 케이스 생성은 SCRUM-246]
 

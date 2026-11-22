@@ -2,6 +2,7 @@ package com.team.aml.source.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.team.aml.shared.batch.BatchProgress;
 import com.team.aml.shared.batch.BatchRunQuery;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.shared.security.CurrentUser;
@@ -16,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -107,6 +109,9 @@ class DatasetLoadApiTest {
     @Autowired
     CurrentUser currentUser;
 
+    @SpyBean
+    BatchProgress progress;
+
     private final ObjectMapper json = new ObjectMapper();
 
     @BeforeEach
@@ -140,6 +145,35 @@ class DatasetLoadApiTest {
         assertThat(done.get("finished_at").asText()).matches(SYSTEM_TIME);
         assertThat(done.get("triggered_by").get("login_id").asText()).isEqualTo("system");
         assertThat(done.get("summary").isNull()).isTrue();   // 결과 상세는 룰 스캔·점수만 (SCRUM-349)
+        assertThat(done.get("progress").isNull()).isTrue();   // 진행 단계는 실행 중에만
+        // 적재 단계마다 진행을 적고 끝나면 지운다 (SCRUM-349)
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(progress);
+        order.verify(progress).at(id, 0, 4, "PATTERNS");
+        order.verify(progress).at(id, 1, 4, "ACCOUNTS");
+        order.verify(progress).at(id, 2, 4, "TRANSACTIONS");
+        order.verify(progress).at(id, 3, 4, "VERIFY");
+        order.verify(progress).clear(id);
+    }
+
+    @Test
+    void 실행_중인_배치에만_진행_단계가_붙고_끝나면_없다() throws Exception {   // SCRUM-349
+        long id = jdbc.queryForObject("insert into ops.batch_runs(batch_type, batch_date, status, triggered_by) "
+                + "values ('RULE_SCAN', '2022-09-01', 'RUNNING', 1) returning id", Long.class);
+        progress.at(id, 2, 6, "R03_FX_RELAY");
+        try {
+            JsonNode running = body(mvc.perform(get("/api/v1/admin/batches/" + id).with(admin())).andReturn(), 200);
+            assertThat(running.get("progress").get("done").asInt()).isEqualTo(2);
+            assertThat(running.get("progress").get("total").asInt()).isEqualTo(6);
+            assertThat(running.get("progress").get("current").asText()).isEqualTo("R03_FX_RELAY");
+            JsonNode listed = body(mvc.perform(get("/api/v1/admin/batches").with(admin())).andReturn(), 200);
+            assertThat(listed.get("items").get(0).get("progress").get("current").asText()).isEqualTo("R03_FX_RELAY");
+
+            jdbc.update("update ops.batch_runs set status = 'FAILED' where id = ?", id);   // 지우기 전에 끝나도
+            JsonNode finished = body(mvc.perform(get("/api/v1/admin/batches/" + id).with(admin())).andReturn(), 200);
+            assertThat(finished.get("progress").isNull()).isTrue();
+        } finally {
+            progress.clear(id);
+        }
     }
 
     @Test
@@ -154,6 +188,11 @@ class DatasetLoadApiTest {
         assertThat(scan.get("summary").isNull()).isTrue();
         JsonNode scanned = waitUntilFinished(scan.get("batch_run_id").asLong());
         assertThat(scanned.get("status").asText()).isEqualTo("SUCCEEDED");
+        long scanId = scan.get("batch_run_id").asLong();
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(progress);   // 룰마다 진행 → 끝나면 지움
+        order.verify(progress).at(scanId, 0, 6, "R01_FAN_OUT");
+        order.verify(progress).at(scanId, 5, 6, "R06_GATHER_SCATTER");
+        order.verify(progress).clear(scanId);
         JsonNode byRule = scanned.get("summary").get("alerts_by_rule");
         assertThat(byRule).hasSize(6);   // 0건 룰도 빠지지 않음
         assertThat(byRule.get(0).get("rule_id").asText()).isEqualTo("R01_FAN_OUT");
