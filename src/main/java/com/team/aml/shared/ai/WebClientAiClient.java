@@ -815,7 +815,7 @@ public class WebClientAiClient implements AiClient {
      * 승인 STR 색인 응답 확인 (AI `str_index.py` 규칙 + 보낸 값 대조, SCRUM-357). 틀리면 AI_BAD_RESPONSE 502, 메시지엔 칸 이름만.
      * 여섯 칸은 키가 있어야 한다(값 null 은 아래대로). INDEXED ↔ 이유 null·청크 1 이상·버전 앞뒤 공백 뺀 1자 이상 /
      * SKIPPED ↔ 이유 4종 중 하나·청크 0·버전 문자열 또는 null(DISABLED 면 AI 가 null).
-     * AI 스키마보다 더 보는 곳: `report_no` = 보낸 값, 청크 수 ≤ 보낸 섹션 수(AI 는 섹션 하나 = 청크 하나, 공백만인 섹션은 뺌).
+     * AI 스키마보다 더 보는 곳: `report_no` = 보낸 값, 청크 수 ≤ {@link #maxStrIndexChunks 상한}(SCRUM-361).
      * 안 보는 곳: SKIPPED 의 버전 null 을 DISABLED 에만 묶기(AI 도 안 묶음), 모르는 칸(원칙 4 — 받아 둠).
      */
     static void requireStrIndexResponse(StrIndexRequest sent, JsonNode r) {
@@ -833,10 +833,9 @@ public class WebClientAiClient implements AiClient {
         JsonNode version = r.get("retrieval_version");
         if (!version.isNull() && !version.isTextual()) throw badStrIndex("retrieval_version");
         JsonNode reason = r.get("skip_reason");
-        int sentSections = sent.sections() == null ? 0 : sent.sections().size();
         if (status == StrIndexStatus.INDEXED) {
             if (!reason.isNull()) throw badStrIndex("skip_reason");
-            if (chunkCount < 1 || chunkCount > sentSections) throw badStrIndex("chunk_count");
+            if (chunkCount < 1 || chunkCount > maxStrIndexChunks(sent)) throw badStrIndex("chunk_count");
             // AI 는 앞뒤 공백을 지운 뒤 비었는지 본다(str_strip_whitespace) — 공백뿐이면 실패(추가 검토 1)
             if (!version.isTextual() || stripLikePython(version.textValue()).isEmpty()) {
                 throw badStrIndex("retrieval_version");
@@ -846,6 +845,25 @@ public class WebClientAiClient implements AiClient {
             strIndexEnum(StrIndexSkipReason.class, reason, "skip_reason");
             if (chunkCount != 0) throw badStrIndex("chunk_count");
         }
+    }
+
+    /** AI 청크 상한 1200자의 절반 — 이웃 두 청크 합이 늘 1200 을 넘어서 청크 하나가 평균 600자 넘게 차지한다. */
+    private static final int STR_INDEX_HALF_CHUNK = 600;
+
+    /**
+     * INDEXED 청크 수 상한 (SCRUM-361) = 공백만이 아닌 섹션마다 ⌊글자 수 ÷ 600⌋ + 1 의 합.
+     * AI 는 단락을 문장 끝에서 앞부터 1200자까지 채우고 넘치면 다음 청크로 넘긴다(1200 넘는 한 문장은 1200자씩 자름)
+     * → 이웃 두 청크 합 > 1200 → 청크 k 개면 글자 수 > 600×(k−1). 옛 AI(섹션 하나 = 청크 하나)도 이 안.
+     * 글자 수는 원문 그대로 코드 포인트(AI `len` 과 같음, 앞뒤 공백 안 뺌). 공백만(파이썬 `strip()` 기준)·null 섹션은 0.
+     */
+    private static long maxStrIndexChunks(StrIndexRequest sent) {
+        if (sent.sections() == null) return 0;
+        long bound = 0;
+        for (StrIndexSection s : sent.sections()) {
+            if (s == null || s.text() == null || isBlankLikePython(s.text())) continue;
+            bound += s.text().codePointCount(0, s.text().length()) / STR_INDEX_HALF_CHUNK + 1;
+        }
+        return bound;
     }
 
     private static <E extends Enum<E>> E strIndexEnum(Class<E> type, JsonNode v, String field) {
