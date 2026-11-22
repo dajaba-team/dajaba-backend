@@ -157,6 +157,47 @@ class CaseApiTest {
     }
 
     @Test
+    void 상세_prior_alerts는_같은_법인의_앞선_경보를_최근_것부터_가린_계좌와_케이스_번호로_준다() throws Exception {
+        long n = SEQ.incrementAndGet();
+        String entity = "E_PRIOR_" + n;
+        String priorKey = "010_8000P%05dBD31".formatted(n);
+        String caseNo = newOpenCase("010_8000Q%05dBD32".formatted(n), entity, "2023-02-01 23:59:59");
+        String olderCaseNo = newOpenCase(priorKey, entity, "2023-01-20 10:00:00");    // 앞섬, 케이스 있음
+        long newer = alertOnly(priorKey, entity, "2023-01-31 09:00:00");               // 앞섬, 케이스 없음
+        alertOnly(priorKey, entity, "2023-02-01 23:59:59");                            // 같은 시각 → 빠짐
+        alertOnly(priorKey, entity, "2023-02-02 00:00:00");                            // 뒤 → 빠짐
+        alertOnly(priorKey, "E_OTHER_" + n, "2023-01-25 00:00:00");                    // 다른 법인 → 빠짐
+
+        String detailBody = body(get("/api/v1/cases/{caseNo}", caseNo).with(as(inv)), 200);
+        JsonNode prior = json.readTree(detailBody).get("prior_alerts");
+
+        assertThat(prior).hasSize(2);
+        JsonNode first = prior.get(0);
+        assertThat(first.get("alert_no").asText()).isEqualTo(jdbc.queryForObject(
+                "select alert_no from ops.alerts where id = ?", String.class, newer));
+        assertThat(first.get("rule_id").asText()).startsWith("R_API_C");
+        assertThat(first.get("batch_date").asText()).isEqualTo("2023-01-31");
+        assertThat(first.get("reference_ts").asText()).isEqualTo("2023-01-31T09:00:00");
+        assertThat(first.get("account_no").asText()).isEqualTo("010_****BD31");
+        assertThat(first.get("account_ref").asText()).matches("ACR-[0-9A-F]{12}");
+        assertThat(first.get("score_status").asText()).isEqualTo("PENDING");
+        assertThat(first.get("score").isNull()).isTrue();
+        assertThat(first.get("case_no").isNull()).isTrue();
+        assertThat(prior.get(1).get("case_no").asText()).isEqualTo(olderCaseNo);
+        assertThat(prior.get(1).get("reference_ts").asText()).isEqualTo("2023-01-20T10:00:00");
+        assertThat(detailBody).doesNotContain(priorKey).doesNotContain("account_key")
+                .doesNotContain("alert_id").doesNotContain("is_laundering");
+    }
+
+    @Test
+    void 상세_prior_alerts는_법인이_없으면_빈_목록() throws Exception {
+        String caseNo = newOpenCase("010_8000N%05dBD33".formatted(SEQ.incrementAndGet()));
+        JsonNode detail = json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(inv)), 200));
+        assertThat(detail.get("prior_alerts").isArray()).isTrue();
+        assertThat(detail.get("prior_alerts")).isEmpty();
+    }
+
+    @Test
     void 실패_형식이_틀리면_400_INVALID_REQUEST이고_케이스는_그대로() throws Exception {
         String caseNo = newOpenCase("010_BAD%05d".formatted(SEQ.incrementAndGet()));
         assign(caseNo, inv);
@@ -658,26 +699,42 @@ class CaseApiTest {
 
     /** OPEN 케이스 + OPEN 이력. 엔티티 대신 SQL — api 테스트가 리포지토리에 기대지 않게. */
     private String newOpenCase(String accountKey) {
+        return newOpenCase(accountKey, null, "2023-02-01 23:59:59");
+    }
+
+    /** 법인·기준 시각을 정한 경보와 그 OPEN 케이스 (prior_alerts, SCRUM-239). */
+    private String newOpenCase(String accountKey, String entityId, String referenceTs) {
         long n = SEQ.incrementAndGet();
-        long batchId = jdbc.queryForObject("""
-                insert into ops.batch_runs (batch_type, batch_date, status, triggered_by)
-                values ('RULE_SCAN', '2023-02-01', 'RUNNING', 1) returning id""", Long.class);
-        long ruleId = jdbc.queryForObject("""
-                insert into ops.rules (rule_id, version, name, params, created_by, updated_by)
-                values (?, 1, 'test', '{}'::jsonb, 1, 1) returning id""", Long.class, "R_API_C" + n);
-        long alertId = jdbc.queryForObject("""
-                insert into ops.alerts (alert_no, batch_run_id, rule_ref_id, account_key, window_start, window_end,
-                                        reference_ts, rule_facts, batch_date)
-                values (?, ?, ?, ?, '2023-02-01 00:00:00', '2023-02-01 23:59:59', '2023-02-01 23:59:59',
-                        '{}'::jsonb, '2023-02-01')
-                returning id""", Long.class, "ALT-20230201-%06d".formatted(n), batchId, ruleId, accountKey);
+        long alertId = alertOnly(accountKey, entityId, referenceTs);
         String caseNo = "CASE-2023-%06d".formatted(900000 + n);
         long caseId = jdbc.queryForObject("""
-                insert into ops.cases (case_no, alert_id, account_key, status, created_by, updated_by)
-                values (?, ?, ?, 'OPEN', 1, 1) returning id""", Long.class, caseNo, alertId, accountKey);
+                insert into ops.cases (case_no, alert_id, account_key, entity_id, status, created_by, updated_by)
+                values (?, ?, ?, ?, 'OPEN', 1, 1) returning id""", Long.class, caseNo, alertId, accountKey, entityId);
         jdbc.update("""
                 insert into ops.case_history (case_id, action, to_status, case_version_before, created_by)
                 values (?, 'OPEN', 'OPEN', 0, 1)""", caseId);
         return caseNo;
+    }
+
+    /** 케이스 없이 경보만. 창은 기준 시각의 그날 0시(같으면 하루 전)부터 기준 시각까지, 배치 날짜는 기준 시각의 날짜. */
+    private long alertOnly(String accountKey, String entityId, String referenceTs) {
+        long n = SEQ.incrementAndGet();
+        java.time.LocalDateTime ref = java.time.LocalDateTime.parse(referenceTs.replace(' ', 'T'));
+        java.time.LocalDateTime start = ref.toLocalDate().atStartOfDay();
+        if (!start.isBefore(ref)) {
+            start = ref.minusDays(1);   // alerts_window_ck — 창 시작은 기준 시각보다 앞
+        }
+        long batchId = jdbc.queryForObject("""
+                insert into ops.batch_runs (batch_type, batch_date, status, triggered_by)
+                values ('RULE_SCAN', ?, 'RUNNING', 1) returning id""", Long.class, ref.toLocalDate());
+        long ruleId = jdbc.queryForObject("""
+                insert into ops.rules (rule_id, version, name, params, created_by, updated_by)
+                values (?, 1, 'test', '{}'::jsonb, 1, 1) returning id""", Long.class, "R_API_C" + n);
+        return jdbc.queryForObject("""
+                insert into ops.alerts (alert_no, batch_run_id, rule_ref_id, account_key, entity_id, window_start,
+                                        window_end, reference_ts, rule_facts, batch_date)
+                values (?, ?, ?, ?, ?, ?, ?, ?, '{}'::jsonb, ?)
+                returning id""", Long.class, "ALT-%s-%06d".formatted(ref.toLocalDate().toString().replace("-", ""), n),
+                batchId, ruleId, accountKey, entityId, start, ref, ref, ref.toLocalDate());
     }
 }

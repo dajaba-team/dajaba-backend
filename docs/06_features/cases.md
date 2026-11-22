@@ -1,6 +1,6 @@
 # 06. cases — 조사
 
-> v0.3 · 2026-11-20 · 초안(팀 확인 중) · 담당 지윤 · 정리 진희 · 11/19 질문 답변 A8·C9(SCRUM-302) · 11/20 CASES 지표(SCRUM-276)
+> v0.3 · 2026-11-22 · 초안(팀 확인 중) · 담당 지윤 · 정리 진희 · 11/19 질문 답변 A8·C9(SCRUM-302) · 11/20 CASES 지표(SCRUM-276) · 11/22 상세 `prior_alerts`(SCRUM-239)·`GetCaseEvidence` 안 만듦(SCRUM-243)·`scope=CONTEXT` MVP 빈 목록 확정(SCRUM-244)
 
 담당자 문서는 아직 초안이라 `확정` / **〔초안〕** / **〔확인 필요〕**를 나눠 적었어요(뜻은 [`../README.md`](../README.md) "읽는 법"). 이 파일은 **담당자가 고쳐요.** 노션 초안을 바꾸면 같은 주에 이 파일도 PR로 갱신해 주세요.
 
@@ -107,7 +107,7 @@
 | `EscalateCase` | 07 `POST …/escalate` | 404 → version 409 → 담당 403 `NOT_ASSIGNEE` → 상태 409 → 사유 |
 | `CloseCase` | 06 `POST …/close` | 404 → version 409 → 담당 403 → 상태 409 → **초안 있으면 409 `CLOSE_REQUIRES_STR`**(`Case.closeWithoutDraft`) → 사유. 초안 있는 종결은 str `close-with-draft`가 공개 기능 `CloseCaseWithDraft`(SCRUM-235)를 불러요 |
 | `ReassignCase` (SCRUM-177) | 04 `POST …/reassign` `{assignee, comment?, version}` | **ADMIN만 — SecurityConfig URL 규칙(403 `FORBIDDEN`)** → 404 → version 409 → 대상: 없는 login_id 404 `USER_NOT_FOUND`, 비활성·조사역 아님 409 `INVALID_ASSIGNEE`(`NOT_ACTIVE_INVESTIGATOR`) → 상태 409(REVIEWING·ESCALATED·DRAFTED·REJECTED만). 같은 담당자면 no-op. 이력 REASSIGN에 `from_assignee_id`·`to_assignee_id`(V010)·사유. 대상 확인은 `AssignCase`와 같은 `ActiveInvestigators` |
-| `CaseTransactions.list` (SCRUM-179) | 08 `GET …/transactions?scope&sort&page&size` | 404 → detection `ListAlertTransactions`(경보에 묶인 거래). `direction`은 케이스 계좌 기준 `TransactionDirection`(받음 INBOUND·보냄 OUTBOUND·둘 다 아님 INDIRECT, 자기계좌는 INBOUND). `scope=CONTEXT`는 저장소가 없어 빈 목록 〔참고 거래 등록 방식 미정〕. sort `ts`·`transaction_id` asc·desc, 계좌는 `AccountDisplay` |
+| `CaseTransactions.list` (SCRUM-179) | 08 `GET …/transactions?scope&sort&page&size` | 404 → detection `ListAlertTransactions`(경보에 묶인 거래). `direction`은 케이스 계좌 기준 `TransactionDirection`(받음 INBOUND·보냄 OUTBOUND·둘 다 아님 INDIRECT, 자기계좌는 INBOUND). `scope=CONTEXT`는 **MVP에서 빈 목록 확정**(SCRUM-244 — 아래 "참고 거래"). sort `ts`·`transaction_id` asc·desc, 계좌는 `AccountDisplay` |
 | `CaseTransactions.evidence` (SCRUM-179) | 09 `GET …/evidence/{transaction_id}` | 404 `CASE_NOT_FOUND` → 이 경보의 거래가 아니면(없는 거래 포함) 404 `EVIDENCE_NOT_FOUND` → 열람 기록(`access_logs`에 거래 대상이 없어 CASE로) → `{case_no, transaction, source{dataset, record_id, is_synthetic}, eligible_for_str}` |
 | `CaseTransactions.graph` (SCRUM-179) | 10 `GET …/graph?limit` | limit 기본 200(1~1,000), 시각 순. 노드 account_ref 중복 제거, 선은 거래마다(금액 = 받은 쪽). 넘치면 `truncated` |
 | `ListCaseHistories` (SCRUM-179) | 11 `GET …/histories?action&page&size` | 최신 먼저, NOTE 제외(`action=NOTE`는 400 — C8로). 한 줄 모양은 상세 `history`와 같음(`from_assignee`·`to_assignee` 포함, SCRUM-348) |
@@ -122,7 +122,11 @@
 - **null로 두는 칸 (11/22 MVP 확정, SCRUM-245)** — 키는 남기고 값은 null(계약서 2.3).
   - `current_draft` — 상세는 번호 `current_draft_no`만 주고, 초안은 화면이 S2(`GET /str-drafts/{draft_no}`)를 따로 불러요. str 쪽 조합 조회는 만들지 않아요(미결 17 닫음). 프론트는 이미 이렇게 동작해요.
   - `customer` — 출처는 있어요(`ops.customer_attributes` 가상 KYC: 업종·위험도·계좌 목적·가입일·국가, `source` 엔티티). 다만 cases로 넘기는 공개 조회·화면·계약서 모양이 없어 MVP는 null. 발표 뒤 화면과 모양을 정하면 `source` 공개 조회 하나로 채워요(cases → source 의존은 허용).
-  - `prior_alerts`는 `[]` — SCRUM-239.
+- **상세 `prior_alerts` (SCRUM-239, 11/22)** — 같은 법인의 이전 경보, detection 공개 조회 `FindAlertsByEntity(entityId, before, limit)`.
+  - **기준은 AI 요청의 `prior_alert_count`와 같아요** — 같은 `entity_id`이고 `reference_ts`가 이 케이스 경보의 `reference_ts`보다 **앞선** 경보(같은 시각·자기 자신 제외). detection 쪽에서 건수 쿼리와 목록 쿼리가 같은 조건 한 줄(`PRIOR_ALERT_WHERE`)을 써요. 기준 시각 뒤의 경보는 넣지 않아요(그 시점에 몰랐던 정보).
+  - **법인을 모르면(`entity_id` null) `[]`** — 계좌·이름으로 임의로 잇지 않아요.
+  - 최근 것부터(`reference_ts` 내림차순, 같으면 경보 id 내림차순) **20건까지**(`GetCaseDetail.PRIOR_ALERTS_LIMIT`, 최근 이력과 같은 크기). 더 앞선 경보는 건수(`prior_alert_count`)에만 들어가요 — 그래서 21건 이상이면 화면 목록 수 < AI가 받은 건수예요(알고 남김).
+  - 한 줄 모양 `{alert_no, rule_id, batch_date, reference_ts, account_ref, account_no, score_status, score, case_no}` — 계좌는 가린 값만(`AccountDisplay`, 원본 `account_key` 없음), `score`는 점수 전·실패면 null, `case_no`는 그 경보로 만든 케이스가 없으면 null(케이스 번호는 한 쿼리 `CaseRepository.findByAlertIdIn`). 내부 경보 id·정답 라벨(`is_laundering`·`pattern_*`)은 없어요. 〔계약서 C2에 한 줄 추가 필요 — 프론트는 아직 이 칸을 그리지 않음〕
 - **배정은 관리자만 (SCRUM-339, 11/21)** — 조사역이 OPEN 케이스를 스스로 맡는 길을 없앴어요(실제 업무처럼 관리자가 먼저 배정, 조사역은 받은 것만). 조사역·승인자가 `assign`을 부르면 403 `FORBIDDEN` — URL 규칙이 먼저 막고, 유스케이스도 한 번 더 봐요(`CaseQuestionAccess`와 같은 방식). 11/6의 `SELF_ONLY`(조사역이 남 지정 409)는 닿을 길이 없어 지웠어요 — `INVALID_ASSIGNEE`의 `details.reason`은 이제 `NOT_ACTIVE_INVESTIGATOR` 하나. 이미 조사역이 맡아 둔 케이스·이력은 그대로. 승인자 배정 권한은 발표 뒤 검토(`08_decisions.md` 11/21).
 
 **컨트롤러 — 구현됨 (SCRUM-106)** `CaseController` `/api/v1/cases` — 01 목록 · 02 상세 · 03 배정 · 07 에스컬레이션 · 06 종료(초안 없음). 응답은 계약서 v0.2 C1·C2·5.3 모양이에요.
@@ -226,7 +230,21 @@
   - **세션 만료 실패** 뒤 회수된 승인 권한으로 승인 요청을 읽는 것도 위 세션 줄과 같은 공통 과제예요.
   - 인덱스는 지금 것 그대로(`created_at`이 앞인 인덱스 없음 — 느려지면 추가, 설계 6.5).
 
-**아직 남은 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`(필요 여부 결정 — SCRUM-243). Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
+**`GetCaseEvidence`는 만들지 않아요 (11/22, SCRUM-243)** — CASES 명세 §6.2에서 지워요. 명세가 이 기능에 담으려던 값을 str은 이미 다른 길로 받아요.
+
+| 명세의 값 | str이 지금 받는 곳 |
+|---|---|
+| 상태·담당자·`caseVersion`·`currentDraftId`·반려 코드 | `CaseRepository`로 읽은 `Case`의 get·is(ArchitectureTest가 str에서 `Case` 변경 메서드 호출만 막아요) |
+| 경보·허용 거래 ID | detection `GetAlertForDraft`(`alert.transaction_ids` 전체 = `evidence_transaction_ids`) |
+| 메모 | **빠져 있어요** — 초안 요청 `investigator_notes`가 늘 null(`RequestStrDraft.bodyFor`) |
+
+메모는 묶음 DTO 대신 좁은 공개 조회 하나로 채우는 게 맞지만, **길이가 안 맞아서 이번엔 잇지 않아요** — 화면 메모는 10,000자(`UpdateNotesRequest`), AI 초안 스키마는 2,000자(`INVESTIGATOR_NOTES_MAX`)라 긴 메모를 그대로 보내면 AI 422 → 502가 돼요. 자르기·한도 통일·스냅샷 중 고르는 건 str·AI(채영·진희) 결정이라 미결 35로 올려요.
+
+**참고 거래 `scope=CONTEXT` — MVP 빈 목록 확정 (11/22, SCRUM-244)** — 08 목록은 지금처럼 빈 페이지, 09 원본은 `EVIDENCE_NOT_FOUND`(참고 거래가 없으니), 10 그래프엔 CONTEXT 선이 없어요. 화면(탭·점선·`eligible_for_str`)은 이미 빈 목록을 처리해요.
+- **안 만드는 이유** — 누가·언제 참고 거래를 고를지(규칙·이웃 범위·건수 한도)가 정해지지 않았고, 새 저장소는 Flyway 번호 예약 + detection 룰 스캔 변경이라 11/24 동결 전에 넣기 어려워요.
+- **나중에 만들 때 지킬 것** (명세·규약 그대로) — ① 등록은 detection이 경보를 만들 때(룰 스캔) 경보에 묶어 저장, cases는 읽기만(공개 조회) ② `reference_ts` 뒤 거래는 넣지 않음 ③ STR 합계·근거·`aggregates`·AI 요청에 넣지 않음(`eligible_for_str=false`) ④ 근거 거래와 겹치면 근거로만 ⑤ 화면에선 다른 선·탭. 등록 규칙은 준혁과 정해요(미결 36).
+
+Java 공개 기능 공통: str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
 
 **지표 (Prometheus) — 구현됨 (SCRUM-276)** 이름·태그 규칙은 [`03_shared.md` §13](../03_shared.md). Grafana 「CASES」(`ops/grafana/dashboards/cases.json`).
 

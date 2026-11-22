@@ -9,6 +9,7 @@ import com.team.aml.detection.domain.AlertRepository;
 import com.team.aml.detection.domain.AlertSummary;
 import com.team.aml.detection.domain.AlertTransaction;
 import com.team.aml.detection.domain.AlertTransactionOrder;
+import com.team.aml.detection.domain.PriorAlert;
 import com.team.aml.shared.ai.AiDtos.AlertPayload;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -43,8 +44,19 @@ public class AlertJdbcRepository implements AlertRepository {
     private static final String TRANSACTION_IDS =
             "select transaction_id from ops.alert_transactions where alert_id = ? order by transaction_id";
     // 같은 법인의 이 경보보다 앞선 경보. 같은 시각·자기 자신은 세지 않는다 (alerts_entity_reference_idx).
+    // 건수(prior_alert_count)와 목록(상세 prior_alerts)이 같은 기준이도록 조건은 이 한 줄만 쓴다 (SCRUM-239).
+    private static final String PRIOR_ALERT_WHERE = "a.entity_id = ? and a.reference_ts < ?";
     private static final String PRIOR_ALERT_COUNT =
-            "select count(*) from ops.alerts where entity_id = ? and reference_ts < ?";
+            "select count(*) from ops.alerts a where " + PRIOR_ALERT_WHERE;
+    // 정답 칸(is_laundering·pattern_*)은 alerts 에 없고 거래도 읽지 않는다. 점수가 없으면 score 는 null.
+    private static final String PRIOR_ALERTS = """
+            select a.id, a.alert_no, r.rule_id, a.batch_date, a.reference_ts, a.account_key, a.score_status, s.score
+            from ops.alerts a
+            join ops.rules r on r.id = a.rule_ref_id
+            left join ops.alert_scores s on s.alert_id = a.id
+            where %s
+            order by a.reference_ts desc, a.id desc
+            limit ?""".formatted(PRIOR_ALERT_WHERE);
     // 케이스 상세용 (SCRUM-152). 점수가 없으면 s.* 는 null, reasons 는 [] 로 바꿔 돌려준다.
     private static final String FIND_SUMMARY = """
             select a.alert_no, r.rule_id, a.batch_date, a.window_start, a.window_end, a.reference_ts,
@@ -108,6 +120,15 @@ public class AlertJdbcRepository implements AlertRepository {
                     : jdbc.queryForObject(PRIOR_ALERT_COUNT, Integer.class, entityId, referenceTs);
             return new AlertForDraft(alert, reasonsOrEmpty(rs.getString("reasons")), prior);
         }, alertId).stream().findFirst();
+    }
+
+    @Override
+    public List<PriorAlert> findPriorByEntity(String entityId, LocalDateTime before, int limit) {
+        return jdbc.query(PRIOR_ALERTS, (rs, rowNum) -> new PriorAlert(
+                rs.getLong("id"), rs.getString("alert_no"), rs.getString("rule_id"),
+                rs.getObject("batch_date", LocalDate.class), rs.getObject("reference_ts", LocalDateTime.class),
+                rs.getString("account_key"), rs.getString("score_status"), rs.getBigDecimal("score")),
+                entityId, before, limit);
     }
 
     @Override
