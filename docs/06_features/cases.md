@@ -183,9 +183,9 @@
 
 | 유스케이스 | 하는 일 | 오류 |
 |---|---|---|
-| `WasCaseAssignee.execute(caseId, userId)` → `boolean` | 이 사람이 이 케이스를 **지금 맡고 있거나 예전에 맡은 적이 있나**. 지금 담당(`cases.assignee_id`) 또는 받은 사람(`case_history.to_assignee_id`) 이력. true면 승인·반려 버튼을 주지 않고(S2·승인함 `available_actions`), 승인·반려 유스케이스는 그 값을 `Case.approve`·`reject`에 넘겨요 → 409 `SELF_APPROVAL` | 없는 케이스 404 `CASE_NOT_FOUND` |
+| `WasCaseAssignee.execute(caseId, userId)` → `boolean` | 이 사람이 이 케이스를 **지금 맡고 있거나 예전에 맡은 적이 있나**. 지금 담당(`cases.assignee_id`) 또는 받은 사람·넘긴 사람(`case_history.to_assignee_id`·`from_assignee_id`) 이력(11/22 — 넘긴 사람 추가, V010 전 배정 빈틈). true면 승인·반려 버튼을 주지 않고(S2·승인함 `available_actions`), 승인·반려 유스케이스는 그 값을 `Case.approve`·`reject`에 넘겨요 → 409 `SELF_APPROVAL` | 없는 케이스 404 `CASE_NOT_FOUND` |
 
-- **이력 칸 (V010)**: `ASSIGN`은 받은 사람(`to_assignee_id`)만, `REASSIGN`은 넘긴 사람(`from_assignee_id`)·받은 사람 둘 다. 그 밖의 행동은 둘 다 빈칸(CHECK). 필수 CHECK는 V010 전 이력 때문에 `NOT VALID` — 그래서 지금 담당은 `cases.assignee_id`로 따로 봐요.
+- **이력 칸 (V010)**: `ASSIGN`은 받은 사람(`to_assignee_id`)만, `REASSIGN`은 넘긴 사람(`from_assignee_id`)·받은 사람 둘 다. 그 밖의 행동은 둘 다 빈칸(CHECK). 필수 CHECK는 V010 전 이력 때문에 `NOT VALID` — 그래서 지금 담당은 `cases.assignee_id`로 따로 봐요. 넘긴 사람 칸까지 보는 이유: V010 전에 배정받아 받은 사람 칸이 빈 사람이 V010 뒤에 넘기면 넘긴 사람 칸에만 남아요. **알고 남김** — V010 전에 배정받고 넘긴 것까지 V010 전이면 두 칸이 다 비어 판정할 수 없어요(옛 이력을 채우지 않는 한, 로컬 0건).
 - 승인함처럼 여러 건을 한 번에 볼 일이 많아지면 묶음 조회를 추가해요(지금은 건마다 한 번).
 
 **str에 주는 공개 조회 — 승인 대기 목록 (승인함 P1, SCRUM-222)** 트랜잭션 전파는 기본(`REQUIRED`, 읽기 전용). str 조회 유스케이스가 `REPEATABLE READ`로 감싸 부르면 같은 스냅샷을 읽어요(08_decisions 10/30 조합 방식). `CaseRepository.search`는 이력 시각으로 정렬할 수 없고 생성일 기간이 필수라 따로 둬요.
@@ -219,7 +219,7 @@
   | `APPROVAL_REQUESTED` | `SUBMIT_FOR_APPROVAL` | 승인자 전원, 단 그 케이스를 **지금 맡았거나 받은·넘긴 적이 있는 사람 제외** (APPROVER) |
   | `STR_APPROVED` · `STR_REJECTED` · `STR_REPORTED` | `APPROVE` · `REJECT` · `REPORT` | **지금 담당** `cases.assignee_id` (INVESTIGATOR) |
 
-- **막는 곳** — 받는 사람은 **SQL 한 쿼리**에서 골라요(거른 뒤에 `size`·`total`이 맞게). 자기가 한 일은 `created_by <> 나`. 관리자는 쿼리 없이 빈 목록(배치 알림은 화면 작업 추적기 몫). 모의 제출은 지금 담당 조사역만 — 관리자·비담당·승인자에겐 안 나가요(보고 사실 비공개). "지금·예전에 맡은 사람"은 `WasCaseAssignee`(지금 담당 OR `to_assignee_id` 이력)를 SQL로 다시 적고 **`from_assignee_id` 이력까지 더 막아요** — V010 전에 배정받아 받은 사람 칸이 비고 그 뒤 넘긴 사람은 넘긴 사람 칸에만 남기 때문이에요(추가 검토 1). 목록에서 케이스마다 부를 수 없어서 따로 적었고, "알림 쪽이 더 넓게 막는다"를 `NotificationApiTest`가 묶어요. 〔확인 필요〕 같은 빈틈이 승인 권한(`WasCaseAssignee`)에도 있어요 — 그런 사람이 승인자가 되면 자기 케이스를 승인할 수 있음. 이번엔 cases 기존 코드를 안 고쳐서 지윤 님 확인 요청. `OPEN`(배치가 수십 건)·`NOTE`·`ESCALATE`·`CLOSE`·`ATTACH_DRAFT`·`REOPEN_DRAFT`는 알림이 아니에요. V010 전 배정 이력(담당자 칸 빔)은 `= 나` 비교에 안 걸려 조용히 빠져요.
+- **막는 곳** — 받는 사람은 **SQL 한 쿼리**에서 골라요(거른 뒤에 `size`·`total`이 맞게). 자기가 한 일은 `created_by <> 나`. 관리자는 쿼리 없이 빈 목록(배치 알림은 화면 작업 추적기 몫). 모의 제출은 지금 담당 조사역만 — 관리자·비담당·승인자에겐 안 나가요(보고 사실 비공개). "지금·예전에 맡은 사람"은 `WasCaseAssignee`(지금 담당 OR `to_assignee_id`·`from_assignee_id` 이력)와 **같은 기준**을 SQL로 다시 적어요 — 목록에서 케이스마다 부를 수 없어서 따로 적었고, 두 곳이 같은 사람을 막는 걸 `NotificationApiTest`가 묶어요(한쪽을 바꾸면 다른 쪽도). `from_assignee_id`까지 보는 이유는 V010 전 배정 빈틈(추가 검토 1) — 11/22 승인 권한 쪽도 같이 고쳤어요. `OPEN`(배치가 수십 건)·`NOTE`·`ESCALATE`·`CLOSE`·`ATTACH_DRAFT`·`REOPEN_DRAFT`는 알림이 아니에요. V010 전 배정 이력(담당자 칸 빔)은 `= 나` 비교에 안 걸려 조용히 빠져요.
 - **알고 남김** — 역할은 세션 값이라 역할이 바뀌면 다시 로그인한 뒤부터 반영. 역할 변경·비활성화 뒤 세션 만료가 실패하면(Redis 장애 등) 그 세션은 회수된 역할로 계속 읽어요 — 세션 역할을 믿는 모든 API가 같은 구조라 이 조회만 막지 않고, 세션 만료 쪽 공통 과제로 남겨요(추가 검토 1). `created_at`은 커밋 전 앱 시각이라, **5초보다 오래 걸려 커밋된** 행은 화면이 이미 넘긴 `since` 앞에 찍혀 안 보일 수 있어요. 아래 세 가지와 함께 1단계(알림을 저장하지 않고 이력을 읽는 방식)의 한계예요 — 정확히 한 번 전달·커서는 알림 저장(설계 10절, 2단계)에서 풀어요(추가 검토 2).
   - **한 구간에 `size`보다 많으면** 나머지는 다음 `since`로 못 받아요(커서 없음). 화면은 목록을 열 때 `size=50`(최대)으로 부르고, `total > items` 개수면 "이전 알림 n건 더 있음" 한 줄을 보여 줘요.
   - **반려 뒤 재배정**되면 반려 알림은 그때의 지금 담당 기준이라, 새 담당이 이미 반려 시각을 지난 `since`로 부르면 둘 다 반려 알림을 못 받을 수 있어요. 새 담당은 `CASE_REASSIGNED_TO_ME`를 받고 케이스 화면에서 반려 상태를 봐요("지금 담당" 기준은 설계 13절 7번).

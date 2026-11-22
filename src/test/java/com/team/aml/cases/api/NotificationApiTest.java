@@ -152,7 +152,7 @@ class NotificationApiTest {
     }
 
     @Test
-    void 실패_그_케이스를_지금_예전에_맡은_승인자에게는_승인_요청이_안_나가고_WasCaseAssignee_보다_넓게_막는다() throws Exception {
+    void 실패_그_케이스를_지금_예전에_맡은_승인자에게는_승인_요청이_안_나가고_WasCaseAssignee_와_같은_기준으로_막는다() throws Exception {
         AppUserDetails wasAssignee = newUser("ntf_aprw" + SEQ.incrementAndGet(), "APPROVER");   // 조사역이었다가 승인자로
         AppUserDetails nowAssignee = newUser("ntf_aprn" + SEQ.incrementAndGet(), "APPROVER");
         TestCase before = newCase(inv.userId(), true);
@@ -176,10 +176,9 @@ class NotificationApiTest {
         assertThat(wasCaseAssignee.execute(before.id, apr.userId())).isFalse();
         assertThat(caseNos(list(apr, since(t0)))).contains(before.no, now.no, gap.no);
 
-        // 알림은 from 에만 남은 사람도 막는다. 승인 권한 판단(WasCaseAssignee)은 to 만 봐서 아직 false — 알림 쪽이 더 넓다.
-        // WasCaseAssignee 가 from 까지 보게 바뀌면 아래 false 를 true 로 바꾼다(알림 쪽은 그대로).
+        // from 에만 남은 사람은 알림도 승인 권한도 막는다 — 두 곳이 같은 기준(SCRUM-355 리뷰).
         assertThat(caseNos(list(fromOnly, since(t0)))).doesNotContain(gap.no).contains(before.no, now.no);
-        assertThat(wasCaseAssignee.execute(gap.id, fromOnly.userId())).isFalse();
+        assertThat(wasCaseAssignee.execute(gap.id, fromOnly.userId())).isTrue();
     }
 
     @Test
