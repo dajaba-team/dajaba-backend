@@ -1,5 +1,6 @@
 package com.team.aml.cases.application;
 
+import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.shared.batch.BatchRunningException;
 import com.team.aml.shared.security.CurrentUser;
 import org.junit.jupiter.api.Test;
@@ -8,6 +9,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -19,6 +22,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,17 +60,42 @@ class OpenCasesFromAlertsDbTest {
 
     @Autowired OpenCasesFromAlerts openCases;
     @Autowired OpenCasesRecorder recorder;
+    @Autowired CaseRepository cases;
+    @Autowired PlatformTransactionManager transactionManager;
     @Autowired JdbcTemplate jdbc;
 
     @Test
-    void 앱_재시작으로_남은_RUNNING_케이스_생성만_FAILED로_끝난_행과_다른_배치는_그대로() {   // SCRUM-246
+    void 앱_재시작으로_남은_RUNNING_케이스_생성만_FAILED로_끝난_행_다른_배치_처리_중인_행은_그대로() throws Exception {   // SCRUM-246
         LocalDate date = newDate();
         String insert = "insert into ops.batch_runs(batch_type, batch_date, status, triggered_by) values (?, ?, ?, 1) returning id";
         long running = jdbc.queryForObject(insert, Long.class, "OPEN_CASES", date, "RUNNING");
         long done = jdbc.queryForObject(insert, Long.class, "OPEN_CASES", date, "SUCCEEDED");
         long otherType = jdbc.queryForObject(insert, Long.class, "SCORE_REQUEST", date, "RUNNING");
+        long processing = jdbc.queryForObject(insert, Long.class, "OPEN_CASES", date.plusDays(1), "RUNNING");
 
-        recorder.failAbandonedOpenCases();
+        // 큐 리스너가 먼저 떠서 처리 중인 행 — 실행 번호 잠금을 다른 연결이 쥔 채로 정리를 돌린다 (#168 리뷰)
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService other = Executors.newSingleThreadExecutor();
+        Future<?> holder = other.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(st -> {
+            assertThat(cases.tryLockOpenCasesRun(processing)).isTrue();
+            locked.countDown();
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+        try {
+            recorder.failAbandonedOpenCases();
+        } finally {
+            release.countDown();
+            holder.get(10, TimeUnit.SECONDS);
+            other.shutdown();
+        }
+        assertThat(statusOf(processing)).isEqualTo("RUNNING");   // 처리 중인 행은 그쪽이 결과를 남긴다
+        jdbc.update("update ops.batch_runs set status = 'FAILED' where id = ?", processing);
 
         Map<String, Object> cleaned = jdbc.queryForMap(
                 "select status, error_message, finished_at from ops.batch_runs where id = ?", running);

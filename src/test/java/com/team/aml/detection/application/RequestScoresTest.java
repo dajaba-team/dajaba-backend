@@ -394,15 +394,21 @@ class RequestScoresTest {
     }
 
     @Test
-    void 앱_재시작으로_남은_RUNNING_점수_배치는_FAILED로() {
+    void 앱_재시작으로_남은_RUNNING_점수_배치는_FAILED로_이_앱이_뜬_뒤_만든_행은_그대로() {   // #168 리뷰
         LocalDate d = newDate();
-        long id = jdbc.queryForObject("insert into ops.batch_runs(batch_type, batch_date, status, triggered_by) "
-                + "values ('SCORE_REQUEST', ?, 'RUNNING', 1) returning id", Long.class, d);
+        String insert = "insert into ops.batch_runs(batch_type, batch_date, status, triggered_by, started_at) "
+                + "values ('SCORE_REQUEST', ?, 'RUNNING', 1, ?) returning id";
+        long abandoned = jdbc.queryForObject(insert, Long.class, d, Timestamp.from(Instant.parse("2026-01-01T00:00:00Z")));
+        // 리스너가 ApplicationReadyEvent 전에 큐 메시지로 만든 행(이 앱이 시작된 뒤) — 지금 도는 중이라 건드리면 안 됨
+        long mine = jdbc.queryForObject(insert, Long.class, d.plusDays(1), Timestamp.from(Instant.now()));
 
         recorder.failAbandonedScoreBatches();
 
-        assertThat(jdbc.queryForObject("select status from ops.batch_runs where id = ?", String.class, id))
+        assertThat(jdbc.queryForObject("select status from ops.batch_runs where id = ?", String.class, abandoned))
                 .isEqualTo("FAILED");
+        assertThat(jdbc.queryForObject("select status from ops.batch_runs where id = ?", String.class, mine))
+                .isEqualTo("RUNNING");
+        jdbc.update("update ops.batch_runs set status = 'FAILED' where id = ?", mine);   // 다른 테스트에 남기지 않게
     }
 
     @Test

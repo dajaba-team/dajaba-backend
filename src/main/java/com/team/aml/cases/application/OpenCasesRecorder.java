@@ -83,13 +83,24 @@ class OpenCasesRecorder {
 
     /**
      * 앱이 뜰 때 남은 케이스 생성 RUNNING 을 FAILED 로 (SCRUM-246) — 적재·룰 스캔·점수 Recorder 와 같은 단일 서버 전제.
-     * 뜰 때 RUNNING 인 행은 모두 버려진 작업이라 시작 시각으로 거르지 않는다(남기면 앱 안 실행기 경로에선 영원히 RUNNING).
-     * 큐에 남은 메시지가 뒤에 와도 RunOpenCasesOnce 가 RUNNING 이 아닌 행은 건너뛰고, 같은 날짜를 다시 실행하면 남은 경보만 처리한다.
+     * 시작 시각으로 거르지 않는다(남기면 앱 안 실행기 경로에선 영원히 RUNNING).
+     * <b>지금 처리 중인 행은 건드리지 않는다</b>(#168 리뷰): RabbitMQ 리스너는 ApplicationReadyEvent 보다 먼저 떠서, 큐에 남은
+     * case.open-cases 메시지를 받아 RunOpenCasesOnce 가 그 RUNNING 행을 이미 처리하고 있을 수 있다. 처리 중엔 실행 번호
+     * advisory lock(tryLockOpenCasesRun)을 쥐고 있으니, 같은 잠금을 못 잡는 행은 건너뛴다 — 끝나면 그쪽이 결과를 남긴다.
+     * 잠금은 이 트랜잭션이 끝날 때 풀리고, 그 뒤에 온 메시지는 행이 RUNNING 이 아니라 건너뛴다(giveUp 과 같은 방식).
      */
     @EventListener(ApplicationReadyEvent.class)
     @Transactional
     public void failAbandonedOpenCases() {
-        int cleaned = batchRuns.failRunning(BatchType.OPEN_CASES.name(), ABANDONED_MESSAGE);
+        int cleaned = 0;
+        for (BatchRun run : batchRuns.findByBatchTypeAndStatus(BatchType.OPEN_CASES, BatchStatus.RUNNING)) {
+            if (!cases.tryLockOpenCasesRun(run.getId())) {
+                log.info("케이스 생성 정리 건너뜀 batch_run_id={} 지금 처리 중", run.getId());
+                continue;
+            }
+            run.fail(ABANDONED_MESSAGE);
+            cleaned++;
+        }
         if (cleaned > 0) {
             log.warn("중단된 케이스 생성 {}건을 FAILED로 정리", cleaned);
         }

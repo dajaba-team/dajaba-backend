@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.lang.management.ManagementFactory;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -109,11 +110,17 @@ public class ScoreBatchRecorder {
         batchRuns.findById(batchRunId).orElseThrow().fail(message);
     }
 
-    /** 단일 서버 전제 — RuleScanRecorder.failAbandonedScans 와 같은 이유. 남은 RUNNING 이 그 날짜를 막지 않게. */
+    /**
+     * 단일 서버 전제 — RuleScanRecorder.failAbandonedScans 와 같은 이유. 남은 RUNNING 이 그 날짜를 막지 않게.
+     * <b>이 앱이 시작되기 전에 만든 행만</b>(#168 리뷰): RabbitMQ 리스너는 ApplicationReadyEvent 보다 먼저 떠서, 큐에 남은
+     * batch.score 메시지로 ScoreAfterRuleScan 이 이 프로세스에서 새 점수 행을 만들고 돌리고 있을 수 있다. 그 행은 버려진 게 아니다.
+     * 시작 시각은 이 JVM 이 찍으니(BatchRun.start) JVM 시작 시각과 바로 비교된다.
+     */
     @EventListener(ApplicationReadyEvent.class)
     @Transactional
     public void failAbandonedScoreBatches() {
-        int cleaned = scores.failRunningScoreBatches(ABANDONED_MESSAGE);
+        Instant appStarted = Instant.ofEpochMilli(ManagementFactory.getRuntimeMXBean().getStartTime());
+        int cleaned = scores.failRunningScoreBatches(ABANDONED_MESSAGE, appStarted);
         if (cleaned > 0) {
             log.warn("중단된 점수 배치 {}건을 FAILED로 정리", cleaned);
         }

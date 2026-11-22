@@ -32,7 +32,7 @@ public class BatchRunQuery {
             from ops.batch_runs b
             join ops.users u on u.id = b.triggered_by""";
 
-    private final RowMapper<BatchRunView> ROW = (rs, rowNum) -> new BatchRunView(
+    private final RowMapper<BatchRunView> row = (rs, rowNum) -> new BatchRunView(
             rs.getLong("id"), BatchType.valueOf(rs.getString("batch_type")),
             rs.getObject("batch_date", LocalDate.class), BatchStatus.valueOf(rs.getString("status")),
             seconds(rs.getTimestamp("started_at")), seconds(rs.getTimestamp("finished_at")),
@@ -69,7 +69,7 @@ public class BatchRunQuery {
     }
 
     public Optional<BatchRunView> find(long batchRunId) {
-        return jdbc.query(SELECT + " where b.id = ?", ROW, batchRunId).stream().findFirst();
+        return jdbc.query(SELECT + " where b.id = ?", row, batchRunId).stream().findFirst();
     }
 
     public BatchRunView get(long batchRunId) {
@@ -104,7 +104,7 @@ public class BatchRunQuery {
         pageArgs.add((long) page * size);
         List<BatchRunView> items = jdbc.query(
                 SELECT + where + " order by " + column + " " + direction + ", b.id " + direction + " limit ? offset ?",
-                ROW, pageArgs.toArray());
+                row, pageArgs.toArray());
         return new PageImpl<>(items, PageRequest.of(page, size), total);
     }
 
