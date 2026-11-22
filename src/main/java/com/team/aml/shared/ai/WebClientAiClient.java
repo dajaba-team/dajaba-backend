@@ -36,6 +36,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 
@@ -101,7 +102,7 @@ public class WebClientAiClient implements AiClient {
     private final int maxBatch;
     private final Duration budget;
     private final Duration askBudget;
-    private final Duration referenceSearchBudget;
+    private final SelfBudgetedCall searchCall;
     private static final String SEARCH_PATH = "/v1/references/search";
 
     public WebClientAiClient(WebClient aiWebClient, AmlProperties props, ObjectMapper om, AiCallLogWriter writer) {
@@ -112,7 +113,8 @@ public class WebClientAiClient implements AiClient {
         this.maxBatch = props.ai().maxBatch();
         this.budget = Duration.ofSeconds(props.ai().timeoutSeconds());
         this.askBudget = Duration.ofSeconds(props.ai().askTimeoutSeconds());
-        this.referenceSearchBudget = Duration.ofSeconds(props.ai().referenceSearchTimeoutSeconds());
+        this.searchCall = new SelfBudgetedCall(SEARCH_PATH,
+                Duration.ofSeconds(props.ai().referenceSearchTimeoutSeconds()), SEARCH_ERROR_MESSAGES, "참고 사례 검색");
     }
 
     @Override
@@ -489,29 +491,44 @@ public class WebClientAiClient implements AiClient {
     }
 
     /**
-     * 참고 사례 검색 — 이 호출만 referenceSearchBudget(8초). `draftId` 는 기록에만(본문 없음). SCRUM-309
-     *
-     * 다른 호출과 달리 자기 호출·재시도 루프를 쓴다(추가 검토 1·2). 재시도 횟수·남은 시간·대상 판정은 {@link #withRetry} 와
-     * 같고 분류는 {@link #classify} 그대로. 다른 점:
-     *  - 요청·응답을 바이트로 주고받고 `om` 으로 직접 읽는다 — Jackson 코덱 DEBUG/TRACE 로그에 검색어·문서 제목이 안 남게
-     *  - `X-Budget-Ms` 는 연결을 잡은 뒤(요청 헤더 커밋 직전) 절대 마감 시각에서 남은 ms 로 계산. 1ms 미만이면 보내지 않고
-     *    재시도 없는 AI_TIMEOUT
-     *  - AI 오류 본문은 검색이 낼 수 있는 코드만 그대로, 나머지는 AI_BAD_RESPONSE. 메시지는 코드별 고정 문구(AI 문장 안 씀)
-     * 기록은 다섯 호출과 같이 호출 스레드에서 시도마다 저장한다 — 8초는 AI 호출(재시도 포함) 기준, 감사 DB 저장 시간은 빠짐:
-     * 재시도 전 저장에 쓴 시간만큼 다음 시도 마감을 뒤로 민다(추가 검토 3). 그래서 전체 걸린 시간은 8초 + 저장 시간까지 늘 수 있다.
-     * 기록 행의 `generation_id` 는 늘 null(계약에 없는 칸), 버전은 `retrieval_version` 만 넘긴다.
+     * 참고 사례 검색 — 이 호출만 searchCall 예산(8초). `draftId` 는 기록에만(본문 없음). SCRUM-309.
+     * 호출·재시도 루프는 {@link #selfBudgetedPost} — 응답 확인만 {@link #requireReferenceSearchResponse}.
      */
     @Override
     public ReferenceSearchResponse searchReferences(String draftId, ReferenceSearchRequest request) {
+        return selfBudgetedPost(searchCall, request, draftId, r -> requireReferenceSearchResponse(request, r),
+                "status", ReferenceSearchResponse.class);
+    }
+
+    /**
+     * 자기 호출·재시도 루프를 쓰는 호출 하나의 설정 — 경로 · 전체 예산 · 그 입구가 낼 수 있는 AI 오류 코드와 코드별 고정 문구 ·
+     * 오류 문구에 쓰는 이름(예: "참고 사례 검색"). 지금은 참고 사례 검색 하나(SCRUM-309).
+     */
+    private record SelfBudgetedCall(String path, Duration budget, Map<String, String> errorMessages, String label) {}
+
+    /**
+     * 자기 예산 호출 — 다른 다섯 호출과 달리 자기 호출·재시도 루프를 쓴다(309 추가 검토 1·2). 재시도 횟수·남은 시간·대상 판정은
+     * {@link #withRetry} 와 같고 분류는 {@link #classify} 그대로. 다른 점:
+     *  - 요청·응답을 바이트로 주고받고 `om` 으로 직접 읽는다 — Jackson 코덱 DEBUG/TRACE 로그에 요청·응답 본문이 안 남게
+     *  - `X-Budget-Ms` 는 연결을 잡은 뒤(요청 헤더 커밋 직전) 절대 마감 시각에서 남은 ms 로 계산. 1ms 미만이면 보내지 않고
+     *    재시도 없는 AI_TIMEOUT
+     *  - AI 오류 본문은 그 입구가 낼 수 있는 코드만 그대로, 나머지는 AI_BAD_RESPONSE. 메시지는 코드별 고정 문구(AI 문장 안 씀)
+     * 기록은 다섯 호출과 같이 호출 스레드에서 시도마다 저장한다 — 예산은 AI 호출(재시도 포함) 기준, 감사 DB 저장 시간은 빠짐:
+     * 재시도 전 저장에 쓴 시간만큼 다음 시도 마감을 뒤로 민다(309 추가 검토 3). 그래서 전체 걸린 시간은 예산 + 저장 시간까지 늘 수 있다.
+     * 기록 행은 `DRAFT` 대상, `generation_id` 는 늘 null(계약에 없는 칸), 버전은 `retrieval_version` 만 넘긴다.
+     * 2xx 응답은 {@code check} 로 확인한 뒤 읽는다 — 틀리면 재시도 없는 실패 행.
+     */
+    private <T> T selfBudgetedPost(SelfBudgetedCall call, Object request, String draftId, Consumer<JsonNode> check,
+                                   String requiredField, Class<T> type) {
         byte[] body;
         try {
             body = om.writeValueAsBytes(request);
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new AiClientException("AI_BAD_RESPONSE", "AI 참고 사례 검색 요청 만들기 실패", Map.of(), 502);
+            throw new AiClientException("AI_BAD_RESPONSE", "AI " + call.label() + " 요청 만들기 실패", Map.of(), 502);
         }
         String requestId = MDC.get("request_id");
         if (requestId == null || requestId.isBlank()) requestId = UUID.randomUUID().toString();
-        long deadline = System.nanoTime() + referenceSearchBudget.toNanos();
+        long deadline = System.nanoTime() + call.budget().toNanos();
         Classified last = null;
         for (int tries = 1; tries <= 2; tries++) {
             Duration remaining = Duration.ofNanos(deadline - System.nanoTime());
@@ -519,46 +536,48 @@ public class WebClientAiClient implements AiClient {
             long start = System.nanoTime();
             Response response;
             try {
-                response = searchExchange(body, requestId, deadline, remaining);
+                response = selfBudgetedExchange(call, body, requestId, deadline, remaining);
             } catch (RuntimeException e) {
                 long ended = System.nanoTime();
                 long leftNanos = deadline - ended;                // 시도가 끝난 순간 남은 AI 예산을 확정
                 last = classify(e);
                 Integer status = e instanceof ClassifiedResponse cr ? cr.aiStatus : null;
-                recordSearchAttempt(requestId, tries, status, last.ex().code(), start, null, draftId);
+                recordSelfBudgetedAttempt(call, requestId, tries, status, last.ex().code(), start, null, draftId);
                 log.warn("ai call failed path={} request_id={} code={} http={} retryable={} cause={} ms={} try={}",
-                        SEARCH_PATH, requestId, last.ex().code(), last.ex().httpStatus(), last.retryable(), last.cause(),
+                        call.path(), requestId, last.ex().code(), last.ex().httpStatus(), last.retryable(), last.cause(),
                         (ended - start) / 1_000_000, tries);
                 if (!last.retryable()) break;
                 deadline = System.nanoTime() + leftNanos;         // 감사 저장 시간은 빼고 다음 시도 마감을 다시 잡음
                 continue;
             }
-            ReferenceSearchResponse value;
+            T value;
             try {
-                requireReferenceSearchResponse(request, response.body());
-                value = readRecord(response.body(), "status", ReferenceSearchResponse.class, "AI 참고 사례 검색 응답 파싱 실패");
+                check.accept(response.body());
+                value = readRecord(response.body(), requiredField, type, "AI " + call.label() + " 응답 파싱 실패");
             } catch (RuntimeException e) {
                 Classified rejected = classify(e);
                 AiClientException bad = rejected.ex();
-                recordSearchAttempt(requestId, tries, response.status(), bad.code(), start, response.body(), draftId);
+                recordSelfBudgetedAttempt(call, requestId, tries, response.status(), bad.code(), start, response.body(),
+                        draftId);
                 log.warn("ai response rejected path={} request_id={} code={} http={} cause={} ms={} try={}",
-                        SEARCH_PATH, requestId, bad.code(), response.status(), rejected.cause(), msSince(start), tries);
+                        call.path(), requestId, bad.code(), response.status(), rejected.cause(), msSince(start), tries);
                 throw bad;
             }
-            recordSearchAttempt(requestId, tries, response.status(), null, start, response.body(), draftId);
-            log.info("ai call ok path={} request_id={} ms={} try={}", SEARCH_PATH, requestId, msSince(start), tries);
+            recordSelfBudgetedAttempt(call, requestId, tries, response.status(), null, start, response.body(), draftId);
+            log.info("ai call ok path={} request_id={} ms={} try={}", call.path(), requestId, msSince(start), tries);
             return value;
         }
         throw last != null ? last.ex() : new AiClientException("AI_TIMEOUT", "AI 서버 응답 시간 초과", Map.of(), 502);
     }
 
     /**
-     * 검색 한 시도 — 본문은 바이트(코덱 본문 로그 없음). `X-Budget-Ms` 는 `httpRequest` 콜백에서 정한다: WebClient 가 연결을
-     * 잡은 뒤 요청을 쓰기 직전에 부르는 자리라, 풀 대기·연결 수립에 쓴 시간이 빠진 값이 나간다({@link #searchBudgetMs}).
-     * 응답 처리는 {@link #exchange} 와 같고, 오류 본문만 {@link #searchErrorBody} 로 걸러 넘긴다.
+     * 자기 예산 호출 한 시도 — 본문은 바이트(코덱 본문 로그 없음). `X-Budget-Ms` 는 `httpRequest` 콜백에서 정한다: WebClient 가
+     * 연결을 잡은 뒤 요청을 쓰기 직전에 부르는 자리라, 풀 대기·연결 수립에 쓴 시간이 빠진 값이 나간다({@link #searchBudgetMs}).
+     * 응답 처리는 {@link #exchange} 와 같고, 오류 본문만 {@link #selfBudgetedErrorBody} 로 걸러 넘긴다.
      */
-    private Response searchExchange(byte[] body, String requestId, long deadline, Duration remaining) {
-        return http.post().uri(SEARCH_PATH).contentType(MediaType.APPLICATION_JSON)
+    private Response selfBudgetedExchange(SelfBudgetedCall call, byte[] body, String requestId, long deadline,
+                                          Duration remaining) {
+        return http.post().uri(call.path()).contentType(MediaType.APPLICATION_JSON)
                 .header(HEADER_INTERNAL_KEY, internalKey)
                 .header(HEADER_REQUEST_ID, requestId)
                 .httpRequest(req -> req.getHeaders().set(HEADER_BUDGET_MS,
@@ -569,19 +588,19 @@ public class WebClientAiClient implements AiClient {
                     if (resp.statusCode().is2xxSuccessful()) {
                         return resp.bodyToMono(byte[].class)
                                 .switchIfEmpty(Mono.error(badResponse("AI 응답 본문이 비어 있음")))
-                                .map(bytes -> new Response(status, readSearchJson(bytes)))
+                                .map(bytes -> new Response(status, readSelfBudgetedJson(bytes)))
                                 .onErrorMap(e -> withStatus(status, e));
                     }
                     return resp.bodyToMono(byte[].class)
-                            .map(this::readSearchErrorJson)
+                            .map(this::readSelfBudgetedErrorJson)
                             .defaultIfEmpty(om.createObjectNode())
-                            .map(this::searchErrorBody)
+                            .map(err -> selfBudgetedErrorBody(call, err))
                             .<Response>flatMap(err -> Mono.error(toClassified(status, err)))
                             .onErrorMap(e -> withStatus(status, e));
                 }).timeout(remaining).block();
     }
 
-    private JsonNode readSearchJson(byte[] bytes) {
+    private JsonNode readSelfBudgetedJson(byte[] bytes) {
         try {
             JsonNode node = om.readTree(bytes);
             if (node == null || node.isMissingNode()) throw badResponse("AI 응답 본문이 비어 있음");
@@ -592,7 +611,7 @@ public class WebClientAiClient implements AiClient {
     }
 
     /** 오류 본문 — JSON 이 아니면 빈 객체(코드 없음 → AI_BAD_RESPONSE, {@link #exchange} 의 디코딩 실패와 같은 결과). */
-    private JsonNode readSearchErrorJson(byte[] bytes) {
+    private JsonNode readSelfBudgetedErrorJson(byte[] bytes) {
         try {
             JsonNode node = om.readTree(bytes);
             return node != null && node.isObject() ? node : om.createObjectNode();
@@ -604,7 +623,7 @@ public class WebClientAiClient implements AiClient {
     /**
      * 검색이 낼 수 있는 AI 오류 코드(AI `errors.py` — 검색 입구 4종 + 공통 인증·내부 오류 + 재시도 대상 공통 `MODEL_UNAVAILABLE`)와
      * 코드별 고정 문구. 여기 없는 코드는 AI_BAD_RESPONSE 로 바꾼다 — AI 가 준 `code`·`message` 문자열이 로그·`error_code`·
-     * 화면 오류 응답으로 가지 않게(추가 검토 2).
+     * 화면 오류 응답으로 가지 않게(309 추가 검토 2).
      */
     private static final Map<String, String> SEARCH_ERROR_MESSAGES = Map.of(
             "INVALID_REQUEST", "AI 참고 사례 검색 요청이 거부됨",
@@ -614,21 +633,22 @@ public class WebClientAiClient implements AiClient {
             "MODEL_UNAVAILABLE", "AI 모델 일시 사용 불가. 잠시 후 다시 시도",
             "DB_UNAVAILABLE", "AI 서버 DB 일시 실패. 잠시 후 다시 시도",
             "INTERNAL", "AI 서버 오류");
-    private static final String SEARCH_UNKNOWN_ERROR_MESSAGE = "AI 응답 처리 실패";
+    private static final String SELF_BUDGETED_UNKNOWN_ERROR_MESSAGE = "AI 응답 처리 실패";
 
     /** 오류 본문 → `code`·`message` 두 칸만 다시 만든다. 아는 코드면 그대로 + 고정 문구, 모르면 AI_BAD_RESPONSE. */
-    private JsonNode searchErrorBody(JsonNode err) {
+    private JsonNode selfBudgetedErrorBody(SelfBudgetedCall call, JsonNode err) {
         JsonNode code = err.get("code");
-        String known = code != null && code.isTextual() && SEARCH_ERROR_MESSAGES.containsKey(code.textValue())
+        Map<String, String> messages = call.errorMessages();
+        String known = code != null && code.isTextual() && messages.containsKey(code.textValue())
                 ? code.textValue() : null;
         return om.createObjectNode()
                 .put("code", known != null ? known : "AI_BAD_RESPONSE")
-                .put("message", known != null ? SEARCH_ERROR_MESSAGES.get(known) : SEARCH_UNKNOWN_ERROR_MESSAGE);
+                .put("message", known != null ? messages.get(known) : SELF_BUDGETED_UNKNOWN_ERROR_MESSAGE);
     }
 
     /**
      * 보낼 `X-Budget-Ms` — 마감까지 남은 정수 ms. 1 미만이면 보내지 않는다(AI 는 0 을 400 으로 거부) — 응답 대기 타임아웃과
-     * 같은 예외라 {@link #classify} 가 재시도 없는 AI_TIMEOUT 으로 분류한다(추가 검토 2).
+     * 같은 예외라 {@link #classify} 가 재시도 없는 AI_TIMEOUT 으로 분류한다(309 추가 검토 2). 자기 예산 호출 모두 이 값.
      */
     static long searchBudgetMs(long deadlineNanos, long nowNanos) {
         long ms = (deadlineNanos - nowNanos) / 1_000_000;
@@ -637,20 +657,19 @@ public class WebClientAiClient implements AiClient {
     }
 
     /**
-     * 검색 시도 한 행 — 다섯 호출과 같이 호출 스레드에서 {@link #recordAttempt} 로 바로 저장. 기록 본문은 `retrieval_version`
-     * 하나만 넘겨 `generation_id` 는 늘 null(응답에 계약 밖 칸이 와도), 걸린 시간은 HTTP 시도 시간.
+     * 자기 예산 호출 시도 한 행 — 다섯 호출과 같이 호출 스레드에서 {@link #recordAttempt} 로 바로 저장. 기록 본문은
+     * `retrieval_version` 하나만 넘겨 `generation_id` 는 늘 null(응답에 계약 밖 칸이 와도), 걸린 시간은 HTTP 시도 시간.
      */
-    private void recordSearchAttempt(String requestId, int attempt, Integer status, String errorCode, long start,
-                                     JsonNode body, String draftId) {
+    private void recordSelfBudgetedAttempt(SelfBudgetedCall call, String requestId, int attempt, Integer status,
+                                           String errorCode, long start, JsonNode body, String draftId) {
         JsonNode logBody = null;
         if (body != null) {
             ObjectNode only = om.createObjectNode();
             if (body.has("retrieval_version")) only.set("retrieval_version", body.get("retrieval_version"));
             logBody = only;
         }
-        recordAttempt(SEARCH_PATH, requestId, attempt, status, errorCode, start, logBody, "DRAFT", draftId);
+        recordAttempt(call.path(), requestId, attempt, status, errorCode, start, logBody, "DRAFT", draftId);
     }
-
     /** AI `ReferenceResult.score`(cosine) 범위. */
     private static final double REFERENCE_SCORE_MIN = -1.0;
     private static final double REFERENCE_SCORE_MAX = 1.0;
