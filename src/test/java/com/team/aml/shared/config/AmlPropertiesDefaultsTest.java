@@ -173,6 +173,52 @@ class AmlPropertiesDefaultsTest {
                 .isInstanceOf(BindException.class);
     }
 
+    // --- SCRUM-357 승인 STR 색인 설정 ------------------------------------------------
+
+    @Test
+    void 정상_승인_STR_색인은_기본_꺼짐_30초이고_환경_변수로_켜진다() {
+        for (String profile : List.of("local", "test", "prod")) {
+            AmlProperties.Ai ai = ai(profile, Map.of());
+            assertThat(ai.strIndexEnabled()).as(profile).isFalse();
+            assertThat(ai.strIndexTimeoutSeconds()).as(profile).isEqualTo(30);
+            assertThat(ai.referenceSearchTimeoutSeconds()).as(profile).isEqualTo(8);   // 다른 예산 그대로
+            assertThat(ai.askTimeoutSeconds()).as(profile).isEqualTo(30);
+            assertThat(ai.timeoutSeconds()).as(profile).isEqualTo(90);
+        }
+        assertThat(ai("local", Map.of("AML_AI_STR_INDEX_ENABLED", "true")).strIndexEnabled()).isTrue();
+    }
+
+    @Test
+    void 경계_yml에_칸이_빠져도_30초_false이고_예전_8칸_10칸_생성자도_같은_기본값이다() {
+        MockEnvironment env = new MockEnvironment().withProperty("aml.ai.base-url", "http://x");
+        AmlProperties.Ai bound = Binder.get(env).bind("aml", AmlProperties.class).get().ai();
+        assertThat(bound.strIndexTimeoutSeconds()).isEqualTo(30);
+        assertThat(bound.strIndexEnabled()).isFalse();
+
+        AmlProperties.Ai eight = new AmlProperties.Ai("http://ai", "key", 90, 500, false, 30, false, 5);
+        assertThat(eight.strIndexTimeoutSeconds()).isEqualTo(30);
+        assertThat(eight.strIndexEnabled()).isFalse();
+        AmlProperties.Ai ten = new AmlProperties.Ai("http://ai", "key", 90, 500, false, 30, false, 5, 7, true);
+        assertThat(ten.referenceSearchTimeoutSeconds()).isEqualTo(7);
+        assertThat(ten.referenceSearchEnabled()).isTrue();
+        assertThat(ten.strIndexTimeoutSeconds()).isEqualTo(30);
+        assertThat(ten.strIndexEnabled()).isFalse();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "str-index-timeout-seconds=\"{0}\"")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"", "0", "-1"})
+    void 실패_str_index_timeout_seconds가_빈_값_0_음수면_묶기에_실패한다(String value) {
+        MockEnvironment env = new MockEnvironment().withProperty("aml.ai.str-index-timeout-seconds", value);
+        assertThatThrownBy(() -> Binder.get(env).bind("aml", AmlProperties.class))
+                .isInstanceOf(BindException.class);
+    }
+
+    @Test
+    void 실패_AML_AI_STR_INDEX_ENABLED가_참거짓으로_못_읽는_값이면_묶기에_실패한다() {
+        assertThatThrownBy(() -> ai("local", Map.of("AML_AI_STR_INDEX_ENABLED", "maybe")))
+                .isInstanceOf(BindException.class);
+    }
+
     private static AmlProperties.Ai ai(String profile, Map<String, Object> osEnv) {
         SpringApplicationBuilder app = new SpringApplicationBuilder(Empty.class)
                 .web(WebApplicationType.NONE)

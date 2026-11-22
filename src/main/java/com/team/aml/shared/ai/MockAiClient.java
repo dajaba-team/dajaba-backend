@@ -332,6 +332,46 @@ public class MockAiClient implements AiClient {
         return new ReferenceSearchResponse(producedAt, status, results, MOCK_RETRIEVAL_VERSION, meta, raw);
     }
 
+    /** 이 유형이 하나라도 있으면 SKIPPED·RAW_ACCOUNT — 검색 목업과 같은 고르는 법(채영 님이 두 상태를 목업으로 보게). */
+    private static final String MOCK_RAW_ACCOUNT_TYPOLOGY = "SCATTER_GATHER";
+    /** AI `STR_INDEX_MIN_CHARS` — 섹션 글에서 공백을 뺀 글자 수(코드 포인트) 합이 이보다 작으면 TOO_SHORT. */
+    private static final int MOCK_STR_INDEX_MIN_CHARS = 100;
+
+    /**
+     * 승인 STR 색인 목업 (SCRUM-357). AI 와 같은 순서로 고른다: ① 유형에 `SCATTER_GATHER` → SKIPPED·RAW_ACCOUNT
+     * ② 공백 뺀 글 합 100 미만 → SKIPPED·TOO_SHORT ③ 그 밖 INDEXED, 청크 수 = 공백만이 아닌 섹션 수(AI 처럼 빈 섹션은 뺌).
+     * DISABLED·NO_FACTS 는 없다 — 꺼짐은 부르는 쪽 설정이 먼저 막고, NO_FACTS 는 진짜 AI 에서만. 실제 응답 확인
+     * (`requireStrIndexResponse`)을 통과하는 모양.
+     */
+    @Override
+    public StrIndexResponse indexApprovedStr(StrIndexRequest request) {
+        List<String> typologies = request.typologies() == null ? List.of() : request.typologies();
+        List<StrIndexSection> sections = request.sections() == null ? List.of() : request.sections();
+        StrIndexSkipReason reason = null;
+        if (typologies.contains(MOCK_RAW_ACCOUNT_TYPOLOGY)) {
+            reason = StrIndexSkipReason.RAW_ACCOUNT;
+        } else if (sections.stream().mapToLong(s -> nonSpaceChars(s.text())).sum() < MOCK_STR_INDEX_MIN_CHARS) {
+            reason = StrIndexSkipReason.TOO_SHORT;
+        }
+        StrIndexStatus status = reason == null ? StrIndexStatus.INDEXED : StrIndexStatus.SKIPPED;
+        int chunks = reason != null ? 0 : (int) sections.stream().filter(s -> nonSpaceChars(s.text()) > 0).count();
+        String producedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+
+        ObjectNode raw = om.createObjectNode()
+                .put("produced_at", producedAt)
+                .put("report_no", request.reportNo())
+                .put("status", status.name())
+                .put("skip_reason", reason == null ? null : reason.name())
+                .put("chunk_count", chunks)
+                .put("retrieval_version", MOCK_RETRIEVAL_VERSION);
+        return new StrIndexResponse(producedAt, request.reportNo(), status, reason, chunks, MOCK_RETRIEVAL_VERSION, raw);
+    }
+
+    private static long nonSpaceChars(String text) {
+        return text == null ? 0 : text.codePoints()
+                .filter(cp -> !Character.isWhitespace(cp) && !Character.isSpaceChar(cp)).count();
+    }
+
     @Override
     public HealthResponse health() {
         return new HealthResponse("ok", "ok", "ok", "mock", "mock-0.0.1", "mock-f0", "mock-r0");

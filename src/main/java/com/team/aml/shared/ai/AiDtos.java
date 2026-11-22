@@ -209,6 +209,36 @@ public final class AiDtos {
                                           String retrievalVersion, ReferenceSearchMeta searchMeta, JsonNode raw) {}
 
     /**
+     * POST /v1/references/str 요청 — 승인 STR 색인 (AI SCRUM-310, SCRUM-357). `draftId` 는 승인된 초안 번호(`DRF-…`) —
+     * AI 가 그 초안 facts 로 케이스 계좌를 대조하고, `ai_call_logs.target_id` 에도 이 값이 간다. `approvedAt` 은 UTC `Z`.
+     * 유형·섹션 이름은 문자열(검색과 같음). 모양 검사(번호 형식·유형 0~3·섹션 한 세트·글 1~1200)는 AI 가 한다(틀리면 400).
+     */
+    public record StrIndexRequest(String reportNo, String draftId, String approvedAt, List<String> typologies,
+                                  List<StrIndexSection> sections) {}
+
+    /** 색인할 섹션 한 개 — 7항목 또는 옛 6섹션 이름 + 글(자르지 않고 그대로). */
+    public record StrIndexSection(String section, String text) {}
+
+    /** 승인 STR 색인 상태. 둘 다 AI 200. 모르는 값은 `requireStrIndexResponse` 가 먼저 거부한다. */
+    public enum StrIndexStatus { INDEXED, SKIPPED }
+
+    /**
+     * 건너뛴 이유 (AI `StrIndexSkipReason`). 계좌 원문 · 공백 뺀 글 합 100자 미만 · AI 스위치 꺼짐 · 그 초안 facts 가 AI 에
+     * 없음(목업 모드로 만든 초안 등). 모르는 값은 `requireStrIndexResponse` 가 먼저 거부한다.
+     */
+    public enum StrIndexSkipReason { RAW_ACCOUNT, TOO_SHORT, DISABLED, NO_FACTS }
+
+    /**
+     * POST /v1/references/str 응답. 칸 전부 + 원문 `raw`. `skipReason` 은 INDEXED 면 null, `retrievalVersion` 은 SKIPPED
+     * (특히 DISABLED)면 null 일 수 있다. 규칙은 `WebClientAiClient.requireStrIndexResponse` 가 record 로 바꾸기 전에 확인.
+     * 저장하지 않는 응답이다.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record StrIndexResponse(String producedAt, String reportNo, StrIndexStatus status,
+                                   StrIndexSkipReason skipReason, int chunkCount, String retrievalVersion,
+                                   JsonNode raw) {}
+
+    /**
      * GET /v1/health (AI `main.py` `health()`, SCRUM-22 — 미결 28). 전부 String, 없으면 null.
      * `db` = "ok" | "down:<예외>", `llm` = "ok" | "missing_key". `generator_version` 은 AI 가 주지 않는다.
      */

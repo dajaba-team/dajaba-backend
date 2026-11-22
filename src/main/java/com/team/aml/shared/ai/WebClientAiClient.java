@@ -1,5 +1,6 @@
 package com.team.aml.shared.ai;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -48,6 +49,7 @@ import java.util.regex.Pattern;
  *  - 화면 요청 전체 90초(재시도 포함) = aml.ai.timeout-seconds. 점수는 500건 묶음마다 같은 한도.
  *    질문 답변(/v1/cases/ask)만 전체 30초 = aml.ai.ask-timeout-seconds (규약 6.2, SCRUM-291). 한도는 호출마다 따로 잰다.
  *    참고 사례 검색(/v1/references/search)만 전체 8초 = aml.ai.reference-search-timeout-seconds (규약 6.2, SCRUM-309).
+ *    승인 STR 색인(/v1/references/str)만 전체 30초 = aml.ai.str-index-timeout-seconds (SCRUM-357).
  *  - 재시도 1회, 남은 시간 안에서만. 판별은 HTTP 5xx 가 아니라 코드/원인으로:
  *      재시도 O: LLM_UNAVAILABLE·MODEL_UNAVAILABLE·DB_UNAVAILABLE, 또는 연결 단계 실패(CONNECT_STAGE_FAILURES — 연결 거부·이름 조회 실패·경로 없음)
  *      재시도 X: 그 밖의 5xx·4xx·409, 연결 타임아웃(ConnectTimeoutException)·응답 타임아웃, 보낸 뒤 끊김(CLOSED_AFTER_SEND)
@@ -103,7 +105,9 @@ public class WebClientAiClient implements AiClient {
     private final Duration budget;
     private final Duration askBudget;
     private final SelfBudgetedCall searchCall;
+    private final SelfBudgetedCall indexCall;
     private static final String SEARCH_PATH = "/v1/references/search";
+    private static final String STR_INDEX_PATH = "/v1/references/str";
 
     public WebClientAiClient(WebClient aiWebClient, AmlProperties props, ObjectMapper om, AiCallLogWriter writer) {
         this.http = aiWebClient;
@@ -115,6 +119,8 @@ public class WebClientAiClient implements AiClient {
         this.askBudget = Duration.ofSeconds(props.ai().askTimeoutSeconds());
         this.searchCall = new SelfBudgetedCall(SEARCH_PATH,
                 Duration.ofSeconds(props.ai().referenceSearchTimeoutSeconds()), SEARCH_ERROR_MESSAGES, "참고 사례 검색");
+        this.indexCall = new SelfBudgetedCall(STR_INDEX_PATH,
+                Duration.ofSeconds(props.ai().strIndexTimeoutSeconds()), STR_INDEX_ERROR_MESSAGES, "승인 STR 색인");
     }
 
     @Override
@@ -502,7 +508,7 @@ public class WebClientAiClient implements AiClient {
 
     /**
      * 자기 호출·재시도 루프를 쓰는 호출 하나의 설정 — 경로 · 전체 예산 · 그 입구가 낼 수 있는 AI 오류 코드와 코드별 고정 문구 ·
-     * 오류 문구에 쓰는 이름(예: "참고 사례 검색"). 지금은 참고 사례 검색 하나(SCRUM-309).
+     * 오류 문구에 쓰는 이름(예: "참고 사례 검색"). 참고 사례 검색(SCRUM-309)·승인 STR 색인(SCRUM-357) 둘.
      */
     private record SelfBudgetedCall(String path, Duration budget, Map<String, String> errorMessages, String label) {}
 
@@ -600,9 +606,15 @@ public class WebClientAiClient implements AiClient {
                 }).timeout(remaining).block();
     }
 
+    /**
+     * 2xx 본문 — JSON 값 **하나**여야 하고 같은 칸이 두 번 오면 안 된다. 뒤에 다른 값이 붙거나(추가 검토 1) 같은 키가
+     * 겹치면(Jackson 기본은 뒤 값으로 덮어씀, 추가 검토 2) AI_BAD_RESPONSE. 다른 다섯 호출은 이번에 그대로.
+     */
     private JsonNode readSelfBudgetedJson(byte[] bytes) {
         try {
-            JsonNode node = om.readTree(bytes);
+            JsonNode node = om.reader()
+                    .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS, DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY)
+                    .readTree(bytes);
             if (node == null || node.isMissingNode()) throw badResponse("AI 응답 본문이 비어 있음");
             return node;
         } catch (java.io.IOException e) {
@@ -772,6 +784,83 @@ public class WebClientAiClient implements AiClient {
         return new AiClientException("AI_BAD_RESPONSE", "AI 참고 사례 검색 응답 확인 실패: " + field, Map.of(), 502);
     }
 
+    /**
+     * 승인 STR 색인 — 이 호출만 indexCall 예산(30초). 초안 번호는 요청 `draft_id` 그대로 기록(`DRAFT`)에 쓴다. SCRUM-357.
+     * 호출·재시도 루프는 검색과 같은 {@link #selfBudgetedPost} — 응답 확인만 {@link #requireStrIndexResponse}.
+     * 승인 뒤 뒤 스레드에서 불리지만 예산·재시도·기록·로그 규칙은 검색과 같다(섹션 글은 로그·기록에 안 남음).
+     */
+    @Override
+    public StrIndexResponse indexApprovedStr(StrIndexRequest request) {
+        return selfBudgetedPost(indexCall, request, request.draftId(), r -> requireStrIndexResponse(request, r),
+                "status", StrIndexResponse.class);
+    }
+
+    /**
+     * 색인이 낼 수 있는 AI 오류 코드와 고정 문구 — 검색과 같은 7개(★A 11/22). 계약 표는 400·502 `LLM_UNAVAILABLE`·503
+     * `DB_UNAVAILABLE` 이지만 임베딩이 공통 클라이언트라 일 한도(`LLM_BUDGET_EXCEEDED`)·`MODEL_UNAVAILABLE` 도 날 수 있다.
+     */
+    private static final Map<String, String> STR_INDEX_ERROR_MESSAGES = Map.of(
+            "INVALID_REQUEST", "AI 승인 STR 색인 요청이 거부됨",
+            "UNAUTHENTICATED", "AI 서버 인증 실패",
+            "LLM_UNAVAILABLE", "AI 승인 STR 색인 일시 실패. 잠시 후 다시 시도",
+            "LLM_BUDGET_EXCEEDED", "AI 사용 한도 초과",
+            "MODEL_UNAVAILABLE", "AI 모델 일시 사용 불가. 잠시 후 다시 시도",
+            "DB_UNAVAILABLE", "AI 서버 DB 일시 실패. 잠시 후 다시 시도",
+            "INTERNAL", "AI 서버 오류");
+
+    private static final List<String> STR_INDEX_FIELDS =
+            List.of("produced_at", "report_no", "status", "skip_reason", "chunk_count", "retrieval_version");
+
+    /**
+     * 승인 STR 색인 응답 확인 (AI `str_index.py` 규칙 + 보낸 값 대조, SCRUM-357). 틀리면 AI_BAD_RESPONSE 502, 메시지엔 칸 이름만.
+     * 여섯 칸은 키가 있어야 한다(값 null 은 아래대로). INDEXED ↔ 이유 null·청크 1 이상·버전 앞뒤 공백 뺀 1자 이상 /
+     * SKIPPED ↔ 이유 4종 중 하나·청크 0·버전 문자열 또는 null(DISABLED 면 AI 가 null).
+     * AI 스키마보다 더 보는 곳: `report_no` = 보낸 값, 청크 수 ≤ 보낸 섹션 수(AI 는 섹션 하나 = 청크 하나, 공백만인 섹션은 뺌).
+     * 안 보는 곳: SKIPPED 의 버전 null 을 DISABLED 에만 묶기(AI 도 안 묶음), 모르는 칸(원칙 4 — 받아 둠).
+     */
+    static void requireStrIndexResponse(StrIndexRequest sent, JsonNode r) {
+        if (r == null || !r.isObject()) throw badStrIndex("body");
+        for (String field : STR_INDEX_FIELDS) {
+            if (!r.has(field)) throw badStrIndex(field);
+        }
+        if (!isUtcZ(r.get("produced_at"))) throw badStrIndex("produced_at");
+        JsonNode reportNo = r.get("report_no");
+        if (!reportNo.isTextual() || !reportNo.textValue().equals(sent.reportNo())) throw badStrIndex("report_no");
+        StrIndexStatus status = strIndexEnum(StrIndexStatus.class, r.get("status"), "status");
+        JsonNode chunks = r.get("chunk_count");
+        if (!chunks.isIntegralNumber() || !chunks.canConvertToInt()) throw badStrIndex("chunk_count");
+        int chunkCount = chunks.intValue();
+        JsonNode version = r.get("retrieval_version");
+        if (!version.isNull() && !version.isTextual()) throw badStrIndex("retrieval_version");
+        JsonNode reason = r.get("skip_reason");
+        int sentSections = sent.sections() == null ? 0 : sent.sections().size();
+        if (status == StrIndexStatus.INDEXED) {
+            if (!reason.isNull()) throw badStrIndex("skip_reason");
+            if (chunkCount < 1 || chunkCount > sentSections) throw badStrIndex("chunk_count");
+            // AI 는 앞뒤 공백을 지운 뒤 비었는지 본다(str_strip_whitespace) — 공백뿐이면 실패(추가 검토 1)
+            if (!version.isTextual() || stripLikePython(version.textValue()).isEmpty()) {
+                throw badStrIndex("retrieval_version");
+            }
+        } else {
+            if (reason.isNull()) throw badStrIndex("skip_reason");
+            strIndexEnum(StrIndexSkipReason.class, reason, "skip_reason");
+            if (chunkCount != 0) throw badStrIndex("chunk_count");
+        }
+    }
+
+    private static <E extends Enum<E>> E strIndexEnum(Class<E> type, JsonNode v, String field) {
+        if (v.isTextual()) {
+            for (E e : type.getEnumConstants()) {
+                if (e.name().equals(v.textValue())) return e;
+            }
+        }
+        throw badStrIndex(field);
+    }
+
+    private static AiClientException badStrIndex(String field) {
+        return new AiClientException("AI_BAD_RESPONSE", "AI 승인 STR 색인 응답 확인 실패: " + field, Map.of(), 502);
+    }
+
     @Override
     public HealthResponse health() {
         return get("/v1/health", r -> new HealthResponse(text(r, "status"), text(r, "db"), text(r, "llm"),
@@ -930,7 +1019,7 @@ public class WebClientAiClient implements AiClient {
                 case "/v1/str/verify" -> text(body, "verifier_version");
                 case "/v1/cases/summary" -> text(body.path("generation_meta"), "prompt_version");
                 case "/v1/cases/ask" -> askVersion(body.path("generation_meta"));
-                case "/v1/references/search" -> versionOrNull(body.get("retrieval_version"));
+                case "/v1/references/search", "/v1/references/str" -> retrievalVersionOrNull(body.get("retrieval_version"));
                 default -> null;
             };
             writer.write(AiCallLog.create(path, requestId, attempt, status, errorCode, durationMs,
@@ -952,6 +1041,23 @@ public class WebClientAiClient implements AiClient {
 
     private static String versionOrNull(JsonNode v) {
         return v != null && v.isTextual() && v.textValue().length() <= AI_VERSION_MAX ? v.textValue() : null;
+    }
+
+    /** manifest 해시 — `retrieval_version` 마지막 `@` 뒤 소문자 16진 8자(AI `base_retrieval_version`). */
+    private static final Pattern MANIFEST_HASH = Pattern.compile("[0-9a-f]{8}");
+
+    /**
+     * 자기 예산 호출(검색·색인) 기록 버전 — `retrieval_version` 마지막 `@` 뒤가 정확히 소문자 16진 8자면 **`@` + 그 8자만**
+     * (예 `@36b5a2d5`), 아니면 null. 모델 이름(앞부분)은 기록에 안 남긴다 — 모양으로는 "모델 이름"과 AI 가 잘못 담은 섹션 글을
+     * 가를 수 없어서(추가 검토 2). 응답 확인 전 원문에서 읽으므로 2xx 확인 실패 행도 같은 규칙. 응답 DTO 의 값은 받은 그대로.
+     */
+    static String retrievalVersionOrNull(JsonNode v) {
+        if (v == null || !v.isTextual()) return null;
+        String text = v.textValue();
+        int at = text.lastIndexOf('@');
+        if (at < 0) return null;
+        String hash = text.substring(at + 1);
+        return MANIFEST_HASH.matcher(hash).matches() ? "@" + hash : null;
     }
 
     private record Response(int status, JsonNode body) {}
