@@ -142,12 +142,14 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | `verify(draftId, request)` | `POST /v1/str/verify` — `draftId` 는 인자로 따로(요청 본문엔 안 넣음 — AI StrictModel, SCRUM-151) | str `VerifyStrDraft` |
 | `caseSummary(request)` | `POST /v1/cases/summary` | cases `RefreshCaseSummary` |
 | `ask(request)` | `POST /v1/cases/ask` — 조사역 질문 답변(규약 5.4). 아래 "질문 답변" [SCRUM-291] | cases 질문 답변 유스케이스(지윤 님 이슈) |
+| `searchReferences(draftId, request)` | `POST /v1/references/search` — 참고 사례 검색(규약 5.5). `draftId` 는 `ai_call_logs` 에만 쓰고 요청 본문엔 안 넣음. 아래 "참고 사례 검색" [SCRUM-309] | str 참고 사례 검색 유스케이스(채영 님 이슈) |
 | `health()` | `GET /v1/health` — 기동 시 1회, 실패해도 기동은 함. 응답 `status·db·llm·server_version·model_version·feature_version·retrieval_version` 을 info 한 줄로 찍고, `status`·`db`·`llm` 중 하나라도 `ok` 가 아니면(null 포함) warn 한 줄 더 (SCRUM-22) | `AiHealthCheck` |
 
 **공통 동작**
 - 헤더 `X-Internal-Key`(32자 이상 난수, 환경변수), `X-Request-Id`(HTTP 요청 안이면 그 요청의 MDC `request_id`, 배치처럼 MDC가 없으면 호출마다 새 UUID — 재시도해도 같은 값, `ai_call_logs.request_id`와 같은 값 [SCRUM-272]), `X-Budget-Ms`(그 시도를 보낼 때 남은 시간 한도, ms 정수 — 재시도면 줄어든 값. health 포함 모든 시도. AI가 읽어 재생성 판단에 쓰는 건 AI 쪽 작업) [SCRUM-128].
 - **시간 한도** — 초안·검증·요약처럼 **화면에서 부르는 요청은 전체 90초**(재시도 포함, 호출마다 90초가 아님). 점수 배치는 **500건 묶음 호출 하나마다** 같은 규칙이에요(배치 전체가 90초가 아님). MVP는 **동기**(`@Async`·큐·폴링은 고도화). [10/29]
   - **질문 답변(`ask`)만 전체 30초**(재시도 포함, 규약 6.2) — `aml.ai.ask-timeout-seconds`(기본 30, 빈 값·0·음수면 기동 실패). 나머지는 `aml.ai.timeout-seconds`(90) 그대로예요. 한도는 호출마다 따로 재고, `X-Budget-Ms`도 그 한도에서 남은 값이라 질문 답변 첫 시도는 약 30000이에요. 재시도 규칙(아래)은 같아요. [SCRUM-291]
+  - **참고 사례 검색(`searchReferences`)만 전체 8초**(재시도 포함, 규약 6.2) — `aml.ai.reference-search-timeout-seconds`(기본 8, 빈 값·0·음수면 기동 실패). 첫 시도 `X-Budget-Ms` 는 약 8000이에요. 재시도 규칙은 같아요. [SCRUM-309]
 - 4xx는 재시도 없이 `AiClientException` → 502. 단 409 `GENERATION_IN_PROGRESS`는 409 `DRAFT_IN_PROGRESS`로. [10/29]
 - **재시도** — 최대 **1회**, 그리고 **위 시간 한도 안에 남은 시간이 있을 때만**. [10/29]
   - 다시 보내는 것(판별은 HTTP 5xx가 아니라 코드/원인): AI가 **바로 돌려준** `LLM_UNAVAILABLE`·`MODEL_UNAVAILABLE`·**503 `DB_UNAVAILABLE`**, 또는 요청이 AI에 **닿기 전에 연결 단계에서 실패한** 경우만 — 연결 거부(`ConnectException`), 이름 조회 실패(`UnknownHostException`, compose에서 ai 컨테이너가 멈췄을 때), 경로 없음(`NoRouteToHostException`). 요청이 안 갔으니 다시 보내도 중복이 없어요. [SCRUM-229]
@@ -159,7 +161,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 - **AI 주소·연결 기억** — 백엔드는 AI 서버 이름 조회 결과를 **최대 5초**만 기억하고(조회 실패는 기억 안 함), AI 전용 연결 풀에서 **4초 넘게 놀던 연결은 다시 쓰지 않아요**(AI uvicorn 기본 keep-alive 5초보다 짧게). 그래서 AI 컨테이너를 다시 만들어도 백엔드는 재시작 없이 몇 초 안에 새 주소로 붙어요. 풀의 다른 값(최대 연결 500·연결 대기 45초 등)은 라이브러리 공용 기본값 그대로. 설정은 `AiClientConfig`. [SCRUM-255]
 - 모든 호출은 `ai_call_logs`에 **시도마다 한 줄**(재시도하면 같은 `request_id`로 `attempt` 1·2. 한 HTTP 요청이 AI를 두 번 부르면 두 호출도 같은 `request_id` — `endpoint`·`attempt`로 구분 [SCRUM-272]) — **메타데이터만**: 엔드포인트, `request_id`, 상태 코드(AI가 준 HTTP 상태, 타임아웃·연결 실패는 null — 단 2xx 본문을 받는 중 끊긴 경우는 실제 2xx, 아래 "2xx인데 응답 확인" 줄의 예외 [SCRUM-229]), 에러 코드, 소요 ms, 재시도 회차, 버전, `generation_id`, 대상(`target_type`·`target_id`). **요청·응답 본문은 실패해도 저장하지 않아요.** 실패 요청에 조사 메모·보고서 본문이 들어갈 수 있어서예요. 전문은 **AI가 그 요청을 저장했을 때만** AI 쪽 `ai.generations`에서 `request_id`로 찾을 수 있어요(연결 실패·인증 거부처럼 AI가 기록 전에 끝난 요청은 전문이 없어요). [규약 v0.2 §6.4, 10/29] 〔레퍼런스 §3.4의 "실패한 호출만 본문 저장"은 그 전 안〕
 - `ai_call_logs`의 대상·버전은 엔드포인트별로 고정이에요. 버전·`generation_id`는 **2xx 응답 본문이 있을 때만** 채워요(4xx·5xx·타임아웃·연결 실패는 null). [SCRUM-18]
-- **2xx인데 `AiClient`의 응답 확인(필수 칸·칸 타입·점수 묶음 `batch_run_id`·`alert_id` 대조)이 실패하면** 그 시도는 실패 행이에요 — `status_code`=실제 2xx, `error_code`=`AI_BAD_RESPONSE`, 버전·`generation_id`는 본문에서 읽은 값. 재시도 안 함(형식 오류는 재시도 대상 아님). 대상: 점수·초안·검증·요약·질문 답변(health 제외). [SCRUM-128, SCRUM-291]
+- **2xx인데 `AiClient`의 응답 확인(필수 칸·칸 타입·점수 묶음 `batch_run_id`·`alert_id` 대조)이 실패하면** 그 시도는 실패 행이에요 — `status_code`=실제 2xx, `error_code`=`AI_BAD_RESPONSE`, 버전·`generation_id`는 본문에서 읽은 값. 재시도 안 함(형식 오류는 재시도 대상 아님). 대상: 점수·초안·검증·요약·질문 답변·참고 사례 검색(health 제외). [SCRUM-128, SCRUM-291, SCRUM-309]
   - 예외: 2xx 본문을 **받는 중 연결이 끊기면** 형식 오류가 아니라 연결 실패예요 — `error_code`=`AI_UNAVAILABLE`, `status_code`=실제 2xx, 버전·`generation_id`는 null(본문을 못 받음), 재시도 안 함 — 위 `ai_call_logs` 상태 코드 칸의 예외와 같은 경우. [SCRUM-229]
 - `AiClient`가 돌려준 **뒤** 유스케이스가 하는 업무 검사 실패(str `AiDraftResponseReader`·`SaveStrDraft`, cases `RefreshCaseSummary`의 `SUMMARY_CODE_CHECK_FAILED`)는 기록이 **성공 행 그대로**예요 — 화면엔 실패지만 AI 호출 자체는 정상이었어요. [SCRUM-128]
 
@@ -170,6 +172,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   | `/v1/str/verify` | `DRAFT` / `draftId` | `verifier_version` |
   | `/v1/cases/summary` | `CASE` / `caseNo` (요청 본문에 내부 id 가 없어 케이스 번호) | `generation_meta.prompt_version` |
   | `/v1/cases/ask` | `CASE` / `caseNo` | `generation_meta.prompt_version`, null 이면(`OUT_OF_SCOPE` — 답 호출을 안 함) `plan_prompt_version` [SCRUM-291] |
+  | `/v1/references/search` | `DRAFT` / `draftId` (str 이 `verify` 때 쓰는 값과 같음) | `retrieval_version` [SCRUM-309] |
   | `/v1/health` | null / null | null |
 
   모델 이름·`feature_version` 같은 나머지 버전은 저장하지 않아요. `generation_id`·`request_id`로 AI 쪽 기록에서 찾아요.
@@ -196,6 +199,21 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   - **목업**(`aml.ai.mock=true`)은 질문 낱말로 상태를 골라요 — 위에서부터 처음 맞는 것: `수정` → OUT_OF_SCOPE·EDIT_REQUEST, `다른 케이스` → OUT_OF_SCOPE·OUTSIDE_CASE, `판단` → OUT_OF_SCOPE·JUDGMENT, `없는` → NO_DATA, `불일치` → UNVERIFIED, `왜` → ANSWERED·WHY, 그 밖 → ANSWERED·FACT. 목업 응답도 위 확인을 통과하는 모양이에요
   - **켜기 설정** `aml.ai.ask-enabled`(환경 변수 `AML_AI_ASK_ENABLED`, 기본 false) — `AmlProperties.ai().askEnabled()`. 이 칸을 읽고 꺼져 있을 때 어떻게 할지는 cases 유스케이스가 정해요 — 꺼져 있으면 상세에 `ASK_QUESTION` 없음, A8·C9는 404 `NOT_FOUND`(SCRUM-302)
   - **횟수 한도** `aml.ai.ask-per-minute`(기본 5, 1 이상 — 0 이하면 기동 실패) — `AmlProperties.ai().askPerMinute()`. 세는 쪽은 cases `AskCaseQuestion`(SCRUM-302)
+- **참고 사례 검색 요청·응답** (규약 5.5·6.1·6.2, SCRUM-309) — 조회 전용, 응답은 저장하지 않아요. 요청 `ReferenceSearchRequest(typologies, query, topK, sourceTypes)` — 유형·출처는 문자열 목록(shared 가 detection 유형 enum 을 참조하지 않음 — 잘못된 값은 AI 400 → `AI_INVALID_REQUEST` 502). `query` 는 **유스케이스가 앞뒤 공백을 지우고 빈 값이면 null** 로 넘기고, `AiClient` 는 받은 값 그대로 보내요(trim·길이 재검사 안 함). 응답 `ReferenceSearchResponse(producedAt, status, results, retrievalVersion, searchMeta, raw)` — `status` 만 enum `ReferenceSearchStatus`(FOUND·EMPTY, 둘 다 AI 200), 결과 `ReferenceResult(docId, docTitle, publisher, year, page, score, chunkId, typologies, sourceType)` 의 유형·출처는 문자열(AI 는 청크 태그 전부를 줘서 검색 가능한 5종 밖 유형도 올 수 있음), `searchMeta`(degraded·candidates·latencyMs). **응답 확인**(`requireReferenceSearchResponse`, 하나라도 틀리면 502 `AI_BAD_RESPONSE` + 실패 행·재시도 없음, 메시지에 칸 이름만):
+  - 필수 칸 `produced_at`·`status`·`results`(배열)·`retrieval_version`(문자열 1자 이상)·`search_meta`. 모르는 `status` 는 실패. `produced_at` 은 `Z` 로 끝나는 UTC 시각
+  - `FOUND` 면 결과 1건 이상, `EMPTY` 면 0건. 결과 수는 **보낸 `top_k` 이하**
+  - `score` 숫자 −1~1, 내림차순(같은 값 연속은 됨)
+  - 결과 `typologies` 문자열 1개 이상이고 **보낸 유형과 하나 이상 겹침**, `source_type` 은 **보낸 `source_types` 안**
+  - 결과 칸 `doc_id`·`doc_title`·`chunk_id` 문자열, `page` 정수, `publisher` 문자열 또는 null, `year` 정수 또는 null. `search_meta` 는 `degraded` 참거짓·`candidates`·`latency_ms` 0 이상 정수
+  - AI 스키마와 다르게 두는 곳: 결과 수 ≤ 보낸 `top_k`·유형 겹침·`source_type` 대조는 AI 스키마가 아니라 AI 서비스가 지키는 것을 백엔드가 다시 봐요(엄격). 결과 유형이 AI 유형 이름인지와 모르는 칸은 안 봐요(느슨 — 원칙 4)
+  - `ai_call_logs.ai_version` 은 `retrieval_version` 이 문자열이고 64자 이하일 때만 — 아니면 null
+  - 로그·`ai_call_logs` 에 검색어(`query`)를 넣지 않아요 — 공통 줄(경로·`request_id`·시간·회차·코드)만. 상태·유형·검색어 길이·결과 수는 str 유스케이스가 찍어요
+  - **검색만 자기 호출·재시도 루프**(추가 검토 1·2) — 재시도 횟수·남은 시간·재시도 대상·실패 분류는 위 공통 규칙과 같고, 다른 점은 셋이에요. ① 요청·응답을 바이트로 주고받아 Jackson 코덱의 DEBUG/TRACE 로그에 검색어·문서 제목이 남지 않아요 ② `X-Budget-Ms` 는 **연결을 잡은 뒤** 요청을 쓰기 직전에 남은 ms 로 정해요(풀 대기·연결 수립 시간이 빠진 값). 그때 1ms 미만이면 요청을 보내지 않고 재시도 없는 `AI_TIMEOUT`(AI 는 0 을 400 으로 거부) ③ AI 오류 본문은 검색이 낼 수 있는 코드(`INVALID_REQUEST`·`UNAUTHENTICATED`·`LLM_UNAVAILABLE`·`LLM_BUDGET_EXCEEDED`·`MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`·`INTERNAL`)만 그대로 쓰고 나머지는 `AI_BAD_RESPONSE`, 메시지는 코드별 고정 문구 — AI 가 준 문장은 로그·`error_code`·화면 오류 응답에 안 가요
+  - 시도 기록은 다섯 호출과 같이 **호출 스레드에서** 시도마다 저장해요. **8초는 AI 호출(재시도 포함) 기준, 감사 DB 저장 시간은 빠짐** — 재시도 전 저장에 쓴 시간만큼 두 번째 시도 마감을 뒤로 밀어서, 저장이 늦어도 남은 AI 예산으로 재시도해요(추가 검토 3). 그래서 전체 걸린 시간은 8초 + 저장 시간까지 늘 수 있어요. 다섯 호출은 아직 저장 시간도 예산 안에서 세요(같은 마감으로 재시도 — 발표 뒤 같이 다룸). 걸린 시간(`duration_ms`)은 HTTP 시도 시간이에요
+  - 기록 행의 `generation_id` 는 **늘 null**(응답에 계약 밖 `generation_id` 가 와도 옮기지 않음), 버전은 `retrieval_version` 만 넘겨요
+  - 결과의 `doc_id`·`doc_title`·`chunk_id` 빈 값, `page` 0 이하는 거부하지 않아요 — AI 스키마(`reference_search.py`)도 타입만 봐서 같은 기준(좁힐지는 발표 뒤 AI 스키마부터)
+  - **목업**(`aml.ai.mock=true`) — 보낸 유형에 `SCATTER_GATHER` 가 하나라도 있으면 `EMPTY`, 그 밖은 `FOUND` 고정 3건(`fintrac-underground-banking-2023` 0.52 · `ffiec-redflags` 0.41 · `fatf-pml-2018` 0.33)을 `top_k` 만큼. 결과 `typologies` 는 보낸 유형 그대로, `source_type` 은 늘 `PUBLIC`. `source_types` 가 `["PUBLIC"]` 이 아니면(`APPROVED_STR`·빈 목록·중복) 실제 AI 처럼 `AI_INVALID_REQUEST`. 위 확인을 통과하는 모양이에요
+  - **켜기 설정** `aml.ai.reference-search-enabled`(환경 변수 `AML_AI_REFERENCE_SEARCH_ENABLED`, 기본 false) — `AmlProperties.ai().referenceSearchEnabled()`. 읽는 쪽은 str 유스케이스(채영 님 이슈)
 
 **트랜잭션 패턴 — "DB → HTTP → DB"** 네 군데 [레퍼런스 §8.4]
 1. 점수 요청: `RequestScores` (500개 묶음마다 커밋)

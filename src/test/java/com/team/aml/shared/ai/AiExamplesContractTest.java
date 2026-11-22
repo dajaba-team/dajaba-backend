@@ -259,6 +259,57 @@ class AiExamplesContractTest {
         }
     }
 
+    // --- SCRUM-309 참고 사례 검색 예시 (규약 5.5) --------------------------------------
+
+    @Test
+    void reference_search_request_roundtrip() throws Exception {
+        JsonNode original = readExample("reference_search_request.json");
+        ReferenceSearchRequest dto = om.treeToValue(original, ReferenceSearchRequest.class);
+        assertThat(om.valueToTree(dto).toString()).isEqualTo(original.toString());
+        assertThat(dto.typologies()).containsExactly("CYCLE");
+        assertThat(dto.topK()).isEqualTo(5);
+        assertThat(dto.sourceTypes()).containsExactly("PUBLIC");
+
+        JsonNode nullQuery = om.valueToTree(new ReferenceSearchRequest(List.of("CYCLE"), null, 5, List.of("PUBLIC")));
+        assertThat(nullQuery.has("query")).isTrue();   // 빈 검색어는 null 로 나감(AI 기본값과 같음)
+        assertThat(nullQuery.get("query").isNull()).isTrue();
+    }
+
+    @Test
+    void reference_search_responses_pass_check_and_read_into_dto() throws Exception {
+        ReferenceSearchRequest sent = om.treeToValue(readExample("reference_search_request.json"), ReferenceSearchRequest.class);
+
+        JsonNode found = readExample("reference_search_response_found.json");
+        WebClientAiClient.requireReferenceSearchResponse(sent, found);
+        ReferenceSearchResponse f = om.treeToValue(withRaw(found), ReferenceSearchResponse.class);
+        assertThat(f.producedAt()).isEqualTo("2026-11-24T02:10:00Z");
+        assertThat(f.status()).isEqualTo(ReferenceSearchStatus.FOUND);
+        assertThat(f.retrievalVersion()).isEqualTo("text-embedding-3-small@36b5a2d5");
+        assertThat(f.searchMeta()).isEqualTo(new ReferenceSearchMeta(false, 12, 420));
+        assertThat(f.results()).hasSize(2);
+        ReferenceResult first = f.results().get(0);
+        assertThat(first.docId()).isEqualTo("fintrac-underground-banking-2023");
+        assertThat(first.publisher()).isEqualTo("FINTRAC");
+        assertThat(first.year()).isEqualTo(2023);
+        assertThat(first.page()).isEqualTo(4);
+        assertThat(first.score()).isEqualTo(0.52);
+        assertThat(first.typologies()).containsExactly("CYCLE", "GATHER_SCATTER");
+        assertThat(first.sourceType()).isEqualTo("PUBLIC");
+        assertThat(f.results().get(1).year()).isNull();
+        for (int i = 0; i < 2; i++) {   // 결과 9칸 빠짐·남음 없음
+            assertThat((JsonNode) om.valueToTree(f.results().get(i))).isEqualTo(found.get("results").get(i));
+        }
+        assertThat(f.raw().toString()).isEqualTo(found.toString());
+
+        JsonNode empty = readExample("reference_search_response_empty.json");
+        WebClientAiClient.requireReferenceSearchResponse(sent, empty);
+        ReferenceSearchResponse e = om.treeToValue(withRaw(empty), ReferenceSearchResponse.class);
+        assertThat(e.status()).isEqualTo(ReferenceSearchStatus.EMPTY);
+        assertThat(e.results()).isEmpty();
+        assertThat(e.searchMeta()).isEqualTo(new ReferenceSearchMeta(false, 0, 35));
+        assertThat(e.raw().toString()).isEqualTo(empty.toString());
+    }
+
     /** contracts/MANIFEST.sha256 = AI 리포 기준 커밋의 해시. 사본이 몰래 바뀌거나 MANIFEST 에 빠진 예시가 있으면 깨진다. */
     @Test
     void manifest_hashes_match_copies_and_cover_every_example() throws Exception {

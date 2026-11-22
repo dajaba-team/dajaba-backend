@@ -5,12 +5,12 @@ import com.team.aml.shared.ai.AiDtos.*;
 import java.util.List;
 
 /**
- * AI 서버(FastAPI) 호출 인터페이스 (레퍼런스 8.5). 규약 엔드포인트 여섯 개 = 메서드 여섯 개.
+ * AI 서버(FastAPI) 호출 인터페이스 (레퍼런스 8.5). 규약 엔드포인트 일곱 개 = 메서드 일곱 개.
  * 유스케이스는 이 인터페이스만 본다. 구현은 두 개:
  *  - MockAiClient      aml.ai.mock=true  (local/test). AI 서버 없이 고정 응답.
  *  - WebClientAiClient aml.ai.mock=false (prod, 또는 local 에서 진짜 서버 붙일 때). SCRUM-17.
  *
- * 공통 동작(구현체가 지킨다): X-Internal-Key, X-Request-Id(UUID), 화면 요청 전체 90초(재시도 포함 — 질문 답변만 30초).
+ * 공통 동작(구현체가 지킨다): X-Internal-Key, X-Request-Id(UUID), 화면 요청 전체 90초(재시도 포함 — 질문 답변만 30초, 참고 사례 검색만 8초).
  * 재시도 1회는 HTTP 5xx 여부가 아니라 코드/원인으로 — LLM_UNAVAILABLE·MODEL_UNAVAILABLE·503 DB_UNAVAILABLE,
  * 또는 연결 거부(ConnectException)만. 그 밖의 5xx·4xx·타임아웃·409 는 재시도 없이 AiClientException (규약 6.2).
  * AI 409 GENERATION_IN_PROGRESS → 409 DRAFT_IN_PROGRESS. 호출은 트랜잭션 밖에서 (레퍼런스 8.4).
@@ -37,6 +37,14 @@ public interface AiClient {
      * `question` 은 자르지 않고 그대로 보낸다. 켜기 설정(`askEnabled`)은 부르는 쪽이 본다.
      */
     AskResponse ask(AskRequest request);
+
+    /**
+     * 참고 사례 검색 (규약 5.5, SCRUM-309). **이 호출만 전체 8초**(재시도 포함, `aml.ai.reference-search-timeout-seconds`).
+     * 상태 2종 모두 AI 200 — 결과 수·점수 순서·유형 겹침·출처가 틀리면 502 `AI_BAD_RESPONSE`.
+     * `draftId` 는 `ai_call_logs.target_id` 에만 쓰고 요청 본문엔 넣지 않는다(`verify` 와 같음).
+     * `query` 는 부르는 쪽이 앞뒤 공백을 지우고 빈 값이면 null 로 넘긴다. 켜기 설정(`referenceSearchEnabled`)은 부르는 쪽이 본다.
+     */
+    ReferenceSearchResponse searchReferences(String draftId, ReferenceSearchRequest request);
 
     /** 기동 시 1회 호출. 실패해도 기동은 한다(경고 로그). */
     HealthResponse health();
