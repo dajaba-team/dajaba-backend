@@ -143,6 +143,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | `caseSummary(request)` | `POST /v1/cases/summary` | cases `RefreshCaseSummary` |
 | `ask(request)` | `POST /v1/cases/ask` — 조사역 질문 답변(규약 5.4). 아래 "질문 답변" [SCRUM-291] | cases 질문 답변 유스케이스(지윤 님 이슈) |
 | `searchReferences(draftId, request)` | `POST /v1/references/search` — 참고 사례 검색(규약 5.5). `draftId` 는 `ai_call_logs` 에만 쓰고 요청 본문엔 안 넣음. 아래 "참고 사례 검색" [SCRUM-309] | str 참고 사례 검색 유스케이스(채영 님 이슈) |
+| `indexApprovedStr(request)` | `POST /v1/references/str` — 승인 STR 색인. 초안 번호는 요청 본문 `draft_id` 그대로(따로 안 받음). 아래 "승인 STR 색인" [SCRUM-357] | str 승인 뒤 트리거(채영 님 SCRUM-314) |
 | `health()` | `GET /v1/health` — 기동 시 1회, 실패해도 기동은 함. 응답 `status·db·llm·server_version·model_version·feature_version·retrieval_version` 을 info 한 줄로 찍고, `status`·`db`·`llm` 중 하나라도 `ok` 가 아니면(null 포함) warn 한 줄 더 (SCRUM-22) | `AiHealthCheck` |
 
 **공통 동작**
@@ -150,6 +151,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 - **시간 한도** — 초안·검증·요약처럼 **화면에서 부르는 요청은 전체 90초**(재시도 포함, 호출마다 90초가 아님). 점수 배치는 **500건 묶음 호출 하나마다** 같은 규칙이에요(배치 전체가 90초가 아님). MVP는 **동기**(`@Async`·큐·폴링은 고도화). [10/29]
   - **질문 답변(`ask`)만 전체 30초**(재시도 포함, 규약 6.2) — `aml.ai.ask-timeout-seconds`(기본 30, 빈 값·0·음수면 기동 실패). 나머지는 `aml.ai.timeout-seconds`(90) 그대로예요. 한도는 호출마다 따로 재고, `X-Budget-Ms`도 그 한도에서 남은 값이라 질문 답변 첫 시도는 약 30000이에요. 재시도 규칙(아래)은 같아요. [SCRUM-291]
   - **참고 사례 검색(`searchReferences`)만 전체 8초**(재시도 포함, 규약 6.2) — `aml.ai.reference-search-timeout-seconds`(기본 8, 빈 값·0·음수면 기동 실패). 첫 시도 `X-Budget-Ms` 는 약 8000이에요. 재시도 규칙은 같아요. [SCRUM-309]
+  - **승인 STR 색인(`indexApprovedStr`)만 전체 30초**(재시도 포함) — `aml.ai.str-index-timeout-seconds`(기본 30, 빈 값·0·음수면 기동 실패). 승인 뒤 뒤 스레드에서 불러 기다리는 사람은 없지만 실행기 스레드를 잡는 시간이라 길게 두지 않아요. AI 는 절대 마감을 안 쓰고 `X-Budget-Ms` 는 받기만 해요(임베딩은 AI 공통 한도 35초). 재시도 규칙은 같아요. [SCRUM-357]
 - 4xx는 재시도 없이 `AiClientException` → 502. 단 409 `GENERATION_IN_PROGRESS`는 409 `DRAFT_IN_PROGRESS`로. [10/29]
 - **재시도** — 최대 **1회**, 그리고 **위 시간 한도 안에 남은 시간이 있을 때만**. [10/29]
   - 다시 보내는 것(판별은 HTTP 5xx가 아니라 코드/원인): AI가 **바로 돌려준** `LLM_UNAVAILABLE`·`MODEL_UNAVAILABLE`·**503 `DB_UNAVAILABLE`**, 또는 요청이 AI에 **닿기 전에 연결 단계에서 실패한** 경우만 — 연결 거부(`ConnectException`), 이름 조회 실패(`UnknownHostException`, compose에서 ai 컨테이너가 멈췄을 때), 경로 없음(`NoRouteToHostException`). 요청이 안 갔으니 다시 보내도 중복이 없어요. [SCRUM-229]
@@ -173,6 +175,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   | `/v1/cases/summary` | `CASE` / `caseNo` (요청 본문에 내부 id 가 없어 케이스 번호) | `generation_meta.prompt_version` |
   | `/v1/cases/ask` | `CASE` / `caseNo` | `generation_meta.prompt_version`, null 이면(`OUT_OF_SCOPE` — 답 호출을 안 함) `plan_prompt_version` [SCRUM-291] |
   | `/v1/references/search` | `DRAFT` / `draftId` (str 이 `verify` 때 쓰는 값과 같음) | `retrieval_version` [SCRUM-309] |
+  | `/v1/references/str` | `DRAFT` / 요청 `draft_id` (승인된 초안 번호 `DRF-…`) | `retrieval_version`(SKIPPED·DISABLED 면 null) [SCRUM-357] |
   | `/v1/health` | null / null | null |
 
   모델 이름·`feature_version` 같은 나머지 버전은 저장하지 않아요. `generation_id`·`request_id`로 AI 쪽 기록에서 찾아요.
@@ -206,7 +209,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   - 결과 `typologies` 문자열 1개 이상이고 **보낸 유형과 하나 이상 겹침**, `source_type` 은 **보낸 `source_types` 안**
   - 결과 칸 `doc_id`·`doc_title`·`chunk_id` 문자열, `page` 정수, `publisher` 문자열 또는 null, `year` 정수 또는 null. `search_meta` 는 `degraded` 참거짓·`candidates`·`latency_ms` 0 이상 정수
   - AI 스키마와 다르게 두는 곳: 결과 수 ≤ 보낸 `top_k`·유형 겹침·`source_type` 대조는 AI 스키마가 아니라 AI 서비스가 지키는 것을 백엔드가 다시 봐요(엄격). 결과 유형이 AI 유형 이름인지와 모르는 칸은 안 봐요(느슨 — 원칙 4)
-  - `ai_call_logs.ai_version` 은 `retrieval_version` 이 문자열이고 64자 이하일 때만 — 아니면 null
+  - `ai_call_logs.ai_version` 에는 `retrieval_version` 마지막 `@` 뒤가 정확히 소문자 16진 8자일 때 **`@` + 그 8자만**(예 `@36b5a2d5`, manifest 해시) — 아니면 null. 모델 이름(앞부분)은 백엔드 기록에 안 남겨요(AI 쪽 기록에 있음). 모양으로는 모델 이름과 AI 가 잘못 담은 섹션 글을 가를 수 없어서예요(SCRUM-357 추가 검토 1·2). 2xx 확인 실패 행도 같은 규칙. 응답 DTO 의 `retrievalVersion` 은 받은 그대로이고, 모양 때문에 응답을 막지는 않아요
   - 로그·`ai_call_logs` 에 검색어(`query`)를 넣지 않아요 — 공통 줄(경로·`request_id`·시간·회차·코드)만. 상태·유형·검색어 길이·결과 수는 str 유스케이스가 찍어요
   - **검색만 자기 호출·재시도 루프**(추가 검토 1·2) — 재시도 횟수·남은 시간·재시도 대상·실패 분류는 위 공통 규칙과 같고, 다른 점은 셋이에요. ① 요청·응답을 바이트로 주고받아 Jackson 코덱의 DEBUG/TRACE 로그에 검색어·문서 제목이 남지 않아요 ② `X-Budget-Ms` 는 **연결을 잡은 뒤** 요청을 쓰기 직전에 남은 ms 로 정해요(풀 대기·연결 수립 시간이 빠진 값). 그때 1ms 미만이면 요청을 보내지 않고 재시도 없는 `AI_TIMEOUT`(AI 는 0 을 400 으로 거부) ③ AI 오류 본문은 검색이 낼 수 있는 코드(`INVALID_REQUEST`·`UNAUTHENTICATED`·`LLM_UNAVAILABLE`·`LLM_BUDGET_EXCEEDED`·`MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`·`INTERNAL`)만 그대로 쓰고 나머지는 `AI_BAD_RESPONSE`, 메시지는 코드별 고정 문구 — AI 가 준 문장은 로그·`error_code`·화면 오류 응답에 안 가요
   - 시도 기록은 다섯 호출과 같이 **호출 스레드에서** 시도마다 저장해요. **8초는 AI 호출(재시도 포함) 기준, 감사 DB 저장 시간은 빠짐** — 재시도 전 저장에 쓴 시간만큼 두 번째 시도 마감을 뒤로 밀어서, 저장이 늦어도 남은 AI 예산으로 재시도해요(추가 검토 3). 그래서 전체 걸린 시간은 8초 + 저장 시간까지 늘 수 있어요. 다섯 호출은 아직 저장 시간도 예산 안에서 세요(같은 마감으로 재시도 — 발표 뒤 같이 다룸). 걸린 시간(`duration_ms`)은 HTTP 시도 시간이에요
@@ -214,6 +217,15 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   - 결과의 `doc_id`·`doc_title`·`chunk_id` 빈 값, `page` 0 이하는 거부하지 않아요 — AI 스키마(`reference_search.py`)도 타입만 봐서 같은 기준(좁힐지는 발표 뒤 AI 스키마부터)
   - **목업**(`aml.ai.mock=true`) — 보낸 유형에 `SCATTER_GATHER` 가 하나라도 있으면 `EMPTY`, 그 밖은 `FOUND` 고정 3건(`fintrac-underground-banking-2023` 0.52 · `ffiec-redflags` 0.41 · `fatf-pml-2018` 0.33)을 `top_k` 만큼. 결과 `typologies` 는 보낸 유형 그대로, `source_type` 은 늘 `PUBLIC`. `source_types` 가 `["PUBLIC"]` 이 아니면(`APPROVED_STR`·빈 목록·중복) 실제 AI 처럼 `AI_INVALID_REQUEST`. 위 확인을 통과하는 모양이에요
   - **켜기 설정** `aml.ai.reference-search-enabled`(환경 변수 `AML_AI_REFERENCE_SEARCH_ENABLED`, 기본 false) — `AmlProperties.ai().referenceSearchEnabled()`. 읽는 쪽은 str 유스케이스(채영 님 이슈)
+- **승인 STR 색인 요청·응답** (노션 「참고 사례 검색 · 승인 STR 색인 설계 문서」 B 5.2·6.3·9, AI SCRUM-310, SCRUM-357) — 승인된 STR 섹션을 AI 가 임베딩해 따로 표에 넣어요(검색에는 아직 안 붙음). 응답은 저장하지 않아요. 실패·`SKIPPED` 여도 승인은 그대로 — 부르는 쪽(str 트리거)이 예외를 삼켜요.
+  - 요청 `StrIndexRequest(reportNo, draftId, approvedAt, typologies, sections)` — `report_no` `STR-YYYY-NNNNNN`, `draft_id` 승인된 초안 번호(`DRF-…`, AI 가 그 초안 facts 로 케이스 계좌를 대조), `approved_at` UTC `Z`, `typologies` 경보 유형 문자열 0~3개(중복 400), `sections[]` = `StrIndexSection(section, text)` 1개 이상 — 7항목 또는 옛 6섹션 **한 세트만**, 같은 섹션 두 번 400, `text` 1~1200. 모양 검사는 AI 가 해요(틀리면 AI 400 → `AI_INVALID_REQUEST` 502). 같은 문서번호를 같은 본문으로 다시 보내면 같은 응답(AI 멱등), 다른 본문이면 400
+  - 응답 `StrIndexResponse(producedAt, reportNo, status, skipReason, chunkCount, retrievalVersion, raw)` — `status` enum `StrIndexStatus`(`INDEXED`·`SKIPPED`, 둘 다 AI 200), `skipReason` enum `StrIndexSkipReason`(`RAW_ACCOUNT` 계좌 원문 · `TOO_SHORT` 공백 뺀 글 합 100자 미만 · `DISABLED` AI 스위치 꺼짐 · `NO_FACTS` 그 초안 facts 가 AI 에 없음 — 목업 모드로 만든 초안 등)
+  - **응답 확인**(`requireStrIndexResponse`, 하나라도 틀리면 502 `AI_BAD_RESPONSE` + 실패 행·재시도 없음, 메시지에 칸 이름만) — 필수 칸 여섯 개(`produced_at`·`report_no`·`status`·`skip_reason`·`chunk_count`·`retrieval_version`, 값 null 은 아래대로) · `produced_at` Z · `report_no` = 보낸 값 · 모르는 상태·이유는 실패 · `chunk_count` 정수 · `INDEXED` ↔ 이유 null·`chunk_count` 1 이상 **보낸 섹션 수 이하**·`retrieval_version` 앞뒤 공백 뺀 1자 이상(AI 와 같은 공백 처리) · `SKIPPED` ↔ 이유 있음·`chunk_count` 0·`retrieval_version` 문자열 또는 null. AI 스키마와 다르게 두는 곳: `report_no` 대조와 섹션 수 상한은 백엔드가 더 봐요(엄격 — AI 는 섹션 하나 = 청크 하나, 공백만인 섹션은 뺌). `SKIPPED` 의 `retrieval_version` null 을 `DISABLED` 에만 묶지 않아요(AI 도 안 묶음)
+  - `ai_call_logs.ai_version` 은 검색과 같은 규칙(마지막 `@` 뒤 소문자 16진 8자면 `@` + 8자만, 아니면 null — 성공·2xx 확인 실패 행 모두, 응답 DTO 는 받은 그대로), `generation_id` 늘 null. 로그·`ai_call_logs` 에 섹션 글을 넣지 않아요 — 공통 줄(경로·`request_id`·시간·회차·코드)만
+  - **호출·재시도 루프는 참고 사례 검색과 같은 것**(`selfBudgetedPost`) — 바이트 송수신 · 연결 뒤 `X-Budget-Ms` · 오류 코드 허용 목록(검색과 같은 7개) + 고정 문구 · 감사 저장 시간은 예산에서 뺌 · 2xx 본문은 JSON 값 하나만·같은 칸 두 번 없음(뒤에 다른 값이 붙거나 같은 키가 겹치면 재시도 없는 `AI_BAD_RESPONSE`, 검색도 같음 — 추가 검토 1·2. 뒤따르는 공백·줄바꿈은 그대로 성공). 다른 건 경로·예산(30초)·문구·응답 확인뿐이에요
+  - **30초는 AI 호출 기준, 감사 저장 시간은 빠짐 — 다른 호출과 같음.** 감사 DB 가 밀리면(풀 고갈 등) 저장 시간만큼 뒤 스레드를 더 잡아요(시도마다 저장, 연결 대기는 공통 풀 한도). 감사 저장을 따로 떼면 기록 유실·순서 문제가 생겨 309 에서 되돌린 결정 그대로 — 발표 뒤 여섯 호출과 같이 다뤄요(추가 검토 1)
+  - **목업**(`aml.ai.mock=true`) — 고르는 순서는 AI 와 같아요: ① 보낸 유형에 `SCATTER_GATHER` 가 있으면 `SKIPPED`·`RAW_ACCOUNT` ② 섹션 글에서 공백을 뺀 글자 수 합이 100 미만이면 `SKIPPED`·`TOO_SHORT` ③ 그 밖 `INDEXED`, `chunk_count` = 공백만이 아닌 섹션 수. `DISABLED`·`NO_FACTS` 는 목업에 없어요(꺼짐은 아래 설정이 먼저 막고, `NO_FACTS` 는 진짜 AI 에서만). 위 확인을 통과하는 모양이에요
+  - **켜기 설정** `aml.ai.str-index-enabled`(환경 변수 `AML_AI_STR_INDEX_ENABLED`, 기본 false) — `AmlProperties.ai().strIndexEnabled()`. 읽는 쪽은 str 승인 뒤 트리거(채영 님 SCRUM-314). AI 쪽 스위치(`STR_INDEX_ENABLED`·`RAG_ENABLED`)가 꺼져 있으면 AI 가 200 `SKIPPED`·`DISABLED` 를 줘요(검색의 400 과 다름)
 
 **트랜잭션 패턴 — "DB → HTTP → DB"** 네 군데 [레퍼런스 §8.4]
 1. 점수 요청: `RequestScores` (500개 묶음마다 커밋)
