@@ -11,6 +11,7 @@ import com.team.aml.detection.domain.CaseAlreadyOpenedException;
 import com.team.aml.shared.domain.DomainException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -46,6 +47,12 @@ public class OpenCasesFromAlerts {
     private final OpenCasesRecorder recorder;
     private final CasePolicySource policySource;
     private final CaseRepository cases;
+
+    @Value("${AML_DEMO_CASE_SELECTION_FILE:}")
+    private String demoCaseSelectionFile = "";
+
+    @Value("${AML_DEMO_CASE_SELECTION_SHA256:}")
+    private String demoCaseSelectionSha256 = "";
 
     public OpenCasesFromAlerts(FindAlertsForCaseOpening findAlerts, OpenCaseForAlert openOne,
                                OpenCasesRecorder recorder, CasePolicySource policySource, CaseRepository cases) {
@@ -99,11 +106,15 @@ public class OpenCasesFromAlerts {
     private OpenCasesSummary openAll(LocalDate batchDate) {
         CasePolicy policy = policySource.current();
         List<AlertForCaseOpening> alerts = findAlerts.execute(batchDate);
+        boolean demoSelection = !demoCaseSelectionFile.isBlank();
+        if (demoSelection) {
+            alerts = DemoCaseSelection.select(demoCaseSelectionFile, demoCaseSelectionSha256, batchDate, alerts);
+        }
         int opened = 0, notHigh = 0, alreadyOpened = 0, failed = 0;
         for (AlertForCaseOpening alert : alerts) {
             try {
                 ScoreClassification grade = policy.classify(alert.score(), alert.recommendedThreshold());
-                if (grade.band() != ScoreBand.HIGH) {
+                if (!demoSelection && grade.band() != ScoreBand.HIGH) {
                     notHigh++;
                     continue;
                 }
