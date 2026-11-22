@@ -12,6 +12,9 @@ import com.team.aml.shared.batch.BatchAlreadyDoneException;
 import com.team.aml.shared.batch.BatchRunningException;
 import com.team.aml.shared.batch.BatchStatus;
 import com.team.aml.shared.security.CurrentUser;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tag;
+import io.micrometer.core.instrument.Timer;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -81,6 +84,9 @@ class RunRuleScanTest {
 
     @Autowired
     PlatformTransactionManager transactionManager;
+
+    @Autowired
+    MeterRegistry meters;
 
     private static Long sourceFileId;
 
@@ -256,6 +262,32 @@ class RunRuleScanTest {
         assertThat(result.run().status()).isEqualTo(BatchStatus.SUCCEEDED);
         assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId)
                 .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R03_FX_RELAY", "R04_CYCLE", "R05_SCATTER_GATHER", "R06_GATHER_SCATTER");
+    }
+
+    @Test
+    void 룰마다_걸린_시간과_끝난_배치를_지표로_남기고_태그에_날짜_번호가_없다() {   // SCRUM-349
+        LocalDate d = LocalDate.of(2022, 12, 1);
+        inbound(newKey(), newKey(), d.atTime(1, 0), "1", "US Dollar");
+        long ruleBefore = timerCount("aml.rule.scan.duration", "rule", "R02_FAN_IN");
+        long batchBefore = timerCount("aml.batch.duration", "type", "RULE_SCAN", "result", "SUCCEEDED");
+
+        runRuleScan.run(runRuleScan.start(d, SYSTEM), d);
+
+        for (String rule : SEEDED) {
+            assertThat(timerCount("aml.rule.scan.duration", "rule", rule)).as(rule).isPositive();
+        }
+        assertThat(timerCount("aml.rule.scan.duration", "rule", "R02_FAN_IN")).isEqualTo(ruleBefore + 1);
+        assertThat(timerCount("aml.batch.duration", "type", "RULE_SCAN", "result", "SUCCEEDED"))
+                .isEqualTo(batchBefore + 1);   // 스캔 트랜잭션이 커밋된 뒤 한 번
+        assertThat(meters.get("aml.rule.scan.duration").timers()).allSatisfy(t ->
+                assertThat(t.getId().getTags()).extracting(Tag::getKey).containsExactly("rule"));
+        assertThat(meters.get("aml.batch.duration").timers()).allSatisfy(t ->
+                assertThat(t.getId().getTags()).extracting(Tag::getKey).containsExactlyInAnyOrder("type", "result"));
+    }
+
+    private long timerCount(String name, String... tags) {
+        Timer timer = meters.find(name).tags(tags).timer();
+        return timer == null ? 0 : timer.count();
     }
 
     @Test

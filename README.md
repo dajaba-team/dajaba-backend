@@ -43,6 +43,7 @@ swagger에서 **`POST /api/v1/auth/login`** 본문 `{"login_id": "inv01", "passw
 | `AML_CASE_POLICY_VERSION` | 케이스 등급 경계값 버전 | — | — | 기본값 없음, 미결 23에서 확정 — 비면 케이스 생성 배치 `POLICY_NOT_CONFIGURED` |
 | `AML_CASE_POLICY_LOW_TO_MEDIUM` | 점수 경계 LOW → MEDIUM | — | — | 위와 같음 |
 | `AML_CASE_POLICY_MEDIUM_TO_HIGH` | 점수 경계 MEDIUM → HIGH | — | — | 위와 같음 |
+| `AML_BATCH_CHAIN_ENABLED` | 배치 자동 연쇄 켜기(`true`)·끄기(`false`) — 룰 스캔 성공 → 점수 → 케이스 생성. `AML_RABBITMQ_ENABLED=true`도 있어야 이어져요. 끄면 단계마다 직접 실행 (SCRUM-349) | — | — | `false` |
 | `AML_RABBITMQ_ENABLED` | RabbitMQ 작업 큐 켜기(`true`)·끄기(`false`). 끄면 케이스 생성 등은 앱 안 실행기로 — 지금과 같아요 (SCRUM-276) | — | — | `false` |
 | `RABBITMQ_HOST` · `RABBITMQ_PORT` | RabbitMQ 주소 | — | — | compose 앱 `rabbitmq`(고정) · IDE `localhost`·`5672` |
 | `AML_SESSION_REDIS_ENABLED` | 로그인 세션을 Redis(db 0)에(`true`)·앱 메모리에(`false`). **`true`/`false`만** — 다른 값(오타 `ture` 등)이면 두 설정이 다 안 걸려 `SessionRegistry` 빈이 없다는 기동 실패가 나요. 끄면 지금과 같아요 — 앱을 다시 띄우면 모두 로그아웃 (SCRUM-273) | — | — | `false` |
@@ -63,6 +64,27 @@ docker compose up -d app                     # 목업으로 돌아가기
 - AI 서버(dajaba-AI compose)가 떠 있어야 하고, `AI_INTERNAL_KEY`가 AI `.env`와 같아야 해요.
 
 DB를 완전히 초기화하려면 `docker compose down -v` (볼륨 삭제 → 다음 기동 때 `db/init/00_extensions.sql`·`01_roles.sh` 와 Flyway가 다시 돈다).
+
+### 시연 데이터 만들기 — 빈 DB에서 케이스까지 (리허설 순서, SCRUM-250)
+
+위 3단계까지는 **로그인만** 돼요. 목록에 케이스가 보이려면 데이터를 넣고 배치 네 개를 순서대로 돌린 뒤, 관리자가 조사역에게 배정해야 해요.
+
+1. **원본 파일 3개를 `./data`에** — Kaggle 「IBM Transactions for Anti Money Laundering (AML)」의 HI-Small 세 파일 `HI-Small_Trans.csv`·`HI-Small_accounts.csv`·`HI-Small_Patterns.txt`를 리포 루트 `data/`에 그대로 둬요(파일 이름 바꾸지 않음, 커밋 안 됨). compose 앱은 `./data`를 `/data`로 읽기 전용으로 붙이고, IDE는 `AML_DATASET_DIR` 기본 `./data`.
+   - `src/test/resources/fixtures/ibm_small/`(축소본)은 **테스트 전용**이에요. 계좌 파일이 없고, 적재는 HI-Small 전체 건수(508만)로 검사해서 축소본을 넣으면 `DATASET_FILES_MISSING` 또는 "검증값 불일치"로 실패해요.
+2. **`.env`에 케이스 등급 경계값 세 줄** — `AML_CASE_POLICY_VERSION`·`AML_CASE_POLICY_LOW_TO_MEDIUM`·`AML_CASE_POLICY_MEDIUM_TO_HIGH`(값은 노션 `.env`). 없으면 4단계가 `POLICY_NOT_CONFIGURED`로 거절돼요. rc2 실제 모델로 바꾸는 날 값이 바뀌어요(SCRUM-329).
+3. **`admin`으로 로그인해 배치 네 개를 순서대로 돌리고 담당을 배정** — 프론트 `/admin/batches` 화면 버튼으로 하거나, swagger로 아래를 차례로 불러요. 날짜는 **`2022-09-07` 하나만** 써요(경계값을 9/7 기준으로 골라서, 다른 날은 HIGH가 하루 30건을 넘을 수 있어요 — 11/20 #개발).
+
+   | 순서 | 호출 | 응답 | 다음으로 넘어가는 때 |
+   |---|---|---|---|
+   | ① 적재 | `POST /api/v1/admin/batches/load` | 202 (뒤에서 돌아요) | `GET /api/v1/admin/batches` 맨 위 `LOAD_DATASET`이 `SUCCEEDED`. 수 분 걸려요. **한 번만** — 다시 하려면 `docker compose down -v` |
+   | ② 룰 스캔 | `POST /api/v1/admin/batches/rule-scan?date=2022-09-07` | 200 (끝날 때까지 기다림) | 경보 건수가 응답에 |
+   | ③ 점수 | `POST /api/v1/admin/batches/score?date=2022-09-07` | 200 — **일부 실패가 있어도 200** | 응답의 `scored`·`failed`. 다시 부르면 실패분만 재처리 |
+   | ④ 케이스 생성 | `POST /api/v1/admin/batches/open-cases?date=2022-09-07` | 202 | 배치 목록 맨 위 `OPEN_CASES`가 `SUCCEEDED` |
+   | ⑤ 담당 배정 | 프론트 케이스 상세 [담당자 배정] 또는 `POST /api/v1/cases/{case_no}/assign` `{"assignee": "inv01", "version": …}` — **`admin`만** | 200 | 그 뒤 `inv01`로 `/cases` → 「내 담당」에 보임. 조사역은 새 케이스를 스스로 맡을 수 없어요(SCRUM-339) |
+
+   - ③은 기본(`AML_AI_MOCK=true`)이면 **목업 점수**(경보마다 0.05~0.95 고르게)라 HIGH 수가 실제와 달라요. 실제 점수는 dajaba-AI를 띄우고 `AML_AI_MOCK=false`(위 「진짜 AI로 띄우기」).
+   - 실제 모델로 처음 채점할 때는 **rc2로 바꾼 뒤** ③을 처음 돌려요. rc1으로 먼저 돌리면 R03·R05·R06 경보가 `RULE_NOT_SUPPORTED`로 남고 다시 보내지 않아요(#155).
+   - 숫자 확인(11/21 rc2 실제 모델 기준): 9/7 경보 1,545 → 점수 실패 0 → HIGH 27 → 케이스 27.
 
 ### 프로젝트 이름 `dajaba` · pgvector (11/8, SCRUM-124)
 

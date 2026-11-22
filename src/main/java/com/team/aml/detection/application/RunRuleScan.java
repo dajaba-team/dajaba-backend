@@ -11,6 +11,7 @@ import java.util.List;
 /**
  * 룰 스캔 (SD 명세 API 3, SCRUM-99). 동기 — 응답에 결과 건수. 트랜잭션은 여기 없고 start·scan 이 각자 잡는다.
  * start(시작 검사·RUNNING 커밋) → run(한 트랜잭션 스캔, 실패하면 FAILED 를 따로 남기고 다시 던짐).
+ * 성공하면 배치 잇기(BatchChain)가 켜져 있을 때 같은 날짜 점수로 이어진다(SCRUM-349).
  */
 @Service
 public class RunRuleScan {
@@ -19,13 +20,15 @@ public class RunRuleScan {
     private final RuleScanner scanner;
     private final BatchRunQuery batchRuns;
     private final CurrentUser currentUser;
+    private final BatchChain chain;
 
     public RunRuleScan(RuleScanRecorder recorder, RuleScanner scanner, BatchRunQuery batchRuns,
-                       CurrentUser currentUser) {
+                       CurrentUser currentUser, BatchChain chain) {
         this.recorder = recorder;
         this.scanner = scanner;
         this.batchRuns = batchRuns;
         this.currentUser = currentUser;
+        this.chain = chain;
     }
 
     public RuleScanResult execute(LocalDate date) {
@@ -46,6 +49,7 @@ public class RunRuleScan {
             recorder.fail(batchRunId, failureMessage(e));
             throw e;
         }
+        chain.afterRuleScan(batchRunId);   // 켜져 있으면 같은 날짜 점수로 이어짐
         return new RuleScanResult(batchRuns.get(batchRunId), counts);
     }
 

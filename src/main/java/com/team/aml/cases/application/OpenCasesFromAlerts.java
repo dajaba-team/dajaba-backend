@@ -16,9 +16,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 /**
  * 케이스 생성 배치 OPEN_CASES (CASES 명세 API-14, flows/01 ④). cases 가 detection 을 부른다(반대 아님).
@@ -63,6 +65,12 @@ public class OpenCasesFromAlerts {
     public long start(LocalDate batchDate, long triggeredBy) {
         policySource.current();
         return recorder.start(batchDate, triggeredBy);
+    }
+
+    /** 배치 잇기(SCRUM-349)용 — since 뒤에 그 날짜 케이스 생성이 이미 시작됐으면 빈 값(시작 잠금 안에서 확인). 거절은 start 와 같다. */
+    public OptionalLong startUnlessStartedSince(LocalDate batchDate, long triggeredBy, Instant since) {
+        policySource.current();
+        return recorder.startUnlessStartedSince(batchDate, triggeredBy, since);
     }
 
     /**

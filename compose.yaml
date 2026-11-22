@@ -84,6 +84,7 @@ services:
       MANAGEMENT_SERVER_ADDRESS: 0.0.0.0   # 관리 포트 8081 은 기본 127.0.0.1 — 컨테이너 안에선 Prometheus 가 app:8081 로 들어와야 해서. ports 에는 8081 안 넣음(호스트로 안 나감)
       # RabbitMQ (SCRUM-276). 기본 꺼짐 — 켜려면 .env 에 AML_RABBITMQ_ENABLED=true + ops 프로필. depends_on 에 넣지 않음(fail-open)
       AML_RABBITMQ_ENABLED: ${AML_RABBITMQ_ENABLED:-false}
+      AML_BATCH_CHAIN_ENABLED: ${AML_BATCH_CHAIN_ENABLED:-false} # 배치 자동 연쇄(룰 스캔 → 점수 → 케이스 생성). 위 RabbitMQ 도 켜야 이어짐 — SCRUM-349
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_USER: ${RABBITMQ_USER:-}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-}

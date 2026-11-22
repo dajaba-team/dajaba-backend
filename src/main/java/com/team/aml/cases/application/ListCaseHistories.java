@@ -12,7 +12,6 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.temporal.ChronoUnit;
 import java.util.Map;
 
 /**
@@ -39,11 +38,8 @@ public class ListCaseHistories {
         Page<CaseHistory> rows = action == null
                 ? histories.findByCaseIdAndActionNotOrderByIdDesc(c.getId(), CaseHistoryAction.NOTE, pageable)
                 : histories.findByCaseIdAndActionOrderByIdDesc(c.getId(), action, pageable);
-        Map<Long, UserRef> refs = userRefs.of(rows.getContent().stream().map(CaseHistory::getCreatedBy).toList());
-        return new PageImpl<>(rows.getContent().stream().map(h -> {
-            UserRef by = refs.get(h.getCreatedBy());
-            return new GetCaseDetail.History(h.getAction(), h.getFromStatus(), h.getToStatus(), h.getReasonCode(),
-                    h.getComment(), by == null ? null : by.loginId(), h.getCreatedAt().truncatedTo(ChronoUnit.SECONDS));
-        }).toList(), pageable, rows.getTotalElements());
+        Map<Long, UserRef> refs = userRefs.of(GetCaseDetail.History.peopleOf(rows.getContent()));
+        return new PageImpl<>(rows.getContent().stream().map(h -> GetCaseDetail.History.of(h, refs)).toList(),
+                pageable, rows.getTotalElements());
     }
 }

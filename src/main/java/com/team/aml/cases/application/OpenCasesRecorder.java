@@ -10,7 +10,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.OptionalLong;
 
 /**
  * 케이스 생성 배치(OPEN_CASES)의 batch_runs 기록. 케이스는 경보마다 따로 커밋되므로 기록도 따로(REQUIRES_NEW) 커밋한다.
@@ -32,6 +34,24 @@ class OpenCasesRecorder {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public long start(LocalDate batchDate, long triggeredBy) {
         cases.lockOpenCasesStart();
+        return startLocked(batchDate, triggeredBy);
+    }
+
+    /**
+     * 배치 잇기(SCRUM-349)용 — 같은 시작 잠금 안에서 "since 뒤에 그 날짜 케이스 생성이 이미 시작됐나"를 먼저 본다.
+     * 시작됐으면(직접 실행이 그새 시작해 끝났어도) 아무것도 남기지 않고 빈 값. 그 밖은 start 와 같다.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public OptionalLong startUnlessStartedSince(LocalDate batchDate, long triggeredBy, Instant since) {
+        cases.lockOpenCasesStart();
+        if (batchRuns.existsByBatchTypeAndBatchDateAndStartedAtGreaterThanEqual(BatchType.OPEN_CASES, batchDate, since)) {
+            return OptionalLong.empty();
+        }
+        return OptionalLong.of(startLocked(batchDate, triggeredBy));
+    }
+
+    /** 시작 잠금을 쥔 채로만. */
+    private long startLocked(LocalDate batchDate, long triggeredBy) {
         if (batchRuns.findFirstByBatchTypeAndBatchDateAndStatus(BatchType.OPEN_CASES, batchDate, BatchStatus.RUNNING)
                 .isPresent()) {
             throw new BatchRunningException(BatchType.OPEN_CASES, batchDate);

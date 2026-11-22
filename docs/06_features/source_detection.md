@@ -129,7 +129,7 @@
   - 점수가 있으면(`OK`·`SHORT_HISTORY`·`MISSING_INPUT`) `alert_scores` 한 행 + `SCORED`. 이력 부족·일부 결측도 **실패가 아니에요**.
   - 항목이 `FAILED`면 `score_status = FAILED` + `score_failure_code` 저장, `alert_scores` 행은 만들지 않아요. 없는 거래 ID도 그 경보만 이렇게 와요(HTTP 200, 나머지는 정상).
   - 응답에 그 `alert_id`가 없거나 묶음 호출이 실패하면(503 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE`은 1회 재시도 뒤) `FAILED` + 코드 NULL. JSON 형식 오류는 요청 전체 400.
-  - `failure_code` 5값 — `TRANSACTION_NOT_FOUND`·`HISTORY_NOT_SUPPORTED`·`REQUIRED_INPUT_MISSING`·`RULE_NOT_SUPPORTED`(모델이 점수를 내지 않는 룰 — 11/19 ML 규약 v0.4, rc1은 R03·R05·R06, V018·SCRUM-326)는 다시 보내도 같은 결과라 재처리하지 않아요. `COMPUTE_ERROR`만 재처리.
+  - `failure_code` 5값 — `TRANSACTION_NOT_FOUND`·`HISTORY_NOT_SUPPORTED`·`REQUIRED_INPUT_MISSING`·`RULE_NOT_SUPPORTED`(모델이 점수를 내지 않는 룰 — 11/19 ML 규약 v0.4, rc1은 R03·R05·R06, V018·SCRUM-326)는 다시 보내도 같은 결과라 재처리하지 않아요. `COMPUTE_ERROR`만 재처리. **`RULE_NOT_SUPPORTED`는 모델 버전이 바뀌어도 다시 보내지 않아요** — 지원 룰이 늘어난 새 모델로 다시 채점하려면 DB를 새로 적재하거나 점수를 안 낸 날짜로 해요.
 - **FAILED는 저위험이 아니에요.** 0점·LOW로 바꾸지 않고, 케이스 생성 대상에서 빠지고, 지우지 않아요. [안건 4]
 - `score_status`(백엔드 처리 상태)와 `data_quality_status`(AI 입력 품질: OK·SHORT_HISTORY·MISSING_INPUT·FAILED)는 **다른 값**이에요. 합치지 않아요. [ML 규약 §4]
 - **`score_band`(HIGH/MEDIUM/LOW)는 AI가 주지 않아요.** AI는 `score`와 추천 `threshold`만 주고, 등급은 **cases의 `CasePolicy`**가 계산해요. [안건 2] 〔SD 명세 §13-8의 "등급 경계는 detection"은 그 전 안〕
@@ -154,5 +154,29 @@
 - 상세 `GET /admin/alerts/{alert_no}` — 목록 한 줄 + `rule_facts`(저장값 그대로) + `latest_score`에 `feature_version`·`prediction_id`·`produced_at`·`reasons`·`evidence_transaction_ids`·`context_transaction_ids`(번호만 — 경보 밖 참고 거래라 거래 조회로는 안 열림). 열람 기록 1행.
 - 거래 `GET /admin/alerts/{alert_no}/transactions` — C3와 같은 칸(방향·scope 없음), 정렬 `ts`·`transaction_id`(기본 `ts,asc`). 열람 기록 1행.
 - 계좌는 `account_no`(가린 값)·`account_ref`만. `account_key`·`entity_id`·정답 칸 없음. 없는 번호는 404 `ALERT_NOT_FOUND`(`details.alert_no`), 기록 안 남김 [SCRUM-198]
+
+**배치 지표 (Prometheus) — 구현됨 (SCRUM-349)** 이름·태그 규칙은 [`03_shared.md` §13](../03_shared.md). Grafana 「배치」(`ops/grafana/dashboards/batches.json`).
+| 지표 | Prometheus 이름 | 태그 | 무엇 |
+|---|---|---|---|
+| 단계별 실행 시간 | `aml_batch_duration_seconds_{count,sum,max}` | `type`(LOAD_DATASET·RULE_SCAN·SCORE_REQUEST·OPEN_CASES)·`result`(SUCCEEDED·FAILED) | `started_at`~`finished_at`. 횟수 = `_count` |
+| 단계별 처리 건수 | `aml_batch_rows_total` | `type`·`kind`(in·out) | 성공한 실행의 `rows_in`·`rows_out` |
+| 룰별 스캔 시간 | `aml_rule_scan_duration_seconds_{count,sum,max}` | `rule`(R01_FAN_OUT…) | 룰 하나의 쿼리·경보 저장 합친 시간. 날짜·배치 번호는 로그 `rule_scan_timing batch_run_id=… rule=… ms=… alerts=…` |
+| 점수 결과 | `aml_score_alerts_total` | `result`(scored·failed_retryable·failed_final) | 경보 수, **묶음을 커밋할 때마다** 세요(뒤 묶음에서 배치가 실패해도 앞 묶음은 남음). 실패율 = (failed_retryable + failed_final) / 전체 |
+| 점수 묶음 | `aml_score_chunks_total` | `result`(ok·ai_failed) | AI 호출 묶음 수. ai_failed 묶음의 경보는 전부 failed_retryable |
+- 단계별 두 지표는 `BatchRun` JPA 콜백(`BatchRunMetrics`)이 **커밋된 뒤** 한 번 세요 — 네 단계 기록 코드를 고치지 않았고, 롤백되면 안 세요. 앱 재시작 때 SQL로 한꺼번에 `FAILED`로 바꾸는 정리(`failAbandoned*`)는 안 세요.
+- 태그에 날짜·배치 번호·경보 번호 없음. 세다 실패해도 배치는 그대로(fail-open).
+- **정해진 태그 조합은 앱이 뜰 때 0으로 등록해요**(단계 4 × 결과 2, 단계 4 × in·out, 룰 6, 점수 결과 3, 묶음 2). 첫 실행 때 처음 생기면 Prometheus가 처음 읽는 값이 이미 1이라 `increase()`가 그 실행을 0으로 봐요 — 한 번만 도는 원천 적재는 대시보드에 아예 안 나와요. [SCRUM-349 리뷰]
+- 배치·경보 점검 로그에는 배치 번호(`batch_run_id`)·경보 id·룰·건수·코드만 — 계좌·금액은 남기지 않아요. 룰 스캔 경고(경로 검사로 버린 경보)에도 `batch_run_id`를 붙였어요.
+
+**배치 자동 연쇄 (RabbitMQ) — 구현됨 (SCRUM-349)** `AML_BATCH_CHAIN_ENABLED=true` + `AML_RABBITMQ_ENABLED=true`일 때만. 기본 꺼짐.
+- **룰 스캔 성공 → 같은 날짜 점수 → 점수 `SUCCEEDED` → 같은 날짜 케이스 생성.** 원천 적재는 날짜가 없는 최초 1회라 잇지 않아요. 화면에서 직접 실행한 단계도 성공하면 이어져요(연쇄는 "앞 단계 성공 뒤"에 걸림).
+- 큐 `batch.score`(메시지: 룰 스캔 `batch_run_id`) → `ScoreChainListener` → `ScoreAfterRuleScan` · `batch.open-cases`(메시지: 점수 `batch_run_id`) → cases `OpenCasesChainListener` → `OpenCasesAfterScore` → 기존 `RequestOpenCases`(→ `case.open-cases`). 날짜·요청자(`triggered_by`)는 앞 단계 행에서 읽어요.
+- **점수에 다시 보낼 실패가 남으면(`FAILED`) 멈춰요.** 재처리해서 `SUCCEEDED`가 되면 그때 이어져요.
+- **케이스 생성이 이미 성공한 날짜에 점수 재처리가 성공하면 케이스 생성이 보충 실행으로 한 번 더 돌아요.** 케이스 생성은 성공한 날짜도 다시 돌 수 있고(V014·SCRUM-238, 시작은 같은 날짜 `RUNNING`일 때만 409) 앞 케이스 생성은 점수가 끝나기 전에 시작했으니 "이미 시작됨"에 걸리지 않아요. 재처리로 새로 HIGH가 된 경보만 케이스가 되고 이미 케이스인 경보는 건너뛰어요. [SCRUM-349 리뷰]
+- **같은 메시지가 두 번 와도 한 번만** — 앞 단계가 끝난 시각 뒤에 다음 단계가 이미 시작됐으면 건너뛰어요. 이 확인은 **다음 단계의 시작 잠금 안에서** 해요(`ScoreBatchRecorder`·`OpenCasesRecorder`의 `startUnlessStartedSince`) — 잠금 밖에서 보면 확인과 시작 사이에 직접 실행이 시작해 끝나 한 번 더 돌 수 있어요. 동시 실행은 지금 규칙(시작 advisory lock + `RUNNING`이면 409)이 그대로 막고, 걸리면 건너뛰어요(ACK). [SCRUM-349 리뷰]
+- 꺼져 있거나 브로커가 받지 않으면 로그(`배치 잇기 못 함`)만 — 관리자가 다음 단계를 직접 실행해요. 앞 단계 결과에는 영향 없음.
+- 포기 처리(`JobGiveUpHandler`)는 안 둬요. 예외는 다음 단계 행을 만들기 전(DB 오류)에만 나가고, 행을 만든 뒤 실패는 각 단계가 `FAILED`로 남겨요. 처리 중 앱이 죽으면 재시작 정리가 `FAILED`로 바꾸고, 다시 온 메시지는 위 규칙으로 건너뛰어요.
+- **점수는 리스너 안에서 동기로 돌아요**(끝난 뒤 ACK). RabbitMQ `consumer_timeout`(기본 30분)을 넘기면 브로커가 채널을 닫고 메시지를 다시 보내요 — 다시 온 메시지는 "이미 시작됨"으로 건너뛰고 채널 오류 로그만 남아요. [SCRUM-349 리뷰]
+- **점수 실패 기록까지 실패하면** — DB가 끊겨 `RequestScores`의 `FAILED` 기록도 실패하면 행이 `RUNNING`으로 남아 그 날짜 점수가 409로 막혀요. 큐 재시도로는 다시 온 메시지가 "이미 시작됨"으로 건너뛰어 못 고치니, `ScoreAfterRuleScan`이 1·2·4초 간격으로 `FAILED` 기록을 다시 해 봐요. 그래도 안 되면 에러 로그(`배치 잇기 점수 실패 기록 못 함 batch_run_id=…`) — `03_shared.md` §14 손 정리나 앱 재시작 정리로 풀어요. [SCRUM-349 리뷰]
 
 **〔확인 필요〕** 룰 스캔 날짜 범위(9/1~9/10만 일반 스캔?), 통화가 섞인 창의 `rule_facts`, 목업 점수 → 실제 모델 전환 때 재채점 방법, `typology_hint` null 허용·`rule_facts` 빈 객체 세칙(ML 규약 미확인 표).

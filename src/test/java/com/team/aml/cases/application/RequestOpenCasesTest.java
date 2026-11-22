@@ -8,7 +8,9 @@ import com.team.aml.shared.security.CurrentUser;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.task.TaskExecutor;
 
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.OptionalLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -36,6 +38,27 @@ class RequestOpenCasesTest {
     RequestOpenCasesTest() {
         when(currentUser.require()).thenReturn(new AppUserDetails(1L, "admin", "관리자", "ADMIN"));
         when(openCases.start(DATE, 1L)).thenReturn(42L);
+    }
+
+    @Test
+    void 배치_잇기_그_뒤_케이스_생성이_이미_시작됐으면_행도_큐도_없이_빈_값() {   // SCRUM-349
+        Instant since = Instant.parse("2026-11-22T00:00:00Z");
+        when(openCases.startUnlessStartedSince(DATE, 4L, since)).thenReturn(OptionalLong.empty());
+
+        assertThat(request.executeUnlessStartedSince(DATE, 4L, since)).isEmpty();
+        verify(publisher, never()).publish(any(), any());
+        verify(executor, never()).execute(any());
+    }
+
+    @Test
+    void 배치_잇기_시작했으면_화면_요청과_같이_큐로_보낸다() {   // SCRUM-349 — 요청자는 넘겨받은 사람(세션 없음)
+        Instant since = Instant.parse("2026-11-22T00:00:00Z");
+        when(openCases.startUnlessStartedSince(DATE, 4L, since)).thenReturn(OptionalLong.of(43L));
+        when(publisher.publish(JobQueues.CASE_OPEN_CASES, new BatchRunMessage(43L))).thenReturn(true);
+
+        assertThat(request.executeUnlessStartedSince(DATE, 4L, since)).get()
+                .extracting(RequestOpenCases.Accepted::batchRunId).isEqualTo(43L);
+        verify(executor, never()).execute(any());
     }
 
     @Test
