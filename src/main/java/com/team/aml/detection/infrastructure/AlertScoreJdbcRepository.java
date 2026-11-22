@@ -12,6 +12,8 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.sql.Array;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
@@ -86,10 +88,11 @@ public class AlertScoreJdbcRepository implements AlertScoreRepository {
     }
 
     @Override
-    public int failRunningScoreBatches(String message) {
+    public int failRunningScoreBatches(String message, Instant startedBefore) {
         return jdbc.update("""
                 update ops.batch_runs set status = 'FAILED', error_message = ?, finished_at = now()
-                where batch_type = 'SCORE_REQUEST' and status = 'RUNNING'""", message);
+                where batch_type = 'SCORE_REQUEST' and status = 'RUNNING' and started_at < ?""",
+                message, Timestamp.from(startedBefore));
     }
 
     private static List<Long> ids(Array array) throws SQLException {

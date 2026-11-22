@@ -1,5 +1,8 @@
 package com.team.aml.shared.batch;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -25,25 +28,48 @@ public class BatchRunQuery {
 
     private static final String SELECT = """
             select b.id, b.batch_type, b.batch_date, b.status, b.started_at, b.finished_at,
-                   b.rows_in, b.rows_out, b.error_message, u.login_id
+                   b.rows_in, b.rows_out, b.error_message, b.summary::text as summary, u.login_id
             from ops.batch_runs b
             join ops.users u on u.id = b.triggered_by""";
 
-    private static final RowMapper<BatchRunView> ROW = (rs, rowNum) -> new BatchRunView(
+    private final RowMapper<BatchRunView> row = (rs, rowNum) -> new BatchRunView(
             rs.getLong("id"), BatchType.valueOf(rs.getString("batch_type")),
             rs.getObject("batch_date", LocalDate.class), BatchStatus.valueOf(rs.getString("status")),
             seconds(rs.getTimestamp("started_at")), seconds(rs.getTimestamp("finished_at")),
             (Integer) rs.getObject("rows_in"), (Integer) rs.getObject("rows_out"),
-            rs.getString("error_message"), new BatchRunView.TriggeredBy(rs.getString("login_id")));
+            rs.getString("error_message"), json(rs.getString("summary")),
+            progressOf(rs.getLong("id"), rs.getString("status")),
+            new BatchRunView.TriggeredBy(rs.getString("login_id")));
 
     private final JdbcTemplate jdbc;
+    private final ObjectMapper objectMapper;
+    private final BatchProgress progress;
 
-    public BatchRunQuery(JdbcTemplate jdbc) {
+    public BatchRunQuery(JdbcTemplate jdbc, ObjectMapper objectMapper, BatchProgress progress) {
         this.jdbc = jdbc;
+        this.objectMapper = objectMapper;
+        this.progress = progress;
+    }
+
+    /** 진행 단계는 RUNNING 행에만 — 끝난 뒤 지우기 전 잠깐 남아 있어도 끝난 행엔 붙이지 않는다. */
+    private BatchProgress.Step progressOf(long batchRunId, String status) {
+        return BatchStatus.RUNNING.name().equals(status) ? progress.of(batchRunId).orElse(null) : null;
+    }
+
+    /** summary(jsonb) — 앱이 쓴 값이라 읽기 실패는 버그다. 그대로 던진다. */
+    private JsonNode json(String text) {
+        if (text == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(text);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("batch_runs.summary 읽기 실패", e);
+        }
     }
 
     public Optional<BatchRunView> find(long batchRunId) {
-        return jdbc.query(SELECT + " where b.id = ?", ROW, batchRunId).stream().findFirst();
+        return jdbc.query(SELECT + " where b.id = ?", row, batchRunId).stream().findFirst();
     }
 
     public BatchRunView get(long batchRunId) {
@@ -78,7 +104,7 @@ public class BatchRunQuery {
         pageArgs.add((long) page * size);
         List<BatchRunView> items = jdbc.query(
                 SELECT + where + " order by " + column + " " + direction + ", b.id " + direction + " limit ? offset ?",
-                ROW, pageArgs.toArray());
+                row, pageArgs.toArray());
         return new PageImpl<>(items, PageRequest.of(page, size), total);
     }
 

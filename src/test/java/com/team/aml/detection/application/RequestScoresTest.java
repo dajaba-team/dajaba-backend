@@ -293,6 +293,9 @@ class RequestScoresTest {
 
         assertThat(first.run().status()).isEqualTo(BatchStatus.SUCCEEDED);   // 다시 보낼 실패 없음
         assertThat(first.summary().retryableFailed()).isZero();
+        // 성공이어도 다시 보내도 같은 실패는 summary 에 — 화면 "경보 점검에서 원인 확인" 건수(failed - retryable) (SCRUM-349)
+        assertThat(first.run().summary().get("failed").asInt()).isEqualTo(1);
+        assertThat(first.run().summary().get("retryable").asInt()).isZero();
         assertThat(state(ok)).isEqualTo("SCORED/-");
         assertThat(state(unsupported)).isEqualTo("FAILED/RULE_NOT_SUPPORTED");
         assertThat(scoreRows(unsupported)).isZero();   // 0점·LOW 로 바꾸지 않음
@@ -306,7 +309,7 @@ class RequestScoresTest {
     }
 
     @Test
-    void 묶음_호출이_실패하면_그_묶음만_FAILED_코드없음_앞_묶음은_그대로() {   // 11-2
+    void 묶음_호출이_실패하면_그_묶음만_FAILED_코드없음_앞_묶음은_그대로() throws Exception {   // 11-2
         LocalDate d = newDate();
         long run = scanned(d);
         long a1 = alert(run, d), a2 = alert(run, d), a3 = alert(run, d), a4 = alert(run, d);
@@ -316,6 +319,10 @@ class RequestScoresTest {
 
         assertThat(r.summary()).isEqualTo(new ScoreBatchSummary(4, 2, 2, 2, 2, 1, List.of("xgb-test")));
         assertThat(r.run().status()).isEqualTo(BatchStatus.FAILED);
+        // 202 비동기라 건수는 batch_runs.summary 로 — FAILED 여도 남는다. retryable 은 다시 보낼 실패만 (SCRUM-349, 계약서 5.6 B3)
+        assertThat(r.run().summary()).isEqualTo(om.readTree(   // jsonb 라 키 순서는 안 봄
+                "{\"requested\":4,\"scored\":2,\"failed\":2,\"retryable\":2,\"chunks\":{\"total\":2,\"failed\":1},"
+                        + "\"model_versions\":[\"xgb-test\"]}"));
         assertThat(state(a1)).isEqualTo("SCORED/-");
         assertThat(state(a2)).isEqualTo("SCORED/-");
         assertThat(state(a3)).isEqualTo("FAILED/-");
@@ -338,6 +345,8 @@ class RequestScoresTest {
         assertThat(sent).containsExactly(List.of(alertNo(a1), alertNo(a2)));
         assertThat(second.summary()).isEqualTo(new ScoreBatchSummary(2, 2, 0, 0, 1, 0, List.of("xgb-test")));
         assertThat(second.run().status()).isEqualTo(BatchStatus.SUCCEEDED);
+        assertThat(second.run().summary().get("retryable").asInt()).isZero();
+        assertThat(second.run().summary().get("scored").asInt()).isEqualTo(2);
 
         sent.clear();
         ScoreBatchResult third = runOnce(d);           // 성공한 날도 다시 누를 수 있다 (V012)
@@ -385,15 +394,21 @@ class RequestScoresTest {
     }
 
     @Test
-    void 앱_재시작으로_남은_RUNNING_점수_배치는_FAILED로() {
+    void 앱_재시작으로_남은_RUNNING_점수_배치는_FAILED로_이_앱이_뜬_뒤_만든_행은_그대로() {   // #168 리뷰
         LocalDate d = newDate();
-        long id = jdbc.queryForObject("insert into ops.batch_runs(batch_type, batch_date, status, triggered_by) "
-                + "values ('SCORE_REQUEST', ?, 'RUNNING', 1) returning id", Long.class, d);
+        String insert = "insert into ops.batch_runs(batch_type, batch_date, status, triggered_by, started_at) "
+                + "values ('SCORE_REQUEST', ?, 'RUNNING', 1, ?) returning id";
+        long abandoned = jdbc.queryForObject(insert, Long.class, d, Timestamp.from(Instant.parse("2026-01-01T00:00:00Z")));
+        // 리스너가 ApplicationReadyEvent 전에 큐 메시지로 만든 행(이 앱이 시작된 뒤) — 지금 도는 중이라 건드리면 안 됨
+        long mine = jdbc.queryForObject(insert, Long.class, d.plusDays(1), Timestamp.from(Instant.now()));
 
         recorder.failAbandonedScoreBatches();
 
-        assertThat(jdbc.queryForObject("select status from ops.batch_runs where id = ?", String.class, id))
+        assertThat(jdbc.queryForObject("select status from ops.batch_runs where id = ?", String.class, abandoned))
                 .isEqualTo("FAILED");
+        assertThat(jdbc.queryForObject("select status from ops.batch_runs where id = ?", String.class, mine))
+                .isEqualTo("RUNNING");
+        jdbc.update("update ops.batch_runs set status = 'FAILED' where id = ?", mine);   // 다른 테스트에 남기지 않게
     }
 
     @Test

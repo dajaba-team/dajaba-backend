@@ -221,6 +221,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   - 요청 `StrIndexRequest(reportNo, draftId, approvedAt, typologies, sections)` — `report_no` `STR-YYYY-NNNNNN`, `draft_id` 승인된 초안 번호(`DRF-…`, AI 가 그 초안 facts 로 케이스 계좌를 대조), `approved_at` UTC `Z`, `typologies` 경보 유형 문자열 0~3개(중복 400), `sections[]` = `StrIndexSection(section, text)` 1개 이상 — 7항목 또는 옛 6섹션 **한 세트만**, 같은 섹션 두 번 400, `text` 1~1200. 모양 검사는 AI 가 해요(틀리면 AI 400 → `AI_INVALID_REQUEST` 502). 같은 문서번호를 같은 본문으로 다시 보내면 같은 응답(AI 멱등), 다른 본문이면 400
   - 응답 `StrIndexResponse(producedAt, reportNo, status, skipReason, chunkCount, retrievalVersion, raw)` — `status` enum `StrIndexStatus`(`INDEXED`·`SKIPPED`, 둘 다 AI 200), `skipReason` enum `StrIndexSkipReason`(`RAW_ACCOUNT` 계좌 원문 · `TOO_SHORT` 공백 뺀 글 합 100자 미만 · `DISABLED` AI 스위치 꺼짐 · `NO_FACTS` 그 초안 facts 가 AI 에 없음 — 목업 모드로 만든 초안 등)
   - **응답 확인**(`requireStrIndexResponse`, 하나라도 틀리면 502 `AI_BAD_RESPONSE` + 실패 행·재시도 없음, 메시지에 칸 이름만) — 필수 칸 여섯 개(`produced_at`·`report_no`·`status`·`skip_reason`·`chunk_count`·`retrieval_version`, 값 null 은 아래대로) · `produced_at` Z · `report_no` = 보낸 값 · 모르는 상태·이유는 실패 · `chunk_count` 정수 · `INDEXED` ↔ 이유 null·`chunk_count` 1 이상 **상한 이하**(상한 = 공백만이 아닌 섹션마다 ⌊글자 수 ÷ 600⌋ + 1 의 합. 글자 수는 원문 그대로 코드 포인트로 셈 — AI `len` 과 같음, 앞뒤 공백 안 뺌. 공백만·null 섹션은 0)·`retrieval_version` 앞뒤 공백 뺀 1자 이상(AI 와 같은 공백 처리) · `SKIPPED` ↔ 이유 있음·`chunk_count` 0·`retrieval_version` 문자열 또는 null. AI 스키마와 다르게 두는 곳: `report_no` 대조와 청크 수 상한은 백엔드가 더 봐요(엄격 — AI 는 단락을 1200자 안쪽 청크로 나눔(SCRUM-361), 공백만인 섹션은 뺌. 문장을 앞부터 1200자까지 채우고 넘치면 다음 청크로 넘겨서 이웃 두 청크 합이 늘 1200 을 넘음 → 청크 k 개면 글자 수 > 600×(k−1). 옛 AI(섹션 하나 = 청크 하나)도 이 상한 안). `SKIPPED` 의 `retrieval_version` null 을 `DISABLED` 에만 묶지 않아요(AI 도 안 묶음)
+  - 색인 실패·SKIPPED 는 로그와 ai_call_logs 로만 확인, 다시 보내기 없음(MVP)
   - `ai_call_logs.ai_version` 은 검색과 같은 규칙(마지막 `@` 뒤 소문자 16진 8자면 `@` + 8자만, 아니면 null — 성공·2xx 확인 실패 행 모두, 응답 DTO 는 받은 그대로), `generation_id` 늘 null. 로그·`ai_call_logs` 에 섹션 글을 넣지 않아요 — 공통 줄(경로·`request_id`·시간·회차·코드)만
   - **호출·재시도 루프는 참고 사례 검색과 같은 것**(`selfBudgetedPost`) — 바이트 송수신 · 연결 뒤 `X-Budget-Ms` · 오류 코드 허용 목록(검색과 같은 7개) + 고정 문구 · 감사 저장 시간은 예산에서 뺌 · 2xx 본문은 JSON 값 하나만·같은 칸 두 번 없음(뒤에 다른 값이 붙거나 같은 키가 겹치면 재시도 없는 `AI_BAD_RESPONSE`, 검색도 같음 — 추가 검토 1·2. 뒤따르는 공백·줄바꿈은 그대로 성공). 다른 건 경로·예산(30초)·문구·응답 확인뿐이에요
   - **30초는 AI 호출 기준, 감사 저장 시간은 빠짐 — 다른 호출과 같음.** 감사 DB 가 밀리면(풀 고갈 등) 저장 시간만큼 뒤 스레드를 더 잡아요(시도마다 저장, 연결 대기는 공통 풀 한도). 감사 저장을 따로 떼면 기록 유실·순서 문제가 생겨 309 에서 되돌린 결정 그대로 — 발표 뒤 여섯 호출과 같이 다뤄요(추가 검토 1)
@@ -245,9 +246,11 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | 케이스 생성 | `POST /api/v1/admin/batches/open-cases?date=` | cases | `OPEN_CASES` |
 | 상태 조회 | `GET /api/v1/admin/batches/{batch_run_id}`, 목록 `GET /api/v1/admin/batches` | shared | — |
 
-- 전부 **관리자가 API로 직접 실행**, 스케줄러 없음. 응답은 `batch_runs` 한 행. 적재·케이스 생성은 `@Async` + 202(`batch_run_id`로 상태 조회), 룰 스캔·점수는 동기. [레퍼런스 §11, 계약서 B4 — 11/4 준혁 제안·지윤 동의]
+- 전부 **관리자가 API로 직접 실행**, 스케줄러 없음. 응답은 `batch_runs` 한 행. **네 배치 모두 202**(`batch_run_id`로 상태 조회) — RUNNING 을 커밋하고 응답할 상태를 읽은 뒤 앱 작업 실행기(`applicationTaskExecutor`)로 넘겨요. 실행기가 거절하면 FAILED 를 남기고 500. 거절(409)은 지금처럼 요청 때 바로. [레퍼런스 §11, 계약서 B4 — 11/4 준혁 제안·지윤 동의] 〔룰 스캔·점수는 원래 동기 200 — 룰 스캔이 30초~2분 걸려 화면 제한 시간(120초)을 넘는 날(9/1)이 생겨 202로 바꿈, SCRUM-349. 노션 계약서 B2·B3·B5 반영 필요〕
+- **결과 상세는 `batch_runs.summary`**(jsonb, V019, SCRUM-349) — 상태 조회·목록이 그대로 내려줘요. 룰 스캔 `{"alerts_by_rule":[{"rule_id","rule_version","alert_count"}]}`(0건 룰 포함), 점수 `{"requested","scored","failed","retryable","chunks":{"total","failed"},"model_versions"}`(예전 점수 응답과 같은 이름, 다시 보낼 실패가 남아 FAILED 여도 남음). 적재·케이스 생성·실행 중·예외로 끝난 실패는 `null`. 건수·룰·모델 이름만 — 계좌·금액·본문 없음.
+- **실행 중 진행 단계는 `progress`**(SCRUM-349) — 적재·룰 스캔이 `RUNNING`일 때만 `{done, total, current}`, 그 밖은 `null`. 적재는 파일 단계 4개(`PATTERNS`→`ACCOUNTS`→`TRANSACTIONS`→`VERIFY`), 룰 스캔은 룰 단위(`current` = 룰 ID). **앱 메모리**(`shared/batch/BatchProgress`)에만 둬요 — 룰 스캔은 한 트랜잭션이라 DB에 쓰면 커밋 전엔 안 보이고, 재시작하면 사라지지만 그때 `RUNNING`은 기동 정리로 `FAILED`가 돼요. 단일 서버 전제.
 - `batch_runs` 상태 기록은 본 작업과 **다른 트랜잭션**으로 커밋해요. 본 작업이 롤백돼도 "실패했다"는 기록이 남게. [SD 명세 §12 〔초안〕]
-- 앱이 배치 도중 죽으면 `RUNNING`이 남아요. 기동 시 오래된 `RUNNING`을 `FAILED`로 정리해요. [SD 명세 §12 〔초안〕, CASES 명세 §8.3]
+- 앱이 배치 도중 죽으면 `RUNNING`이 남아요. **앱이 뜰 때 네 유형 모두 남은 `RUNNING`을 `FAILED`로 정리**해요 — 각 Recorder(`DatasetLoadRecorder`·`RuleScanRecorder`·`ScoreBatchRecorder`·`OpenCasesRecorder`)의 `ApplicationReadyEvent`. 단일 서버 전제라 시작 시각으로 거르지 않아요(뜰 때 RUNNING 은 전부 버려진 작업, 남기면 앱 안 실행기 경로에선 영원히 RUNNING). 단 **큐 리스너가 `ApplicationReadyEvent`보다 먼저 떠서 처리 중인 행은 빼요**(#168 리뷰) — 케이스 생성은 실행 번호 advisory lock(`RunOpenCasesOnce`가 처리 내내 쥠)을 못 잡는 행을 건너뛰고, 점수는 이 앱이 시작되기 전(JVM 시작 시각)에 만든 행만 정리해요(연쇄 리스너가 이 프로세스에서 새로 만든 점수 행 제외). 여러 대로 늘리면 다시 정해야 해요. [SD 명세 §12 〔초안〕, CASES 명세 §8.3, 케이스 생성은 SCRUM-246]
 
 **재실행 규칙 (확정)** [안건 14·21]
 | 배치 | 성공한 날짜를 다시 돌리면 | 실행 중이면 |
@@ -258,7 +261,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 - 점수 재시도는 별도 유형(`SCORE_RETRY`) 없이 **점수 배치 재실행**으로 해요. [안건 14·21] 〔SD 명세 v0.1의 `SCORE_RETRY`·`/score/retry` 제안은 회의 결정 이전 안〕
 - **점수 배치 재실행은 `V012`로 해결** (SCRUM-100, 11/10) — `batch_runs_succeeded_uq`에서 `SCORE_REQUEST`만 빼서 성공한 날도 다시 돌려요(남은 대상만). 같은 날짜 동시 실행은 앱이 막아요(시작 락 + `RUNNING` 확인). 적재·룰 스캔은 그대로 성공 1회.
 - **케이스 생성 재실행은 `V014`로 해결** (SCRUM-238, 11/15) — 같은 인덱스에서 `OPEN_CASES`도 빼요. 대상은 SCORED·아직 케이스 없는 경보뿐이라 새로 HIGH가 된 경보만 케이스가 돼요. 동시 시작은 advisory lock(`6_006_001`) + `RUNNING` 확인.
-- **배치 상태는 `SUCCEEDED`·`FAILED` 둘만**(`PARTIAL` 없음), 건수는 `rows_in`·`rows_out`만(`metrics` 칸 없음). 점수 배치의 실패·재처리 건수는 점수 응답에 바로 와요. [11/8 준혁 확정, 프론트 API 계약서 5.6]
+- **배치 상태는 `SUCCEEDED`·`FAILED` 둘만**(`PARTIAL` 없음), 건수는 `rows_in`·`rows_out`, 룰 스캔·점수의 상세는 `summary`(위). 점수 배치의 실패·재처리 건수는 `summary.failed`·`summary.retryable`. [11/8 준혁 확정, 프론트 API 계약서 5.6 — 202 전환으로 응답 → `summary`, SCRUM-349]
 - 〔확인 필요: 케이스 생성(`OPEN_CASES`)은 위 표에선 성공한 날도 재실행 허용인데 인덱스는 아직 성공 1회로 막혀 있어요(#94 리뷰). 적재는 원천 전체를 한 번 넣는 작업이라 **날짜와 상관없이** 성공 1회·실행 1개로 막아야 해요(적재일이 다르면 같은 키가 아님). 멈춘 `RUNNING`을 정리한 뒤 이전 작업이 늦게 끝나도 새 실행을 덮어쓰지 않는 조건도 필요해요. 테스트는 `batch_runs` 상태뿐 아니라 이전 작업이 경보·점수 같은 업무 데이터를 늦게 저장하는 경우까지(노션 미결 4번). SD 명세는 조건에 `RUNNING`도 넣자고 제안. `batch_type` 값도 회의 문서는 `SCORE`, 코드는 `SCORE_REQUEST` — 코드 값을 유지하는 방향〕
 
 ## 7. 사람이 보는 번호 (`DisplayNumber`) [레퍼런스 §8.7]
@@ -484,8 +487,8 @@ try {
 | 큐 | 메시지 | 보내는 곳 → 받는 곳 | 담당 |
 |---|---|---|---|
 | `case.open-cases` | `BatchRunMessage`(OPEN_CASES `batch_run_id`, `RUNNING` 커밋 뒤) | `RequestOpenCases` → `OpenCasesMessageListener` → `RunOpenCasesOnce` | 지윤 |
-| `batch.score` | `BatchRunMessage`(성공한 RULE_SCAN `batch_run_id`) | `RunRuleScan` → `ScoreChainListener` → `ScoreAfterRuleScan` | 준혁(SCRUM-349) |
-| `batch.open-cases` | `BatchRunMessage`(SUCCEEDED SCORE_REQUEST `batch_run_id`) | `RequestScores` → `OpenCasesChainListener`(cases) → `OpenCasesAfterScore` → `RequestOpenCases` | 준혁(SCRUM-349) |
+| `batch.score` | `BatchRunMessage`(성공한 RULE_SCAN `batch_run_id`) | `RunRuleScan` → `ScoreChainListener` → `ScoreAfterRuleScan`. 못 보내면 `InAppJob` → `ScoreChainInApp`(앱 실행기) | 준혁(SCRUM-349) |
+| `batch.open-cases` | `BatchRunMessage`(SUCCEEDED SCORE_REQUEST `batch_run_id`) | `RequestScores` → `OpenCasesChainListener`(cases) → `OpenCasesAfterScore` → `RequestOpenCases`. 못 보내면 `InAppJob` → `OpenCasesChainInApp` | 준혁(SCRUM-349) |
 | `str.pdf.generate` | `StrReportPdfMessage`(`draft_id`, PDF `PENDING` 커밋 뒤) | `StrReportPdfTrigger` → `StrReportPdfMessageListener` → `GenerateStrReportPdf` | 채영 |
 
 **ACK·재시도·DLQ 기본값** (`spring.rabbitmq.listener.simple`)

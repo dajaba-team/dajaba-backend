@@ -12,6 +12,8 @@ import com.team.aml.cases.domain.RejectionReasonCode;
 import com.team.aml.cases.domain.ScoreBand;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.Instant;
 import java.util.List;
 
@@ -26,7 +28,7 @@ import java.util.List;
  *   <li>aggregates — 근거 거래 전체로 통화별 유입·유출, 경유·자기계좌 거래 제외 (SCRUM-179)</li>
  *   <li>current_draft — null 로 둔다(11/22 확정, SCRUM-245). 번호 current_draft_no 만 주고 초안은 화면이 S2 를 따로 부른다</li>
  *   <li>customer — null 로 둔다(11/22 MVP 확정, SCRUM-245). 출처 ops.customer_attributes 는 있으나 화면·계약 모양 전</li>
- *   <li>prior_alerts — [] (SCRUM-239)</li>
+ *   <li>prior_alerts — 같은 법인의 이전 경보 최근 20건, 계좌는 가린 값만 (detection FindAlertsByEntity, SCRUM-239)</li>
  * </ul>
  * 화면 응답이라 Object 칸(alert 등)은 모양이 정해지면 record 로 바꾼다.
  */
@@ -37,7 +39,7 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
                                  String investigatorNotes, CloseReason closeReason, GetCaseDetail.LatestScore latestScore,
                                  OpenedScoreResponse openedScore,
                                  CaseAggregates aggregates, CaseSummaryResult.Summary latestSummary, String currentDraftNo, Object currentDraft,
-                                 List<Object> priorAlerts, List<GetCaseDetail.History> history,
+                                 List<PriorAlertResponse> priorAlerts, List<GetCaseDetail.History> history,
                                  List<CaseAction> availableActions) {
 
     public CaseDetailResponse {
@@ -59,6 +61,21 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
         }
     }
 
+    /**
+     * 이전 경보 한 건 (C2 prior_alerts, SCRUM-239). 원본 account_key·내부 경보 id·정답 칸은 없다.
+     * score 는 점수 전·실패면 null, case_no 는 그 경보로 만든 케이스가 없으면 null.
+     */
+    public record PriorAlertResponse(String alertNo, String ruleId, LocalDate batchDate, LocalDateTime referenceTs,
+                                     String accountRef, String accountNo, String scoreStatus, BigDecimal score,
+                                     String caseNo) {
+
+        static PriorAlertResponse from(GetCaseDetail.PriorAlertItem p) {
+            return new PriorAlertResponse(p.alertNo(), p.ruleId(), p.batchDate(), p.referenceTs(),
+                    AccountDisplay.ref(p.accountKey()), AccountDisplay.maskedNo(p.accountKey()), p.scoreStatus(),
+                    p.score(), p.caseNo());
+        }
+    }
+
     static CaseDetailResponse from(GetCaseDetail.Result r) {
         return new CaseDetailResponse(r.caseNo(), r.status(), AccountDisplay.ref(r.accountKey()),
                 AccountDisplay.maskedNo(r.accountKey()), r.entityId(), r.assignee(), r.latestScore().score(),
@@ -66,6 +83,7 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
                 r.rejectionReasonCode(), r.version(), r.createdAt(), r.updatedAt(), r.alert(), null, r.investigatorNotes(),
                 r.closeReason(), r.latestScore(), OpenedScoreResponse.from(r.openedScore()), r.aggregates(),
                 r.latestSummary(),
-                CaseChangeResponse.draftNo(r.currentDraftId()), null, List.of(), r.history(), r.availableActions());
+                CaseChangeResponse.draftNo(r.currentDraftId()), null,
+                r.priorAlerts().stream().map(PriorAlertResponse::from).toList(), r.history(), r.availableActions());
     }
 }

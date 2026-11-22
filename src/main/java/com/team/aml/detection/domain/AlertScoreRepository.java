@@ -2,6 +2,7 @@ package com.team.aml.detection.domain;
 
 import com.team.aml.shared.ai.AiDtos.ScoreResult;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -24,6 +25,6 @@ public interface AlertScoreRepository {
     /** FAILED + 코드(null 가능). 이미 SCORED 인 경보는 건드리지 않는다. */
     void markFailed(long alertId, String failureCode);
 
-    /** 앱이 죽어 RUNNING 으로 남은 점수 배치를 FAILED 로. 바꾼 행 수. */
-    int failRunningScoreBatches(String message);
+    /** startedBefore 보다 먼저 시작한 RUNNING 점수 배치만 FAILED 로 — 재시작 정리(이 앱이 만든 행은 제외). 정리한 건수. */
+    int failRunningScoreBatches(String message, Instant startedBefore);
 }

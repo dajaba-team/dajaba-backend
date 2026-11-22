@@ -136,6 +136,17 @@ class RunRuleScanTest {
         assertThat(result.alertsByRule()).extracting(RuleAlertCount::ruleId)
                 .containsExactly("R01_FAN_OUT", "R02_FAN_IN", "R03_FX_RELAY", "R04_CYCLE", "R05_SCATTER_GATHER", "R06_GATHER_SCATTER");   // rule_id 순
         assertThat(result.alertsByRule()).allSatisfy(r -> assertThat(r.ruleVersion()).isEqualTo(1));
+
+        // 202 비동기라 룰별 경보 수는 batch_runs.summary 로 — 0건 룰까지 같은 순서·같은 값 (SCRUM-349)
+        JsonNode byRule = result.run().summary().get("alerts_by_rule");
+        assertThat(byRule).hasSize(6);
+        for (int i = 0; i < 6; i++) {
+            RuleAlertCount expected = result.alertsByRule().get(i);
+            assertThat(byRule.get(i).get("rule_id").asText()).isEqualTo(expected.ruleId());
+            assertThat(byRule.get(i).get("rule_version").asInt()).isEqualTo(expected.ruleVersion());
+            assertThat(byRule.get(i).get("alert_count").asInt()).isEqualTo(expected.alertCount());
+        }
+        assertThat(byRule.findValues("alert_count")).extracting(JsonNode::asInt).contains(0);
     }
 
     @Test
