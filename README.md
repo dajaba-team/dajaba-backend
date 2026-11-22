@@ -66,19 +66,20 @@ DB를 완전히 초기화하려면 `docker compose down -v` (볼륨 삭제 → �
 
 ### 시연 데이터 만들기 — 빈 DB에서 케이스까지 (리허설 순서, SCRUM-250)
 
-위 3단계까지는 **로그인만** 돼요. 목록에 케이스가 보이려면 데이터를 넣고 배치 네 개를 순서대로 돌려야 해요.
+위 3단계까지는 **로그인만** 돼요. 목록에 케이스가 보이려면 데이터를 넣고 배치 네 개를 순서대로 돌린 뒤, 관리자가 조사역에게 배정해야 해요.
 
 1. **원본 파일 3개를 `./data`에** — Kaggle 「IBM Transactions for Anti Money Laundering (AML)」의 HI-Small 세 파일 `HI-Small_Trans.csv`·`HI-Small_accounts.csv`·`HI-Small_Patterns.txt`를 리포 루트 `data/`에 그대로 둬요(파일 이름 바꾸지 않음, 커밋 안 됨). compose 앱은 `./data`를 `/data`로 읽기 전용으로 붙이고, IDE는 `AML_DATASET_DIR` 기본 `./data`.
    - `src/test/resources/fixtures/ibm_small/`(축소본)은 **테스트 전용**이에요. 계좌 파일이 없고, 적재는 HI-Small 전체 건수(508만)로 검사해서 축소본을 넣으면 `DATASET_FILES_MISSING` 또는 "검증값 불일치"로 실패해요.
 2. **`.env`에 케이스 등급 경계값 세 줄** — `AML_CASE_POLICY_VERSION`·`AML_CASE_POLICY_LOW_TO_MEDIUM`·`AML_CASE_POLICY_MEDIUM_TO_HIGH`(값은 노션 `.env`). 없으면 4단계가 `POLICY_NOT_CONFIGURED`로 거절돼요. rc2 실제 모델로 바꾸는 날 값이 바뀌어요(SCRUM-329).
-3. **`admin`으로 로그인해 배치 네 개를 순서대로** — 프론트 `/admin/batches` 화면 버튼으로 하거나, swagger로 아래를 차례로 불러요. 날짜는 **`2022-09-07` 하나만** 써요(경계값을 9/7 기준으로 골라서, 다른 날은 HIGH가 하루 30건을 넘을 수 있어요 — 11/20 #개발).
+3. **`admin`으로 로그인해 배치 네 개를 순서대로 돌리고 담당을 배정** — 프론트 `/admin/batches` 화면 버튼으로 하거나, swagger로 아래를 차례로 불러요. 날짜는 **`2022-09-07` 하나만** 써요(경계값을 9/7 기준으로 골라서, 다른 날은 HIGH가 하루 30건을 넘을 수 있어요 — 11/20 #개발).
 
    | 순서 | 호출 | 응답 | 다음으로 넘어가는 때 |
    |---|---|---|---|
    | ① 적재 | `POST /api/v1/admin/batches/load` | 202 (뒤에서 돌아요) | `GET /api/v1/admin/batches` 맨 위 `LOAD_DATASET`이 `SUCCEEDED`. 수 분 걸려요. **한 번만** — 다시 하려면 `docker compose down -v` |
    | ② 룰 스캔 | `POST /api/v1/admin/batches/rule-scan?date=2022-09-07` | 200 (끝날 때까지 기다림) | 경보 건수가 응답에 |
    | ③ 점수 | `POST /api/v1/admin/batches/score?date=2022-09-07` | 200 — **일부 실패가 있어도 200** | 응답의 `scored`·`failed`. 다시 부르면 실패분만 재처리 |
-   | ④ 케이스 생성 | `POST /api/v1/admin/batches/open-cases?date=2022-09-07` | 202 | 배치 목록 맨 위 `OPEN_CASES`가 `SUCCEEDED` → `inv01`로 `/cases` |
+   | ④ 케이스 생성 | `POST /api/v1/admin/batches/open-cases?date=2022-09-07` | 202 | 배치 목록 맨 위 `OPEN_CASES`가 `SUCCEEDED` |
+   | ⑤ 담당 배정 | 프론트 케이스 상세 [담당자 배정] 또는 `POST /api/v1/cases/{case_no}/assign` `{"assignee": "inv01", "version": …}` — **`admin`만** | 200 | 그 뒤 `inv01`로 `/cases` → 「내 담당」에 보임. 조사역은 새 케이스를 스스로 맡을 수 없어요(SCRUM-339) |
 
    - ③은 기본(`AML_AI_MOCK=true`)이면 **목업 점수**(경보마다 0.05~0.95 고르게)라 HIGH 수가 실제와 달라요. 실제 점수는 dajaba-AI를 띄우고 `AML_AI_MOCK=false`(위 「진짜 AI로 띄우기」).
    - 실제 모델로 처음 채점할 때는 **rc2로 바꾼 뒤** ③을 처음 돌려요. rc1으로 먼저 돌리면 R03·R05·R06 경보가 `RULE_NOT_SUPPORTED`로 남고 다시 보내지 않아요(#155).
