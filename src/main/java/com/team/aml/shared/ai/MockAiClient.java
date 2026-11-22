@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -266,6 +267,69 @@ public class MockAiClient implements AiClient {
         raw.set("generation_meta", om.valueToTree(meta));
         return new AskResponse(producedAt, request.caseNo(), generationId, rule.status(), rule.kind(), rule.reason(),
                 answer, cites, evidenceIds, checks, meta, raw);
+    }
+
+    /**
+     * 참고 사례 검색 목업 고정 목록 (SCRUM-309, 설계 6.3). 1·2번은 계약 예시(`reference_search_response_found.json`) 값,
+     * 3번은 AI 코퍼스에 있는 문서. 점수 내림차순. 유형·출처는 요청에서 채운다.
+     */
+    private record MockReference(String docId, String docTitle, String publisher, Integer year, int page,
+                                 double score, String chunkId) {}
+
+    private static final List<MockReference> MOCK_REFERENCES = List.of(
+            new MockReference("fintrac-underground-banking-2023",
+                    "Updated indicators: Laundering the proceeds of crime through underground banking schemes (FINTRAC-2023-OA002)",
+                    "FINTRAC", 2023, 4, 0.52, "34be9b160cd475045c1334f957180e4947e328af50bb33bf14912c12e11dbe9d"),
+            new MockReference("ffiec-redflags",
+                    "BSA/AML Manual Appendix F: Money Laundering and Terrorist Financing Red Flags",
+                    "FFIEC", null, 6, 0.41, "d994051861cbf0626d93ddce92d3af60ec5d69797774c1200b1df9a8adbd2234"),
+            new MockReference("fatf-pml-2018", "Professional Money Laundering",
+                    "FATF", 2018, 12, 0.33, "0000000000000000000000000000000000000000000000000000000000000003"));
+
+    /** 이 유형이 하나라도 있으면 EMPTY — 채영 님 화면이 FOUND·EMPTY 둘 다 목업으로 보이게. */
+    private static final String MOCK_EMPTY_TYPOLOGY = "SCATTER_GATHER";
+    private static final String MOCK_RETRIEVAL_VERSION = "mock-retrieval";
+    /** 고정 목록은 공개 문서라 출처는 늘 PUBLIC. 지금 AI 가 받는 출처도 이것 하나(`APPROVED_STR` 는 400, SCRUM-310 전). */
+    private static final String PUBLIC_SOURCE = "PUBLIC";
+
+    /**
+     * 보낸 유형에 `SCATTER_GATHER` 가 있으면 EMPTY, 그 밖은 FOUND 고정 목록을 `top_k` 만큼. 결과 `typologies` 는 보낸 유형
+     * 그대로, `source_type` 은 PUBLIC — 실제 응답 확인(`requireReferenceSearchResponse`)을 통과하는 모양.
+     * `source_types` 가 `["PUBLIC"]` 이 아니면(`APPROVED_STR`·빈 목록·중복·모르는 값) 실제 AI 처럼 400 → AI_INVALID_REQUEST.
+     */
+    @Override
+    public ReferenceSearchResponse searchReferences(String draftId, ReferenceSearchRequest request) {
+        if (!List.of(PUBLIC_SOURCE).equals(request.sourceTypes())) {
+            throw new AiClientException("AI_INVALID_REQUEST", "AI 참고 사례 검색 요청이 거부됨", Map.of(), 502);
+        }
+        List<String> typologies = request.typologies() == null ? List.of() : List.copyOf(request.typologies());
+        String sourceType = PUBLIC_SOURCE;
+        boolean empty = typologies.contains(MOCK_EMPTY_TYPOLOGY);
+        int count = empty ? 0 : Math.max(0, Math.min(MOCK_REFERENCES.size(), request.topK()));
+        ReferenceSearchStatus status = count == 0 ? ReferenceSearchStatus.EMPTY : ReferenceSearchStatus.FOUND;
+
+        List<ReferenceResult> results = MOCK_REFERENCES.subList(0, count).stream()
+                .map(m -> new ReferenceResult(m.docId(), m.docTitle(), m.publisher(), m.year(), m.page(), m.score(),
+                        m.chunkId(), typologies, sourceType))
+                .toList();
+        ReferenceSearchMeta meta = new ReferenceSearchMeta(false, results.size(), 0);
+        String producedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+
+        ObjectNode raw = om.createObjectNode()
+                .put("produced_at", producedAt)
+                .put("status", status.name());
+        ArrayNode rawResults = raw.putArray("results");
+        for (ReferenceResult r : results) {
+            ObjectNode item = rawResults.addObject()
+                    .put("doc_id", r.docId()).put("doc_title", r.docTitle()).put("publisher", r.publisher())
+                    .put("year", r.year()).put("page", r.page()).put("score", r.score()).put("chunk_id", r.chunkId());
+            typologies.forEach(item.putArray("typologies")::add);
+            item.put("source_type", r.sourceType());
+        }
+        raw.put("retrieval_version", MOCK_RETRIEVAL_VERSION);
+        raw.putObject("search_meta").put("degraded", meta.degraded())
+                .put("candidates", meta.candidates()).put("latency_ms", meta.latencyMs());
+        return new ReferenceSearchResponse(producedAt, status, results, MOCK_RETRIEVAL_VERSION, meta, raw);
     }
 
     @Override

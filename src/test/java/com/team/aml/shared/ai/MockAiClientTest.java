@@ -167,4 +167,65 @@ class MockAiClientTest {
         assertThat(res.evidenceIds()).isEmpty();
         WebClientAiClient.requireAskResponse(request, res.raw());
     }
+
+    // --- SCRUM-309 참고 사례 검색 목업 ------------------------------------------------
+
+    private static ReferenceSearchRequest search(int topK, String... typologies) {
+        return new ReferenceSearchRequest(List.of(typologies), null, topK, List.of("PUBLIC"));
+    }
+
+    @Test
+    void searchReferences_returns_three_found_results_that_pass_response_check() {
+        ReferenceSearchRequest request = search(5, "FAN_IN");
+        ReferenceSearchResponse res = client.searchReferences("DRF-000001", request);
+
+        assertThat(res.status()).isEqualTo(ReferenceSearchStatus.FOUND);
+        assertThat(res.results()).extracting(ReferenceResult::docId)
+                .containsExactly("fintrac-underground-banking-2023", "ffiec-redflags", "fatf-pml-2018");
+        assertThat(res.results()).extracting(ReferenceResult::score).containsExactly(0.52, 0.41, 0.33);
+        assertThat(res.results()).allSatisfy(r -> {
+            assertThat(r.typologies()).containsExactly("FAN_IN");   // 보낸 유형 그대로
+            assertThat(r.sourceType()).isEqualTo("PUBLIC");
+        });
+        assertThat(res.results().get(1).year()).isNull();   // 예시 값 그대로
+        assertThat(res.producedAt()).endsWith("Z");
+        assertThat(res.searchMeta().candidates()).isEqualTo(3);
+        WebClientAiClient.requireReferenceSearchResponse(request, res.raw());   // 목업도 실제 응답 확인을 통과
+    }
+
+    @Test
+    void searchReferences_with_scatter_gather_is_empty_and_passes_response_check() {
+        ReferenceSearchRequest request = search(5, "CYCLE", "SCATTER_GATHER");
+        ReferenceSearchResponse res = client.searchReferences("DRF-000001", request);
+
+        assertThat(res.status()).isEqualTo(ReferenceSearchStatus.EMPTY);
+        assertThat(res.results()).isEmpty();
+        assertThat(res.searchMeta().candidates()).isZero();
+        WebClientAiClient.requireReferenceSearchResponse(request, res.raw());
+    }
+
+    @Test
+    void searchReferences_cuts_to_top_k_when_smaller_than_three() {
+        ReferenceSearchRequest request = search(2, "CYCLE");
+        ReferenceSearchResponse res = client.searchReferences("DRF-000001", request);
+
+        assertThat(res.results()).extracting(ReferenceResult::docId)
+                .containsExactly("fintrac-underground-banking-2023", "ffiec-redflags");
+        WebClientAiClient.requireReferenceSearchResponse(request, res.raw());
+    }
+
+    @Test
+    void searchReferences_rejects_source_types_other_than_public_like_real_ai() {   // 검토 2 M7
+        for (List<String> sources : List.of(List.of("APPROVED_STR"), List.of("PUBLIC", "APPROVED_STR"),
+                List.of("PUBLIC", "PUBLIC"), List.<String>of())) {
+            ReferenceSearchRequest request = new ReferenceSearchRequest(List.of("CYCLE"), null, 5, sources);
+            Throwable e = org.assertj.core.api.Assertions.catchThrowable(() -> client.searchReferences("DRF-000001", request));
+            assertThat(e).as(sources.toString()).isInstanceOfSatisfying(AiClientException.class, ae -> {
+                assertThat(ae.code()).isEqualTo("AI_INVALID_REQUEST");
+                assertThat(ae.httpStatus()).isEqualTo(502);
+            });
+        }
+        ReferenceSearchResponse ok = client.searchReferences("DRF-000001", search(5, "CYCLE"));
+        assertThat(ok.results()).extracting(ReferenceResult::sourceType).containsOnly("PUBLIC");
+    }
 }

@@ -179,6 +179,36 @@ public final class AiDtos {
                               JsonNode raw) {}
 
     /**
+     * POST /v1/references/search 요청 (규약 5.5, SCRUM-309). 유형·출처는 문자열 — shared 가 detection 유형 enum 을
+     * 참조하지 않는다(잘못된 값은 AI 400 → `AI_INVALID_REQUEST`). `query` 는 유스케이스가 앞뒤 공백을 지우고 빈 값이면
+     * null 로 넘기고, `AiClient` 는 받은 값 그대로 보낸다(trim·길이 재검사 안 함). 초안 번호는 본문에 없다(인자로 따로).
+     */
+    public record ReferenceSearchRequest(List<String> typologies, String query, int topK, List<String> sourceTypes) {}
+
+    /** 참고 사례 검색 상태 (규약 5.5). 둘 다 AI 200. 모르는 값은 `requireReferenceSearchResponse` 가 먼저 거부한다. */
+    public enum ReferenceSearchStatus { FOUND, EMPTY }
+
+    /**
+     * 참고 사례 한 건 (AI `ReferenceResult`). 본문 칸 없음. `typologies` 는 그 청크 태그 전부라 검색 가능한 5종 밖
+     * 유형도 올 수 있어 문자열. `publisher`·`year` 는 없으면 null.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ReferenceResult(String docId, String docTitle, String publisher, Integer year, int page,
+                                  double score, String chunkId, List<String> typologies, String sourceType) {}
+
+    /** 참고 사례 검색 `search_meta` (AI `ReferenceSearchMeta`). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ReferenceSearchMeta(boolean degraded, int candidates, int latencyMs) {}
+
+    /**
+     * POST /v1/references/search 응답 (규약 5.5). 칸 전부 + 원문 `raw`. 규칙은 `WebClientAiClient.requireReferenceSearchResponse`
+     * 가 record 로 바꾸기 전에 확인한다. 저장하지 않는 응답이다.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ReferenceSearchResponse(String producedAt, ReferenceSearchStatus status, List<ReferenceResult> results,
+                                          String retrievalVersion, ReferenceSearchMeta searchMeta, JsonNode raw) {}
+
+    /**
      * GET /v1/health (AI `main.py` `health()`, SCRUM-22 — 미결 28). 전부 String, 없으면 null.
      * `db` = "ok" | "down:<예외>", `llm` = "ok" | "missing_key". `generator_version` 은 AI 가 주지 않는다.
      */

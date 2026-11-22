@@ -46,6 +46,7 @@ import java.util.regex.Pattern;
  *  - 헤더 X-Internal-Key, X-Request-Id(MDC request_id, 없거나 공백이면 UUID, 재시도해도 같은 값), X-Budget-Ms(그 시도 때 남은 예산 ms)
  *  - 화면 요청 전체 90초(재시도 포함) = aml.ai.timeout-seconds. 점수는 500건 묶음마다 같은 한도.
  *    질문 답변(/v1/cases/ask)만 전체 30초 = aml.ai.ask-timeout-seconds (규약 6.2, SCRUM-291). 한도는 호출마다 따로 잰다.
+ *    참고 사례 검색(/v1/references/search)만 전체 8초 = aml.ai.reference-search-timeout-seconds (규약 6.2, SCRUM-309).
  *  - 재시도 1회, 남은 시간 안에서만. 판별은 HTTP 5xx 가 아니라 코드/원인으로:
  *      재시도 O: LLM_UNAVAILABLE·MODEL_UNAVAILABLE·DB_UNAVAILABLE, 또는 연결 단계 실패(CONNECT_STAGE_FAILURES — 연결 거부·이름 조회 실패·경로 없음)
  *      재시도 X: 그 밖의 5xx·4xx·409, 연결 타임아웃(ConnectTimeoutException)·응답 타임아웃, 보낸 뒤 끊김(CLOSED_AFTER_SEND)
@@ -100,6 +101,8 @@ public class WebClientAiClient implements AiClient {
     private final int maxBatch;
     private final Duration budget;
     private final Duration askBudget;
+    private final Duration referenceSearchBudget;
+    private static final String SEARCH_PATH = "/v1/references/search";
 
     public WebClientAiClient(WebClient aiWebClient, AmlProperties props, ObjectMapper om, AiCallLogWriter writer) {
         this.http = aiWebClient;
@@ -109,6 +112,7 @@ public class WebClientAiClient implements AiClient {
         this.maxBatch = props.ai().maxBatch();
         this.budget = Duration.ofSeconds(props.ai().timeoutSeconds());
         this.askBudget = Duration.ofSeconds(props.ai().askTimeoutSeconds());
+        this.referenceSearchBudget = Duration.ofSeconds(props.ai().referenceSearchTimeoutSeconds());
     }
 
     @Override
@@ -484,6 +488,271 @@ public class WebClientAiClient implements AiClient {
         return new AiClientException("AI_BAD_RESPONSE", "AI 질문 답변 응답 확인 실패: " + field, Map.of(), 502);
     }
 
+    /**
+     * 참고 사례 검색 — 이 호출만 referenceSearchBudget(8초). `draftId` 는 기록에만(본문 없음). SCRUM-309
+     *
+     * 다른 호출과 달리 자기 호출·재시도 루프를 쓴다(추가 검토 1·2). 재시도 횟수·남은 시간·대상 판정은 {@link #withRetry} 와
+     * 같고 분류는 {@link #classify} 그대로. 다른 점:
+     *  - 요청·응답을 바이트로 주고받고 `om` 으로 직접 읽는다 — Jackson 코덱 DEBUG/TRACE 로그에 검색어·문서 제목이 안 남게
+     *  - `X-Budget-Ms` 는 연결을 잡은 뒤(요청 헤더 커밋 직전) 절대 마감 시각에서 남은 ms 로 계산. 1ms 미만이면 보내지 않고
+     *    재시도 없는 AI_TIMEOUT
+     *  - AI 오류 본문은 검색이 낼 수 있는 코드만 그대로, 나머지는 AI_BAD_RESPONSE. 메시지는 코드별 고정 문구(AI 문장 안 씀)
+     * 기록은 다섯 호출과 같이 호출 스레드에서 시도마다 저장한다 — 8초는 AI 호출(재시도 포함) 기준, 감사 DB 저장 시간은 빠짐:
+     * 재시도 전 저장에 쓴 시간만큼 다음 시도 마감을 뒤로 민다(추가 검토 3). 그래서 전체 걸린 시간은 8초 + 저장 시간까지 늘 수 있다.
+     * 기록 행의 `generation_id` 는 늘 null(계약에 없는 칸), 버전은 `retrieval_version` 만 넘긴다.
+     */
+    @Override
+    public ReferenceSearchResponse searchReferences(String draftId, ReferenceSearchRequest request) {
+        byte[] body;
+        try {
+            body = om.writeValueAsBytes(request);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new AiClientException("AI_BAD_RESPONSE", "AI 참고 사례 검색 요청 만들기 실패", Map.of(), 502);
+        }
+        String requestId = MDC.get("request_id");
+        if (requestId == null || requestId.isBlank()) requestId = UUID.randomUUID().toString();
+        long deadline = System.nanoTime() + referenceSearchBudget.toNanos();
+        Classified last = null;
+        for (int tries = 1; tries <= 2; tries++) {
+            Duration remaining = Duration.ofNanos(deadline - System.nanoTime());
+            if (remaining.toMillis() <= 0) break;                 // 남은 시간 없으면 재시도 안 함
+            long start = System.nanoTime();
+            Response response;
+            try {
+                response = searchExchange(body, requestId, deadline, remaining);
+            } catch (RuntimeException e) {
+                long ended = System.nanoTime();
+                long leftNanos = deadline - ended;                // 시도가 끝난 순간 남은 AI 예산을 확정
+                last = classify(e);
+                Integer status = e instanceof ClassifiedResponse cr ? cr.aiStatus : null;
+                recordSearchAttempt(requestId, tries, status, last.ex().code(), start, null, draftId);
+                log.warn("ai call failed path={} request_id={} code={} http={} retryable={} cause={} ms={} try={}",
+                        SEARCH_PATH, requestId, last.ex().code(), last.ex().httpStatus(), last.retryable(), last.cause(),
+                        (ended - start) / 1_000_000, tries);
+                if (!last.retryable()) break;
+                deadline = System.nanoTime() + leftNanos;         // 감사 저장 시간은 빼고 다음 시도 마감을 다시 잡음
+                continue;
+            }
+            ReferenceSearchResponse value;
+            try {
+                requireReferenceSearchResponse(request, response.body());
+                value = readRecord(response.body(), "status", ReferenceSearchResponse.class, "AI 참고 사례 검색 응답 파싱 실패");
+            } catch (RuntimeException e) {
+                Classified rejected = classify(e);
+                AiClientException bad = rejected.ex();
+                recordSearchAttempt(requestId, tries, response.status(), bad.code(), start, response.body(), draftId);
+                log.warn("ai response rejected path={} request_id={} code={} http={} cause={} ms={} try={}",
+                        SEARCH_PATH, requestId, bad.code(), response.status(), rejected.cause(), msSince(start), tries);
+                throw bad;
+            }
+            recordSearchAttempt(requestId, tries, response.status(), null, start, response.body(), draftId);
+            log.info("ai call ok path={} request_id={} ms={} try={}", SEARCH_PATH, requestId, msSince(start), tries);
+            return value;
+        }
+        throw last != null ? last.ex() : new AiClientException("AI_TIMEOUT", "AI 서버 응답 시간 초과", Map.of(), 502);
+    }
+
+    /**
+     * 검색 한 시도 — 본문은 바이트(코덱 본문 로그 없음). `X-Budget-Ms` 는 `httpRequest` 콜백에서 정한다: WebClient 가 연결을
+     * 잡은 뒤 요청을 쓰기 직전에 부르는 자리라, 풀 대기·연결 수립에 쓴 시간이 빠진 값이 나간다({@link #searchBudgetMs}).
+     * 응답 처리는 {@link #exchange} 와 같고, 오류 본문만 {@link #searchErrorBody} 로 걸러 넘긴다.
+     */
+    private Response searchExchange(byte[] body, String requestId, long deadline, Duration remaining) {
+        return http.post().uri(SEARCH_PATH).contentType(MediaType.APPLICATION_JSON)
+                .header(HEADER_INTERNAL_KEY, internalKey)
+                .header(HEADER_REQUEST_ID, requestId)
+                .httpRequest(req -> req.getHeaders().set(HEADER_BUDGET_MS,
+                        String.valueOf(searchBudgetMs(deadline, System.nanoTime()))))
+                .bodyValue(body)
+                .exchangeToMono(resp -> {
+                    int status = resp.statusCode().value();
+                    if (resp.statusCode().is2xxSuccessful()) {
+                        return resp.bodyToMono(byte[].class)
+                                .switchIfEmpty(Mono.error(badResponse("AI 응답 본문이 비어 있음")))
+                                .map(bytes -> new Response(status, readSearchJson(bytes)))
+                                .onErrorMap(e -> withStatus(status, e));
+                    }
+                    return resp.bodyToMono(byte[].class)
+                            .map(this::readSearchErrorJson)
+                            .defaultIfEmpty(om.createObjectNode())
+                            .map(this::searchErrorBody)
+                            .<Response>flatMap(err -> Mono.error(toClassified(status, err)))
+                            .onErrorMap(e -> withStatus(status, e));
+                }).timeout(remaining).block();
+    }
+
+    private JsonNode readSearchJson(byte[] bytes) {
+        try {
+            JsonNode node = om.readTree(bytes);
+            if (node == null || node.isMissingNode()) throw badResponse("AI 응답 본문이 비어 있음");
+            return node;
+        } catch (java.io.IOException e) {
+            throw new AiClientException("AI_BAD_RESPONSE", "AI 응답 처리 실패", Map.of(), 502);
+        }
+    }
+
+    /** 오류 본문 — JSON 이 아니면 빈 객체(코드 없음 → AI_BAD_RESPONSE, {@link #exchange} 의 디코딩 실패와 같은 결과). */
+    private JsonNode readSearchErrorJson(byte[] bytes) {
+        try {
+            JsonNode node = om.readTree(bytes);
+            return node != null && node.isObject() ? node : om.createObjectNode();
+        } catch (java.io.IOException e) {
+            return om.createObjectNode();
+        }
+    }
+
+    /**
+     * 검색이 낼 수 있는 AI 오류 코드(AI `errors.py` — 검색 입구 4종 + 공통 인증·내부 오류 + 재시도 대상 공통 `MODEL_UNAVAILABLE`)와
+     * 코드별 고정 문구. 여기 없는 코드는 AI_BAD_RESPONSE 로 바꾼다 — AI 가 준 `code`·`message` 문자열이 로그·`error_code`·
+     * 화면 오류 응답으로 가지 않게(추가 검토 2).
+     */
+    private static final Map<String, String> SEARCH_ERROR_MESSAGES = Map.of(
+            "INVALID_REQUEST", "AI 참고 사례 검색 요청이 거부됨",
+            "UNAUTHENTICATED", "AI 서버 인증 실패",
+            "LLM_UNAVAILABLE", "AI 참고 사례 검색 일시 실패. 잠시 후 다시 시도",
+            "LLM_BUDGET_EXCEEDED", "AI 사용 한도 초과",
+            "MODEL_UNAVAILABLE", "AI 모델 일시 사용 불가. 잠시 후 다시 시도",
+            "DB_UNAVAILABLE", "AI 서버 DB 일시 실패. 잠시 후 다시 시도",
+            "INTERNAL", "AI 서버 오류");
+    private static final String SEARCH_UNKNOWN_ERROR_MESSAGE = "AI 응답 처리 실패";
+
+    /** 오류 본문 → `code`·`message` 두 칸만 다시 만든다. 아는 코드면 그대로 + 고정 문구, 모르면 AI_BAD_RESPONSE. */
+    private JsonNode searchErrorBody(JsonNode err) {
+        JsonNode code = err.get("code");
+        String known = code != null && code.isTextual() && SEARCH_ERROR_MESSAGES.containsKey(code.textValue())
+                ? code.textValue() : null;
+        return om.createObjectNode()
+                .put("code", known != null ? known : "AI_BAD_RESPONSE")
+                .put("message", known != null ? SEARCH_ERROR_MESSAGES.get(known) : SEARCH_UNKNOWN_ERROR_MESSAGE);
+    }
+
+    /**
+     * 보낼 `X-Budget-Ms` — 마감까지 남은 정수 ms. 1 미만이면 보내지 않는다(AI 는 0 을 400 으로 거부) — 응답 대기 타임아웃과
+     * 같은 예외라 {@link #classify} 가 재시도 없는 AI_TIMEOUT 으로 분류한다(추가 검토 2).
+     */
+    static long searchBudgetMs(long deadlineNanos, long nowNanos) {
+        long ms = (deadlineNanos - nowNanos) / 1_000_000;
+        if (ms < 1) throw ReadTimeoutException.INSTANCE;
+        return ms;
+    }
+
+    /**
+     * 검색 시도 한 행 — 다섯 호출과 같이 호출 스레드에서 {@link #recordAttempt} 로 바로 저장. 기록 본문은 `retrieval_version`
+     * 하나만 넘겨 `generation_id` 는 늘 null(응답에 계약 밖 칸이 와도), 걸린 시간은 HTTP 시도 시간.
+     */
+    private void recordSearchAttempt(String requestId, int attempt, Integer status, String errorCode, long start,
+                                     JsonNode body, String draftId) {
+        JsonNode logBody = null;
+        if (body != null) {
+            ObjectNode only = om.createObjectNode();
+            if (body.has("retrieval_version")) only.set("retrieval_version", body.get("retrieval_version"));
+            logBody = only;
+        }
+        recordAttempt(SEARCH_PATH, requestId, attempt, status, errorCode, start, logBody, "DRAFT", draftId);
+    }
+
+    /** AI `ReferenceResult.score`(cosine) 범위. */
+    private static final double REFERENCE_SCORE_MIN = -1.0;
+    private static final double REFERENCE_SCORE_MAX = 1.0;
+
+    /**
+     * 참고 사례 검색 응답 확인 (규약 5.5 = AI `reference_search.py` 규칙 + 보낸 값 대조, SCRUM-309).
+     * 틀리면 AI_BAD_RESPONSE 502, 메시지엔 칸 이름만(검색어·문서 제목 없음). AI 스키마보다 더 보는 곳: 결과 수 ≤ 보낸
+     * `top_k`(스키마는 10), 결과 유형 ∩ 보낸 유형 ≠ ∅, `source_type` ∈ 보낸 목록, `produced_at` 은 Z 만.
+     * 안 보는 곳: 결과 유형 원소가 AI 유형 이름인지, 모르는 칸(원칙 4 — 받아 둠).
+     */
+    static void requireReferenceSearchResponse(ReferenceSearchRequest sent, JsonNode r) {
+        for (String field : List.of("produced_at", "status", "results", "retrieval_version", "search_meta")) {
+            if (!r.hasNonNull(field)) throw badReference(field);
+        }
+        ReferenceSearchStatus status = referenceStatus(r.get("status"));
+        if (!isUtcZ(r.get("produced_at"))) throw badReference("produced_at");
+        JsonNode results = r.get("results");
+        if (!results.isArray()) throw badReference("results");
+        JsonNode version = r.get("retrieval_version");
+        if (!version.isTextual() || version.textValue().isEmpty()) throw badReference("retrieval_version");
+        requireReferenceMeta(r.get("search_meta"));
+
+        if ((status == ReferenceSearchStatus.FOUND) == results.isEmpty()) throw badReference("results");   // FOUND ↔ 1건 이상
+        if (results.size() > sent.topK()) throw badReference("results");
+
+        Set<String> sentTypologies = sent.typologies() == null ? Set.of() : Set.copyOf(sent.typologies());
+        Set<String> sentSources = sent.sourceTypes() == null ? Set.of() : Set.copyOf(sent.sourceTypes());
+        double previous = Double.POSITIVE_INFINITY;
+        for (JsonNode item : results) {
+            if (!item.isObject()) throw badReference("results");
+            for (String field : List.of("doc_id", "doc_title", "chunk_id")) {
+                if (!item.path(field).isTextual()) throw badReference(field);
+            }
+            JsonNode page = item.get("page");
+            if (page == null || !page.isIntegralNumber() || !page.canConvertToInt()) throw badReference("page");
+            JsonNode publisher = item.get("publisher");   // 칸은 있어야 함(값 null 허용)
+            if (publisher == null || !(publisher.isNull() || publisher.isTextual())) throw badReference("publisher");
+            JsonNode year = item.get("year");
+            if (year == null || !(year.isNull() || (year.isIntegralNumber() && year.canConvertToInt()))) {
+                throw badReference("year");
+            }
+            JsonNode score = item.get("score");
+            if (score == null || !score.isNumber() || score.doubleValue() < REFERENCE_SCORE_MIN
+                    || score.doubleValue() > REFERENCE_SCORE_MAX || score.doubleValue() > previous) {
+                throw badReference("score");
+            }
+            previous = score.doubleValue();
+            requireReferenceTypologies(item.get("typologies"), sentTypologies);
+            JsonNode source = item.get("source_type");
+            if (source == null || !source.isTextual() || !sentSources.contains(source.textValue())) {
+                throw badReference("source_type");
+            }
+        }
+    }
+
+    /** 결과 유형 — 문자열 1개 이상, 보낸 유형과 하나 이상 겹침. 검색 5종 밖 태그가 섞여도 됨. */
+    private static void requireReferenceTypologies(JsonNode tags, Set<String> sent) {
+        if (tags == null || !tags.isArray() || tags.isEmpty()) throw badReference("typologies");
+        boolean overlaps = false;
+        for (JsonNode tag : tags) {
+            if (!tag.isTextual()) throw badReference("typologies");
+            overlaps |= sent.contains(tag.textValue());
+        }
+        if (!overlaps) throw badReference("typologies");
+    }
+
+    /** AI `ReferenceSearchMeta` — `degraded` 참거짓, `candidates`·`latency_ms` 0 이상 정수. */
+    private static void requireReferenceMeta(JsonNode m) {
+        if (!m.isObject()) throw badReference("search_meta");
+        if (!m.path("degraded").isBoolean()) throw badReference("search_meta.degraded");
+        for (String field : List.of("candidates", "latency_ms")) {
+            JsonNode v = m.get(field);
+            if (v == null || !v.isIntegralNumber() || !v.canConvertToInt() || v.intValue() < 0) {
+                throw badReference("search_meta." + field);
+            }
+        }
+    }
+
+    private static ReferenceSearchStatus referenceStatus(JsonNode v) {
+        if (v.isTextual()) {
+            for (ReferenceSearchStatus s : ReferenceSearchStatus.values()) {
+                if (s.name().equals(v.textValue())) return s;
+            }
+        }
+        throw badReference("status");
+    }
+
+    /** UTC `Z` 로 끝나고 ISO 시각으로 읽히는가 (규약 1.4). */
+    private static boolean isUtcZ(JsonNode v) {
+        if (!v.isTextual() || !v.textValue().endsWith("Z")) return false;
+        try {
+            Instant.parse(v.textValue());
+            return true;
+        } catch (DateTimeParseException e) {
+            return false;
+        }
+    }
+
+    private static AiClientException badReference(String field) {
+        return new AiClientException("AI_BAD_RESPONSE", "AI 참고 사례 검색 응답 확인 실패: " + field, Map.of(), 502);
+    }
+
     @Override
     public HealthResponse health() {
         return get("/v1/health", r -> new HealthResponse(text(r, "status"), text(r, "db"), text(r, "llm"),
@@ -642,6 +911,7 @@ public class WebClientAiClient implements AiClient {
                 case "/v1/str/verify" -> text(body, "verifier_version");
                 case "/v1/cases/summary" -> text(body.path("generation_meta"), "prompt_version");
                 case "/v1/cases/ask" -> askVersion(body.path("generation_meta"));
+                case "/v1/references/search" -> versionOrNull(body.get("retrieval_version"));
                 default -> null;
             };
             writer.write(AiCallLog.create(path, requestId, attempt, status, errorCode, durationMs,

@@ -134,6 +134,45 @@ class AmlPropertiesDefaultsTest {
                 .hasMessageContaining("aml");
     }
 
+    // --- SCRUM-309 참고 사례 검색 설정 ------------------------------------------------
+
+    @Test
+    void 정상_참고_사례_검색은_기본_꺼짐_8초이고_환경_변수로_켜진다() {
+        for (String profile : List.of("local", "test", "prod")) {
+            AmlProperties.Ai ai = ai(profile, Map.of());
+            assertThat(ai.referenceSearchEnabled()).as(profile).isFalse();
+            assertThat(ai.referenceSearchTimeoutSeconds()).as(profile).isEqualTo(8);
+        }
+        assertThat(ai("local", Map.of("AML_AI_REFERENCE_SEARCH_ENABLED", "true")).referenceSearchEnabled()).isTrue();
+    }
+
+    @Test
+    void 경계_yml에_칸이_빠져도_8초_false이고_예전_8칸_생성자도_같은_기본값이다() {
+        MockEnvironment env = new MockEnvironment().withProperty("aml.ai.base-url", "http://x");
+        AmlProperties.Ai bound = Binder.get(env).bind("aml", AmlProperties.class).get().ai();
+        assertThat(bound.referenceSearchTimeoutSeconds()).isEqualTo(8);
+        assertThat(bound.referenceSearchEnabled()).isFalse();
+
+        AmlProperties.Ai legacy = new AmlProperties.Ai("http://ai", "key", 90, 500, false, 30, true, 5);
+        assertThat(legacy.referenceSearchTimeoutSeconds()).isEqualTo(8);
+        assertThat(legacy.referenceSearchEnabled()).isFalse();
+        assertThat(legacy.askEnabled()).isTrue();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "reference-search-timeout-seconds=\"{0}\"")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"", "0", "-1"})
+    void 실패_reference_search_timeout_seconds가_빈_값_0_음수면_묶기에_실패한다(String value) {
+        MockEnvironment env = new MockEnvironment().withProperty("aml.ai.reference-search-timeout-seconds", value);
+        assertThatThrownBy(() -> Binder.get(env).bind("aml", AmlProperties.class))
+                .isInstanceOf(BindException.class);
+    }
+
+    @Test
+    void 실패_AML_AI_REFERENCE_SEARCH_ENABLED가_참거짓으로_못_읽는_값이면_묶기에_실패한다() {
+        assertThatThrownBy(() -> ai("local", Map.of("AML_AI_REFERENCE_SEARCH_ENABLED", "maybe")))
+                .isInstanceOf(BindException.class);
+    }
+
     private static AmlProperties.Ai ai(String profile, Map<String, Object> osEnv) {
         SpringApplicationBuilder app = new SpringApplicationBuilder(Empty.class)
                 .web(WebApplicationType.NONE)
