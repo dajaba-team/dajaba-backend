@@ -455,7 +455,6 @@ try {
 |---|---|---|---|
 | `case.open-cases` | `BatchRunMessage`(OPEN_CASES `batch_run_id`, `RUNNING` 커밋 뒤) | `RequestOpenCases` → `OpenCasesMessageListener` → `RunOpenCasesOnce` | 지윤 |
 | `str.pdf.generate` | `StrReportPdfMessage`(`draft_id`, PDF `PENDING` 커밋 뒤) | `StrReportPdfTrigger` → `StrReportPdfMessageListener` → `GenerateStrReportPdf` | 채영 |
-| `batch.*` | 〔협의〕 | 배치 단계 잇기 | 준혁 |
 
 **ACK·재시도·DLQ 기본값** (`spring.rabbitmq.listener.simple`)
 
