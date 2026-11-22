@@ -52,9 +52,16 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
-/** 적재 API(202·비동기)와 배치 조회 API (SCRUM-70). 룰 스캔·점수도 202 (SCRUM-349). */
+/**
+ * 적재 API(202·비동기)와 배치 조회 API (SCRUM-70). 룰 스캔·점수 202, 배치 자동 연쇄의 앱 안 경로(RabbitMQ 없음)도 여기서 한 바퀴 (SCRUM-349).
+ * 연쇄는 테스트 프로필에서 꺼져 있어 이 클래스만 켠다 — 케이스 생성까지 가려고 등급 경계값도 넣는다.
+ */
 @Testcontainers
-@SpringBootTest
+@SpringBootTest(properties = {
+        "aml.batch.chain-enabled=true",
+        "aml.case-policy.version=test-v1",
+        "aml.case-policy.low-to-medium=0.5",
+        "aml.case-policy.medium-to-high=0.9"})
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class DatasetLoadApiTest {
@@ -177,7 +184,7 @@ class DatasetLoadApiTest {
     }
 
     @Test
-    void 룰_스캔과_점수도_202로_받고_결과_상세는_배치_조회의_summary로() throws Exception {   // SCRUM-349
+    void 룰_스캔은_202이고_RabbitMQ_없이도_점수와_케이스_생성이_앱_안에서_이어진다() throws Exception {   // SCRUM-349
         waitUntilFinished(body(mvc.perform(post("/api/v1/admin/batches/load").with(admin()).with(csrf())).andReturn(), 202)
                 .get("batch_run_id").asLong());
 
@@ -203,17 +210,24 @@ class DatasetLoadApiTest {
                 .with(admin()).with(csrf())).andReturn(), 409);   // 거절은 지금처럼 요청 때 바로
         assertThat(again.get("error").get("code").asText()).isEqualTo("BATCH_ALREADY_DONE");
 
+        // 연쇄(앱 안 경로) — 누르지 않아도 같은 날짜 점수 → 케이스 생성이 뒤에서 이어진다. 요청자는 룰 스캔을 누른 사람
+        JsonNode chainedScore = waitForRuns("SCORE_REQUEST", 1).get(0);
+        assertThat(chainedScore.get("status").asText()).isEqualTo("SUCCEEDED");
+        assertThat(chainedScore.get("triggered_by").get("login_id").asText()).isEqualTo("system");
+        JsonNode summary = chainedScore.get("summary");
+        for (String field : List.of("requested", "scored", "failed", "retryable", "chunks", "model_versions")) {
+            assertThat(summary.has(field)).as(field).isTrue();
+        }
+        assertThat(summary.get("requested").asInt()).isEqualTo(chainedScore.get("rows_in").asInt());
+        assertThat(waitForRuns("OPEN_CASES", 1).get(0).get("status").asText()).isEqualTo("SUCCEEDED");
+
+        // 화면 [점수 재처리]도 202 — 성공하면 케이스 생성이 보충 실행으로 한 번 더 이어진다
         JsonNode score = body(mvc.perform(post("/api/v1/admin/batches/score").param("date", "2022-09-01")
                 .with(admin()).with(csrf())).andReturn(), 202);
         assertThat(score.get("batch_type").asText()).isEqualTo("SCORE_REQUEST");
         assertThat(score.get("status").asText()).isEqualTo("RUNNING");
-        JsonNode scored = waitUntilFinished(score.get("batch_run_id").asLong());
-        assertThat(scored.get("status").asText()).isEqualTo("SUCCEEDED");
-        JsonNode summary = scored.get("summary");
-        for (String field : List.of("requested", "scored", "failed", "retryable", "chunks", "model_versions")) {
-            assertThat(summary.has(field)).as(field).isTrue();
-        }
-        assertThat(summary.get("requested").asInt()).isEqualTo(scored.get("rows_in").asInt());
+        assertThat(waitUntilFinished(score.get("batch_run_id").asLong()).get("status").asText()).isEqualTo("SUCCEEDED");
+        assertThat(waitForRuns("OPEN_CASES", 2)).allSatisfy(r -> assertThat(r.get("status").asText()).isEqualTo("SUCCEEDED"));
 
         JsonNode listed = body(mvc.perform(get("/api/v1/admin/batches").param("type", "RULE_SCAN").with(admin()))
                 .andReturn(), 200);
@@ -338,6 +352,23 @@ class DatasetLoadApiTest {
             assertThat(error.get("error").get("details").get("parameter").asText()).as(param[0] + "=" + param[1])
                     .isEqualTo(param[0]);
         }
+    }
+
+    /** 그 유형의 2022-09-01 실행이 count 개 생기고 모두 끝날 때까지 — 연쇄가 뒤에서 만든 행을 기다린다. 최신순. */
+    private JsonNode waitForRuns(String type, int count) throws Exception {
+        for (int i = 0; i < 100; i++) {
+            JsonNode items = body(mvc.perform(get("/api/v1/admin/batches").param("type", type)
+                    .param("date", "2022-09-01").with(admin())).andReturn(), 200).get("items");
+            boolean allDone = true;
+            for (JsonNode item : items) {
+                allDone &= !"RUNNING".equals(item.get("status").asText());
+            }
+            if (items.size() >= count && allDone) {
+                return items;
+            }
+            Thread.sleep(200);
+        }
+        throw new AssertionError(type + " " + count + "건이 20초 안에 끝나지 않았습니다");
     }
 
     private JsonNode waitUntilFinished(long id) throws Exception {

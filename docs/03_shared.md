@@ -474,8 +474,8 @@ try {
 | 큐 | 메시지 | 보내는 곳 → 받는 곳 | 담당 |
 |---|---|---|---|
 | `case.open-cases` | `BatchRunMessage`(OPEN_CASES `batch_run_id`, `RUNNING` 커밋 뒤) | `RequestOpenCases` → `OpenCasesMessageListener` → `RunOpenCasesOnce` | 지윤 |
-| `batch.score` | `BatchRunMessage`(성공한 RULE_SCAN `batch_run_id`) | `RunRuleScan` → `ScoreChainListener` → `ScoreAfterRuleScan` | 준혁(SCRUM-349) |
-| `batch.open-cases` | `BatchRunMessage`(SUCCEEDED SCORE_REQUEST `batch_run_id`) | `RequestScores` → `OpenCasesChainListener`(cases) → `OpenCasesAfterScore` → `RequestOpenCases` | 준혁(SCRUM-349) |
+| `batch.score` | `BatchRunMessage`(성공한 RULE_SCAN `batch_run_id`) | `RunRuleScan` → `ScoreChainListener` → `ScoreAfterRuleScan`. 못 보내면 `InAppJob` → `ScoreChainInApp`(앱 실행기) | 준혁(SCRUM-349) |
+| `batch.open-cases` | `BatchRunMessage`(SUCCEEDED SCORE_REQUEST `batch_run_id`) | `RequestScores` → `OpenCasesChainListener`(cases) → `OpenCasesAfterScore` → `RequestOpenCases`. 못 보내면 `InAppJob` → `OpenCasesChainInApp` | 준혁(SCRUM-349) |
 | `str.pdf.generate` | `StrReportPdfMessage`(`draft_id`, PDF `PENDING` 커밋 뒤) | `StrReportPdfTrigger` → `StrReportPdfMessageListener` → `GenerateStrReportPdf` | 채영 |
 
 **ACK·재시도·DLQ 기본값** (`spring.rabbitmq.listener.simple`)

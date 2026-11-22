@@ -171,13 +171,15 @@
 - **정해진 태그 조합은 앱이 뜰 때 0으로 등록해요**(단계 4 × 결과 2, 단계 4 × in·out, 룰 6, 점수 결과 3, 묶음 2). 첫 실행 때 처음 생기면 Prometheus가 처음 읽는 값이 이미 1이라 `increase()`가 그 실행을 0으로 봐요 — 한 번만 도는 원천 적재는 대시보드에 아예 안 나와요. [SCRUM-349 리뷰]
 - 배치·경보 점검 로그에는 배치 번호(`batch_run_id`)·경보 id·룰·건수·코드만 — 계좌·금액은 남기지 않아요. 룰 스캔 경고(경로 검사로 버린 경보)에도 `batch_run_id`를 붙였어요.
 
-**배치 자동 연쇄 (RabbitMQ) — 구현됨 (SCRUM-349)** `AML_BATCH_CHAIN_ENABLED=true` + `AML_RABBITMQ_ENABLED=true`일 때만. 기본 꺼짐.
+**배치 자동 연쇄 — 구현됨 (SCRUM-349)** **항상 켜짐**(켜고 끄는 설정 없음). RabbitMQ 가 켜져 있으면 큐로, 꺼져 있거나 브로커가 받지 않으면 앱 안에서 같은 일을 해요.
 - **룰 스캔 성공 → 같은 날짜 점수 → 점수 `SUCCEEDED` → 같은 날짜 케이스 생성.** 원천 적재는 날짜가 없는 최초 1회라 잇지 않아요. 화면에서 직접 실행한 단계도 성공하면 이어져요(연쇄는 "앞 단계 성공 뒤"에 걸림).
 - 큐 `batch.score`(메시지: 룰 스캔 `batch_run_id`) → `ScoreChainListener` → `ScoreAfterRuleScan` · `batch.open-cases`(메시지: 점수 `batch_run_id`) → cases `OpenCasesChainListener` → `OpenCasesAfterScore` → 기존 `RequestOpenCases`(→ `case.open-cases`). 날짜·요청자(`triggered_by`)는 앞 단계 행에서 읽어요.
+- **앱 안 경로** — 큐로 못 보내면(`JobPublisher` false) `BatchChain`이 `InAppJob(queue, batch_run_id)` 이벤트를 내고, `ScoreChainInApp`(detection)·`OpenCasesChainInApp`(cases)이 받아 앱 작업 실행기에서 큐 리스너와 같은 `ScoreAfterRuleScan`·`OpenCasesAfterScore`를 불러요(보낸 스레드를 붙잡지 않게). 이벤트라 detection 이 cases 를 직접 부르지 않아요. 앱 안 경로는 재시도 없이 로그만(`배치 잇기 … 실패`) — 큐면 재시도할 DB 오류.
 - **점수에 다시 보낼 실패가 남으면(`FAILED`) 멈춰요.** 재처리해서 `SUCCEEDED`가 되면 그때 이어져요.
 - **케이스 생성이 이미 성공한 날짜에 점수 재처리가 성공하면 케이스 생성이 보충 실행으로 한 번 더 돌아요.** 케이스 생성은 성공한 날짜도 다시 돌 수 있고(V014·SCRUM-238, 시작은 같은 날짜 `RUNNING`일 때만 409) 앞 케이스 생성은 점수가 끝나기 전에 시작했으니 "이미 시작됨"에 걸리지 않아요. 재처리로 새로 HIGH가 된 경보만 케이스가 되고 이미 케이스인 경보는 건너뛰어요. [SCRUM-349 리뷰]
 - **같은 메시지가 두 번 와도 한 번만** — 앞 단계가 끝난 시각 뒤에 다음 단계가 이미 시작됐으면 건너뛰어요. 이 확인은 **다음 단계의 시작 잠금 안에서** 해요(`ScoreBatchRecorder`·`OpenCasesRecorder`의 `startUnlessStartedSince`) — 잠금 밖에서 보면 확인과 시작 사이에 직접 실행이 시작해 끝나 한 번 더 돌 수 있어요. 동시 실행은 지금 규칙(시작 advisory lock + `RUNNING`이면 409)이 그대로 막고, 걸리면 건너뛰어요(ACK). [SCRUM-349 리뷰]
-- 꺼져 있거나 브로커가 받지 않으면 로그(`배치 잇기 못 함`)만 — 관리자가 다음 단계를 직접 실행해요. 앞 단계 결과에는 영향 없음.
+- 앱 실행기마저 작업을 거절하면 로그(`배치 잇기 못 함`)만 — 관리자가 다음 단계를 직접 실행해요. 앞 단계 결과에는 영향 없음.
+- `aml.batch.chain-enabled`는 **테스트 프로필만 false**예요(운영 설정 아님, 환경 변수 없음). 단계별 테스트가 뒤에서 이어 도는 다음 단계에 흔들리지 않게 하려는 것이고, 연쇄를 보는 테스트(`DatasetLoadApiTest`)는 직접 켜요.
 - 포기 처리(`JobGiveUpHandler`)는 안 둬요. 예외는 다음 단계 행을 만들기 전(DB 오류)에만 나가고, 행을 만든 뒤 실패는 각 단계가 `FAILED`로 남겨요. 처리 중 앱이 죽으면 재시작 정리가 `FAILED`로 바꾸고, 다시 온 메시지는 위 규칙으로 건너뛰어요.
 - **점수는 리스너 안에서 동기로 돌아요**(끝난 뒤 ACK). RabbitMQ `consumer_timeout`(기본 30분)을 넘기면 브로커가 채널을 닫고 메시지를 다시 보내요 — 다시 온 메시지는 "이미 시작됨"으로 건너뛰고 채널 오류 로그만 남아요. [SCRUM-349 리뷰]
 - **점수 실패 기록까지 실패하면** — DB가 끊겨 `RequestScores`의 `FAILED` 기록도 실패하면 행이 `RUNNING`으로 남아 그 날짜 점수가 409로 막혀요. 큐 재시도로는 다시 온 메시지가 "이미 시작됨"으로 건너뛰어 못 고치니, `ScoreAfterRuleScan`이 1·2·4초 간격으로 `FAILED` 기록을 다시 해 봐요. 그래도 안 되면 에러 로그(`배치 잇기 점수 실패 기록 못 함 batch_run_id=…`) — `03_shared.md` §14 손 정리나 앱 재시작 정리로 풀어요. [SCRUM-349 리뷰]
