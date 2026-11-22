@@ -35,22 +35,25 @@ sequenceDiagram
     end
 
     rect rgb(245,245,245)
-    note over Admin,DB: ② 룰 스캔 — 동기, 한 트랜잭션 (1분 안쪽)
+    note over Admin,DB: ② 룰 스캔 — 202 비동기(SCRUM-349), 한 트랜잭션 (보통 30~45초, 9/1은 2분 넘음)
     Admin->>API: POST /admin/batches/rule-scan?date=2022-09-02
-    API->>BR: start(RULE_SCAN, date) — 이미 SUCCEEDED면 409
-    API->>DET: RunRuleScan(date)
+    API->>BR: start(RULE_SCAN, date) — 이미 SUCCEEDED면 409 → RUNNING
+    API-->>Admin: 202 Accepted {batch_run_id, status: RUNNING}
+    API-)DET: RunRuleScan.run(date) (앱 작업 실행기)
     DET->>DB: 집계 SQL (계좌 × 거래가 있는 분 E, 지금 창·1분 전 창)
     DET->>DET: FanInRule.fires(분) — 거짓→참이면 경보 (룰 6개 같은 틀)
     DET->>DB: INSERT alerts (+ batch_run_id, alert_no) , alert_transactions
-    DET->>BR: finish(SUCCEEDED, rows_in=거래 수, rows_out=경보 수)
-    API-->>Admin: 200 {경보 수}
+    DET->>BR: finish(SUCCEEDED, rows_in=거래 수, rows_out=경보 수, summary.alerts_by_rule)
+    Admin->>API: GET /admin/batches/{id}
+    API-->>Admin: {status, rows_out, summary.alerts_by_rule}
     end
 
     rect rgb(245,245,245)
     note over Admin,AIDB: ③ 점수 — 단일 AI 요청 최대 500개, 결과 저장은 묶음 단위
     Admin->>API: POST /admin/batches/score?date=
-    API->>BR: start(SCORE, date)
-    API->>DET: RequestScores(date)
+    API->>BR: start(SCORE, date) → RUNNING
+    API-->>Admin: 202 Accepted {batch_run_id, status: RUNNING} (SCRUM-349)
+    API-)DET: RequestScores.run(date) (앱 작업 실행기)
     note over DET,AI: 점수 배치와 그 재시도 동안 model_version · feature_version 고정
     loop 최대 500개씩
         DET->>DB: score_status = PENDING 경보 조회
@@ -73,8 +76,9 @@ sequenceDiagram
         end
         note right of DET: 실패 대상은 ④ 실패 경로로 재시도. 성공 결과의 저장 중복 방지 기준은 공통 계약 확인
     end
-    DET->>BR: 성공 · 실패 건수 기록 (배치 요약 상태는 공통 계약 확정 대기)
-    API-->>Admin: 200 {scored, failed}
+    DET->>BR: finish — 다시 보낼 실패 남으면 FAILED, 아니면 SUCCEEDED + summary{requested, scored, failed, retryable, chunks, model_versions}
+    Admin->>API: GET /admin/batches/{id}
+    API-->>Admin: {status, summary}
     end
 
     rect rgb(245,245,245)

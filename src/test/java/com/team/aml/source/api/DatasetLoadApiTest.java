@@ -2,6 +2,7 @@ package com.team.aml.source.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.team.aml.shared.batch.BatchProgress;
 import com.team.aml.shared.batch.BatchRunQuery;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.shared.security.CurrentUser;
@@ -16,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -40,6 +42,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -49,9 +52,16 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
-/** 적재 API(202·비동기)와 배치 조회 API (SCRUM-70). */
+/**
+ * 적재 API(202·비동기)와 배치 조회 API (SCRUM-70). 룰 스캔·점수 202, 배치 자동 연쇄의 앱 안 경로(RabbitMQ 없음)도 여기서 한 바퀴 (SCRUM-349).
+ * 연쇄는 테스트 프로필에서 꺼져 있어 이 클래스만 켠다 — 케이스 생성까지 가려고 등급 경계값도 넣는다.
+ */
 @Testcontainers
-@SpringBootTest
+@SpringBootTest(properties = {
+        "aml.batch.chain-enabled=true",
+        "aml.case-policy.version=test-v1",
+        "aml.case-policy.low-to-medium=0.5",
+        "aml.case-policy.medium-to-high=0.9"})
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class DatasetLoadApiTest {
@@ -106,11 +116,17 @@ class DatasetLoadApiTest {
     @Autowired
     CurrentUser currentUser;
 
+    @SpyBean
+    BatchProgress progress;
+
     private final ObjectMapper json = new ObjectMapper();
 
     @BeforeEach
     void clean() throws IOException {
         jdbc.execute("truncate table ops.transactions_staging, ops.patterns_staging, ops.accounts_staging");
+        jdbc.update("delete from ops.alert_scores");        // 룰 스캔·점수 테스트가 남긴 것 (SCRUM-349)
+        jdbc.update("delete from ops.alert_transactions");
+        jdbc.update("delete from ops.alerts");
         jdbc.update("delete from ops.transactions");
         jdbc.update("delete from ops.source_files");
         jdbc.update("delete from ops.accounts");
@@ -135,6 +151,98 @@ class DatasetLoadApiTest {
         assertThat(done.get("error_message").isNull()).isTrue();
         assertThat(done.get("finished_at").asText()).matches(SYSTEM_TIME);
         assertThat(done.get("triggered_by").get("login_id").asText()).isEqualTo("system");
+        assertThat(done.get("summary").isNull()).isTrue();   // 결과 상세는 룰 스캔·점수만 (SCRUM-349)
+        assertThat(done.get("progress").isNull()).isTrue();   // 진행 단계는 실행 중에만
+        // 적재 단계마다 진행을 적고 끝나면 지운다 (SCRUM-349)
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(progress);
+        order.verify(progress).at(id, 0, 4, "PATTERNS");
+        order.verify(progress).at(id, 1, 4, "ACCOUNTS");
+        order.verify(progress).at(id, 2, 4, "TRANSACTIONS");
+        order.verify(progress).at(id, 3, 4, "VERIFY");
+        order.verify(progress).clear(id);
+    }
+
+    @Test
+    void 실행_중인_배치에만_진행_단계가_붙고_끝나면_없다() throws Exception {   // SCRUM-349
+        long id = jdbc.queryForObject("insert into ops.batch_runs(batch_type, batch_date, status, triggered_by) "
+                + "values ('RULE_SCAN', '2022-09-01', 'RUNNING', 1) returning id", Long.class);
+        progress.at(id, 2, 6, "R03_FX_RELAY");
+        try {
+            JsonNode running = body(mvc.perform(get("/api/v1/admin/batches/" + id).with(admin())).andReturn(), 200);
+            assertThat(running.get("progress").get("done").asInt()).isEqualTo(2);
+            assertThat(running.get("progress").get("total").asInt()).isEqualTo(6);
+            assertThat(running.get("progress").get("current").asText()).isEqualTo("R03_FX_RELAY");
+            JsonNode listed = body(mvc.perform(get("/api/v1/admin/batches").with(admin())).andReturn(), 200);
+            assertThat(listed.get("items").get(0).get("progress").get("current").asText()).isEqualTo("R03_FX_RELAY");
+
+            jdbc.update("update ops.batch_runs set status = 'FAILED' where id = ?", id);   // 지우기 전에 끝나도
+            JsonNode finished = body(mvc.perform(get("/api/v1/admin/batches/" + id).with(admin())).andReturn(), 200);
+            assertThat(finished.get("progress").isNull()).isTrue();
+        } finally {
+            progress.clear(id);
+        }
+    }
+
+    @Test
+    void 룰_스캔은_202이고_RabbitMQ_없이도_점수와_케이스_생성이_앱_안에서_이어진다() throws Exception {   // SCRUM-349
+        waitUntilFinished(body(mvc.perform(post("/api/v1/admin/batches/load").with(admin()).with(csrf())).andReturn(), 202)
+                .get("batch_run_id").asLong());
+
+        JsonNode scan = body(mvc.perform(post("/api/v1/admin/batches/rule-scan").param("date", "2022-09-01")
+                .with(admin()).with(csrf())).andReturn(), 202);
+        assertThat(scan.get("batch_type").asText()).isEqualTo("RULE_SCAN");
+        assertThat(scan.get("status").asText()).isEqualTo("RUNNING");   // 실행기에 넘기기 전에 읽은 상태
+        assertThat(scan.get("summary").isNull()).isTrue();
+        JsonNode scanned = waitUntilFinished(scan.get("batch_run_id").asLong());
+        assertThat(scanned.get("status").asText()).isEqualTo("SUCCEEDED");
+        long scanId = scan.get("batch_run_id").asLong();
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(progress);   // 룰마다 진행 → 끝나면 지움
+        order.verify(progress).at(scanId, 0, 6, "R01_FAN_OUT");
+        order.verify(progress).at(scanId, 5, 6, "R06_GATHER_SCATTER");
+        order.verify(progress).clear(scanId);
+        JsonNode byRule = scanned.get("summary").get("alerts_by_rule");
+        assertThat(byRule).hasSize(6);   // 0건 룰도 빠지지 않음
+        assertThat(byRule.get(0).get("rule_id").asText()).isEqualTo("R01_FAN_OUT");
+        assertThat(byRule.get(0).has("rule_version")).isTrue();
+        assertThat(byRule.get(0).has("alert_count")).isTrue();
+
+        JsonNode again = body(mvc.perform(post("/api/v1/admin/batches/rule-scan").param("date", "2022-09-01")
+                .with(admin()).with(csrf())).andReturn(), 409);   // 거절은 지금처럼 요청 때 바로
+        assertThat(again.get("error").get("code").asText()).isEqualTo("BATCH_ALREADY_DONE");
+
+        // 연쇄(앱 안 경로) — 누르지 않아도 같은 날짜 점수 → 케이스 생성이 뒤에서 이어진다. 요청자는 룰 스캔을 누른 사람
+        JsonNode chainedScore = waitForRuns("SCORE_REQUEST", 1).get(0);
+        assertThat(chainedScore.get("status").asText()).isEqualTo("SUCCEEDED");
+        assertThat(chainedScore.get("triggered_by").get("login_id").asText()).isEqualTo("system");
+        JsonNode summary = chainedScore.get("summary");
+        for (String field : List.of("requested", "scored", "failed", "retryable", "chunks", "model_versions")) {
+            assertThat(summary.has(field)).as(field).isTrue();
+        }
+        assertThat(summary.get("requested").asInt()).isEqualTo(chainedScore.get("rows_in").asInt());
+        assertThat(waitForRuns("OPEN_CASES", 1).get(0).get("status").asText()).isEqualTo("SUCCEEDED");
+
+        // 화면 [점수 재처리]도 202 — 성공하면 케이스 생성이 보충 실행으로 한 번 더 이어진다
+        JsonNode score = body(mvc.perform(post("/api/v1/admin/batches/score").param("date", "2022-09-01")
+                .with(admin()).with(csrf())).andReturn(), 202);
+        assertThat(score.get("batch_type").asText()).isEqualTo("SCORE_REQUEST");
+        assertThat(score.get("status").asText()).isEqualTo("RUNNING");
+        assertThat(waitUntilFinished(score.get("batch_run_id").asLong()).get("status").asText()).isEqualTo("SUCCEEDED");
+        assertThat(waitForRuns("OPEN_CASES", 2)).allSatisfy(r -> assertThat(r.get("status").asText()).isEqualTo("SUCCEEDED"));
+
+        JsonNode listed = body(mvc.perform(get("/api/v1/admin/batches").param("type", "RULE_SCAN").with(admin()))
+                .andReturn(), 200);
+        assertThat(listed.get("items").get(0).get("summary").get("alerts_by_rule")).hasSize(6);   // 목록에도
+    }
+
+    @Test
+    void 룰_스캔_거절은_202_없이_409이고_배치_행을_남기지_않는다() throws Exception {   // SCRUM-349 — 적재 전
+        JsonNode error = body(mvc.perform(post("/api/v1/admin/batches/rule-scan").param("date", "2022-09-01")
+                .with(admin()).with(csrf())).andReturn(), 409);
+        assertThat(error.get("error").get("code").asText()).isEqualTo("DATASET_NOT_LOADED");
+        JsonNode scoreError = body(mvc.perform(post("/api/v1/admin/batches/score").param("date", "2022-09-01")
+                .with(admin()).with(csrf())).andReturn(), 409);
+        assertThat(scoreError.get("error").get("code").asText()).isEqualTo("RULE_SCAN_NOT_DONE");
+        assertThat(jdbc.queryForObject("select count(*) from ops.batch_runs", Long.class)).isZero();
     }
 
     @Test
@@ -246,6 +354,23 @@ class DatasetLoadApiTest {
         }
     }
 
+    /** 그 유형의 2022-09-01 실행이 count 개 생기고 모두 끝날 때까지 — 연쇄가 뒤에서 만든 행을 기다린다. 최신순. */
+    private JsonNode waitForRuns(String type, int count) throws Exception {
+        for (int i = 0; i < 100; i++) {
+            JsonNode items = body(mvc.perform(get("/api/v1/admin/batches").param("type", type)
+                    .param("date", "2022-09-01").with(admin())).andReturn(), 200).get("items");
+            boolean allDone = true;
+            for (JsonNode item : items) {
+                allDone &= !"RUNNING".equals(item.get("status").asText());
+            }
+            if (items.size() >= count && allDone) {
+                return items;
+            }
+            Thread.sleep(200);
+        }
+        throw new AssertionError(type + " " + count + "건이 20초 안에 끝나지 않았습니다");
+    }
+
     private JsonNode waitUntilFinished(long id) throws Exception {
         for (int i = 0; i < 100; i++) {
             JsonNode run = body(mvc.perform(get("/api/v1/admin/batches/" + id).with(admin())).andReturn(), 200);
@@ -254,7 +379,7 @@ class DatasetLoadApiTest {
             }
             Thread.sleep(200);
         }
-        throw new AssertionError("적재가 20초 안에 끝나지 않았습니다");
+        throw new AssertionError("배치가 20초 안에 끝나지 않았습니다");
     }
 
     private JsonNode body(MvcResult result, int expectedStatus) throws Exception {

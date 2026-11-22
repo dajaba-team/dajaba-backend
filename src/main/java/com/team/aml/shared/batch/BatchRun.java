@@ -1,6 +1,9 @@
 package com.team.aml.shared.batch;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -47,6 +50,11 @@ public class BatchRun {
     @Column(name = "error_message")
     private String errorMessage;
 
+    /** 결과 상세 (V019, SCRUM-349) — 룰 스캔 룰별 경보 수·점수 건수. 그 밖은 null. 건수·이름만, 계좌·본문 없음. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "summary")
+    private JsonNode summary;
+
     @Column(name = "triggered_by", nullable = false)
     private Long triggeredBy;
 
@@ -79,6 +87,18 @@ public class BatchRun {
         this.finishedAt = Instant.now();
     }
 
+    /** 결과 상세와 함께 성공 — 룰 스캔·점수 (SCRUM-349). */
+    public void succeed(int rowsIn, int rowsOut, JsonNode summary) {
+        succeed(rowsIn, rowsOut);
+        this.summary = summary;
+    }
+
+    /** 결과 상세와 함께 실패 — 점수에 다시 보낼 실패가 남았을 때. 건수는 summary 에 (SCRUM-349). */
+    public void fail(String message, JsonNode summary) {
+        fail(message);
+        this.summary = summary;
+    }
+
     public Long getId() { return id; }
     public BatchType getBatchType() { return batchType; }
     public LocalDate getBatchDate() { return batchDate; }
@@ -88,5 +108,6 @@ public class BatchRun {
     public Integer getRowsIn() { return rowsIn; }
     public Integer getRowsOut() { return rowsOut; }
     public String getErrorMessage() { return errorMessage; }
+    public JsonNode getSummary() { return summary; }
     public Long getTriggeredBy() { return triggeredBy; }
 }

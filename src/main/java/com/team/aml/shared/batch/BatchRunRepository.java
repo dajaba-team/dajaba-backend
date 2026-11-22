@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 public interface BatchRunRepository extends JpaRepository<BatchRun, Long> {
@@ -16,4 +17,7 @@ public interface BatchRunRepository extends JpaRepository<BatchRun, Long> {
 
     /** 그 시각 뒤에 시작된 같은 유형·날짜 실행이 있나 — 배치 잇기가 같은 메시지를 두 번 처리하지 않게 (SCRUM-349). */
     boolean existsByBatchTypeAndBatchDateAndStartedAtGreaterThanEqual(BatchType type, LocalDate date, Instant startedAt);
+
+    /** 그 유형의 지금 상태 행들 — 앱이 뜰 때 남은 RUNNING 정리용(SCRUM-246). */
+    List<BatchRun> findByBatchTypeAndStatus(BatchType type, BatchStatus status);
 }

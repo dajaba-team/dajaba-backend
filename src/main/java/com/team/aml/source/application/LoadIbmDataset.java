@@ -1,5 +1,6 @@
 package com.team.aml.source.application;
 
+import com.team.aml.shared.batch.BatchProgress;
 import com.team.aml.shared.config.AmlProperties;
 import com.team.aml.shared.domain.DomainException;
 import com.team.aml.source.domain.AccountFileFormatException;
@@ -31,11 +32,14 @@ public class LoadIbmDataset {
     private final ImportIbmDataset importer;
     private final DatasetLoadRecorder recorder;
     private final AmlProperties properties;
+    private final BatchProgress progress;
 
-    public LoadIbmDataset(ImportIbmDataset importer, DatasetLoadRecorder recorder, AmlProperties properties) {
+    public LoadIbmDataset(ImportIbmDataset importer, DatasetLoadRecorder recorder, AmlProperties properties,
+                          BatchProgress progress) {
         this.importer = importer;
         this.recorder = recorder;
         this.properties = properties;
+        this.progress = progress;
     }
 
     /** 파일이 없으면 batch_runs 행을 만들기 전에 거절한다. 적재 batch_date는 적재한 날(KST)이다. */
@@ -58,6 +62,8 @@ public class LoadIbmDataset {
             recorder.fail(batchRunId, failureMessage(e));
             // DB 예외 메시지에는 행 값이 들어갈 수 있어 클래스 이름만 남긴다.
             log.error("적재 실패 batch_run_id={} cause={}", batchRunId, e.getClass().getSimpleName());
+        } finally {
+            progress.clear(batchRunId);   // 진행 단계는 적재가 끝나면(성공·실패) 지운다 (SCRUM-349)
         }
     }
 
