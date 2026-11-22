@@ -119,14 +119,17 @@
 - **맨 위 `score`·`score_band`·`policy_version`** — 계약서 Q2 MVP대로 `latest_score.score`·`score_band`와 그때 쓴 정책 버전(#78 리뷰). 케이스 생성 때 저장하는 스냅샷은 후속.
 - **목록 점수 (SCRUM-236)** — 목록 `score`는 생성 당시 점수(`opened_score`), `score_band`·`policy_version`은 지금 정책으로 계산(정책 없으면 null, 목록은 막지 않음). `sort=score,asc|desc`는 `CaseRepository.searchByScore` — 쿼리에 `nulls last`를 직접 적어요(Spring Data가 문자열 쿼리의 `Sort`에 nulls 처리를 안 붙여서). 점수 없는 케이스는 오름·내림 모두 맨 뒤, 같은 점수는 `created_at DESC, id DESC`, 전체 정렬 뒤 페이지. 내림차순 인덱스 `cases_opened_score_idx`.
 - **상세 `opened_score` (SCRUM-237)** — `{score, model_version, feature_version, policy_version, low_to_medium, medium_to_high}` 또는 null. `latest_score`와 섞지 않아요. 내부 점수 행 id는 안 내보내요. 〔계약서 C2에 한 줄 추가 필요〕
-- **아직 null인 칸 (후속)** — `current_draft`는 str 조합 계층(미결 17, SCRUM-245).
+- **null로 두는 칸 (11/22 MVP 확정, SCRUM-245)** — 키는 남기고 값은 null(계약서 2.3).
+  - `current_draft` — 상세는 번호 `current_draft_no`만 주고, 초안은 화면이 S2(`GET /str-drafts/{draft_no}`)를 따로 불러요. str 쪽 조합 조회는 만들지 않아요(미결 17 닫음). 프론트는 이미 이렇게 동작해요.
+  - `customer` — 출처는 있어요(`ops.customer_attributes` 가상 KYC: 업종·위험도·계좌 목적·가입일·국가, `source` 엔티티). 다만 cases로 넘기는 공개 조회·화면·계약서 모양이 없어 MVP는 null. 발표 뒤 화면과 모양을 정하면 `source` 공개 조회 하나로 채워요(cases → source 의존은 허용).
+  - `prior_alerts`는 `[]` — SCRUM-239.
 - **배정은 관리자만 (SCRUM-339, 11/21)** — 조사역이 OPEN 케이스를 스스로 맡는 길을 없앴어요(실제 업무처럼 관리자가 먼저 배정, 조사역은 받은 것만). 조사역·승인자가 `assign`을 부르면 403 `FORBIDDEN` — URL 규칙이 먼저 막고, 유스케이스도 한 번 더 봐요(`CaseQuestionAccess`와 같은 방식). 11/6의 `SELF_ONLY`(조사역이 남 지정 409)는 닿을 길이 없어 지웠어요 — `INVALID_ASSIGNEE`의 `details.reason`은 이제 `NOT_ACTIVE_INVESTIGATOR` 하나. 이미 조사역이 맡아 둔 케이스·이력은 그대로. 승인자 배정 권한은 발표 뒤 검토(`08_decisions.md` 11/21).
 
 **컨트롤러 — 구현됨 (SCRUM-106)** `CaseController` `/api/v1/cases` — 01 목록 · 02 상세 · 03 배정 · 07 에스컬레이션 · 06 종료(초안 없음). 응답은 계약서 v0.2 C1·C2·5.3 모양이에요.
 - **요청 검사(400 `INVALID_REQUEST`)** — 목록 `CaseListQuery`: `status` 쉼표 여럿(없는 값 400), `sort` = `score|created_at|status,asc|desc`, `page ≥ 0`, `1 ≤ size ≤ 100`(기본 20), `from ≤ to`. 변경 요청: `version` 필수, `comment` 공백 아님·2,000자 이하, `close_reason`은 세 값 중 하나. 상태·담당자 검사는 지금처럼 유스케이스·엔티티가 해요.
 - **계좌(미결 19)** — 원본 `account_key`는 응답에 없어요. `account_no` = 은행ID + `****` + 끝 4자리(`010_****BD30`, 번호가 4자리 이하면 끝자리도 가림), `account_ref` = `ACR-` + `account_key` SHA-256 앞 12자리(같은 계좌는 어느 응답에서나 같은 값). 〔확인 필요〕 키 없는 해시라 계좌 목록이 있으면 대조할 수 있어요 — 발급 규칙은 SOURCE·공통 담당이 정하기로 했으니(CASES 명세 §5) 실데이터 전에 서버 비밀값 HMAC 같은 규칙으로 바꿔요. 형식은 그대로. `AccountDisplay` 한 곳만 고치면 돼요.
 - **초안 번호** — `current_draft_id`(내부 id)는 `current_draft_no`(`DRF-000123`, `DisplayNumber.draftNo`)로 바꿔 보내요(계약서 Q14).
-- **아직 null·[]인 칸**은 위 "아직 null인 칸"과 같아요. 키는 빼지 않아요(계약서 2.3). `customer`·`prior_alerts`도 후속.
+- **null·[]인 칸**은 위 "null로 두는 칸"과 같아요. 키는 빼지 않아요(계약서 2.3).
 - 남은 API: 04 재배정, 05 메모, 08~11·15 거래·근거·그래프·이력·메모 이력 — 각각 유스케이스가 생기면 이 컨트롤러에 붙여요.
 
 **질문 답변 — A8 질문하기 · C9 지난 질문 (SCRUM-302)** `CaseQuestionController` `/api/v1/cases/{case_no}/questions`. 근거: 노션 「조사역 질문 답변 설계 문서」 7·9.1·13절, 규약 5.4, 프론트 계약서 5.3 A8·C9(11/19). AI 호출·응답 확인은 진희 님 `AiClient.ask`(SCRUM-291)를 그대로 써요.
@@ -227,4 +230,4 @@
 - 태그에 케이스 번호·사용자·예외 메시지 없음(NFR-COM-04). 세다가 예외가 나도 응답·예외는 그대로(fail-open, `CaseMetrics`). 낙관적·비관적 락 동작은 바꾸지 않았어요.
 - 확인: `docker compose --profile ops up -d app prometheus grafana` → Prometheus(`localhost:9090`)에서 `aml_cases_conflicts_total`·`aml_cases_summary_failures_total`, Grafana 「CASES」 대시보드. 카운터는 **처음 셀 때 생겨요** — 충돌·실패가 한 번도 없으면 Prometheus에 이름이 안 보여요(정상).
 
-**〔확인 필요〕** 상세 화면에 "현재 초안"을 합치는 위치(cases → str 의존 금지라 상위 조합 계층 필요 — 권장은 str 조회 유스케이스가 조합. 같은 시점 보장은 한 SQL·REPEATABLE READ·조합 후 버전 재확인 중 하나로, 기본 READ COMMITTED에선 한 트랜잭션만으로는 부족 — 노션 미결 17번), 메모·요약을 편집할 수 있는 상태 범위, 화면 집계 규칙(유입은 받은 금액, 유출은 보낸 금액, 자기계좌 제외 — STR facts와 같은 규칙인지). AI facts는 **같은 법인의 다른 계좌**와 오간 거래를 `internal`로 따로 빼서 입출금에 넣지 않아요(dajaba-AI `docs/str/04_facts.md`). 그래서 같은 경보라도 화면과 STR 숫자가 다를 수 있어요 — 각 숫자가 무엇을 포함하는지 이름·설명을 정하고, 같은 법인 계좌 간 이체·복수 통화 사례로 같이 확인해요.
+**〔확인 필요〕** ~~상세 화면에 "현재 초안"을 합치는 위치~~(11/22 확정 — 화면이 S2를 따로 부름, 위 "null로 두는 칸"), 메모·요약을 편집할 수 있는 상태 범위, 화면 집계 규칙(유입은 받은 금액, 유출은 보낸 금액, 자기계좌 제외 — STR facts와 같은 규칙인지). AI facts는 **같은 법인의 다른 계좌**와 오간 거래를 `internal`로 따로 빼서 입출금에 넣지 않아요(dajaba-AI `docs/str/04_facts.md`). 그래서 같은 경보라도 화면과 STR 숫자가 다를 수 있어요 — 각 숫자가 무엇을 포함하는지 이름·설명을 정하고, 같은 법인 계좌 간 이체·복수 통화 사례로 같이 확인해요.

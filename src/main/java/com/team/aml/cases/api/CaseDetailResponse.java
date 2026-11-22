@@ -24,8 +24,9 @@ import java.util.List;
  *   <li>latest_summary — API-13 과 같은 값 (요약 없으면 null, SCRUM-175)</li>
  *   <li>investigator_notes — 마지막 NOTE 행 (메모를 쓴 적이 없으면 null, SCRUM-176)</li>
  *   <li>aggregates — 근거 거래 전체로 통화별 유입·유출, 경유·자기계좌 거래 제외 (SCRUM-179)</li>
- *   <li>current_draft 본문 — str 조합 계층 후 (노션 미결 17). 번호 current_draft_no 는 지금 준다</li>
- *   <li>customer·prior_alerts — 후속</li>
+ *   <li>current_draft — null 로 둔다(11/22 확정, SCRUM-245). 번호 current_draft_no 만 주고 초안은 화면이 S2 를 따로 부른다</li>
+ *   <li>customer — null 로 둔다(11/22 MVP 확정, SCRUM-245). 출처 ops.customer_attributes 는 있으나 화면·계약 모양 전</li>
+ *   <li>prior_alerts — [] (SCRUM-239)</li>
  * </ul>
  * 화면 응답이라 Object 칸(alert 등)은 모양이 정해지면 record 로 바꾼다.
  */
