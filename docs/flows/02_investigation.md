@@ -1,6 +1,6 @@
 # ② 조사 — 로그인 → 목록 → 상세(+AI 요약) → 관리자 배정 → 에스컬레이션
 
-조사역 한 명이 케이스 하나를 다루는 흐름. **cases 폴더는 str 폴더를 모른다**(의존 방향 `cases ← str`). 그래서 "케이스 상세 + 현재 초안"은 **str 쪽 조회 유스케이스가 cases 공개 상세 조회를 불러 조합**하고(str → cases 방향만), 화면 요청은 하나다(미결 17, 10/30).
+조사역 한 명이 케이스 하나를 다루는 흐름. **cases 폴더는 str 폴더를 모른다**(의존 방향 `cases ← str`). 그래서 상세 응답은 현재 초안의 **번호(`current_draft_no`)만** 주고, 초안은 **화면이 STR 조회(S2)를 따로 부른다**(미결 17 — 11/22 MVP 확정, SCRUM-245). 10/30에 그렸던 "str 쪽 조회가 상세와 초안을 한 번에 조합"은 하지 않아요 — `current_draft`는 null 그대로(키는 남김, 계약서 2.3).
 
 ```mermaid
 sequenceDiagram
@@ -32,22 +32,16 @@ sequenceDiagram
     CAS-->>FE: Page<CaseListItem> (계좌번호 마스킹)
 
     Inv->>FE: 케이스 클릭
-    FE->>STR: GET /cases/{id} (화면 요청 하나)
-    note over STR,DB: 짧은 REPEATABLE READ 트랜잭션(readOnly 아님 — 열람 기록이 참여, 03_shared §9) — 케이스와 초안을 같은 시점으로 (미결 17)
-    STR->>DB: INSERT access_logs VIEW(CASE) — 권한 검사 뒤·본문 읽기 전, 같은 트랜잭션 (03_shared §9)
-    STR->>CAS: 공개 상세 조회 (str → cases)
+    FE->>CAS: GET /cases/{case_no} (상세)
+    CAS->>DB: INSERT access_logs VIEW(CASE) — 같은 트랜잭션 (03_shared §9)
     CAS->>DET: 유스케이스 호출 — 경보·점수·reasons·근거 거래 ID
     DET-->>CAS: AlertDetailView
     CAS->>DB: cases, case_history, case_summaries(최신 1건)
-    CAS-->>STR: 케이스 상세 DTO {case, alert, score, reasons, history, summary?, current_draft_no, version}
-    alt current_draft_no != null
-        STR->>STR: 열람 권한 — 본문은 담당 조사역·승인자만, 그 밖에는 상태·날짜만 (서식 안건 4) — 비담당은 META_ONLY
-        STR->>DB: (초안 본문을 줄 때만) INSERT access_logs STR_VIEW — 본문 읽기 전
-        STR->>DB: 현재 초안 (본문 권한이면 narrative·revisions·검증 결과, 아니면 상태·날짜만)
-    else 초안 없음
-        note over STR: current_draft = null (정상 조회)
+    CAS-->>FE: CaseDetail {case, alert, score, reasons, history, summary?, current_draft_no, current_draft: null, customer: null, version}
+    opt current_draft_no != null (초안 탭·STR 화면을 열 때)
+        FE->>STR: GET /str-drafts/{draft_no} (S2 — 열람 권한·STR_VIEW 기록은 str 몫)
+        STR-->>FE: 초안 (본문 권한이면 narrative·검증 결과, 아니면 상태·날짜만 — 서식 안건 4)
     end
-    STR-->>FE: CaseDetail {case, alert, score, reasons, history, summary?, current_draft}
     FE->>CAS: GET /cases/{id}/transactions?page=0 (근거 거래, 별도 페이징)
     CAS->>DET: 근거 거래 ID → source 거래 조회(읽기)
     CAS-->>FE: Page<TransactionRow>
