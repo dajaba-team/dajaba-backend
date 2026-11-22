@@ -18,8 +18,11 @@ public final class JobQueues {
     /** 케이스 생성 단계 — 메시지 {@link BatchRunMessage}(OPEN_CASES batch_run_id). 담당: 지윤 */
     public static final String CASE_OPEN_CASES = "case.open-cases";
 
+    /** STR 확정본 PDF 생성 — 메시지 {@link StrReportPdfMessage}(draft_id). */
+    public static final String STR_PDF_GENERATE = "str.pdf.generate";
+
     /** 선언할 큐 전부. 큐를 추가하면 여기에도. */
-    public static final List<String> ALL = List.of(CASE_OPEN_CASES);
+    public static final List<String> ALL = List.of(CASE_OPEN_CASES, STR_PDF_GENERATE);
 
     private JobQueues() {
     }

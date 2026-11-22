@@ -108,7 +108,7 @@ docker compose --profile ops up -d rabbitmq      # 브로커 먼저 (healthy 까
 docker compose up -d --build app                 # 앱이 붙으면서 aml.jobs 교환기·큐·DLQ를 선언
 ```
 
-관리 UI(`compose.override.yml`로 15672를 열었을 때) `http://localhost:15672` → vhost `aml` → Queues에 `case.open-cases`·`case.open-cases.dlq`가 보이면 붙은 거예요. 브로커가 죽어 있거나 꺼져 있으면 앱은 그냥 지금처럼(앱 안 실행기) 돌아요.
+관리 UI(`compose.override.yml`로 15672를 열었을 때) `http://localhost:15672` → vhost `aml` → Queues에 `case.open-cases`·`case.open-cases.dlq`·`str.pdf.generate`·`str.pdf.generate.dlq`가 보이면 붙은 거예요. 브로커가 죽어 있거나 꺼져 있으면 앱은 그냥 지금처럼(앱 안 실행기) 돌아요.
 
 **Redis 세션 켜고 띄우기** (SCRUM-273) — `.env`에 `AML_SESSION_REDIS_ENABLED=true`를 넣고 Redis까지 띄워요.
 

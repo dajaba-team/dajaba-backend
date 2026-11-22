@@ -16,6 +16,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 확정본 PDF 만들기·보관 (서식 회의 10/30 결정 2) — 모의 제출(P4)·다시 만들기(P5) 커밋 뒤에 {@link StrReportPdfTrigger} 가 부른다.
@@ -42,12 +44,15 @@ public class GenerateStrReportPdf {
     static final String RENDER_FAILED = "RENDER_FAILED";
     static final String STORAGE_FAILED = "STORAGE_FAILED";
     static final String NOT_STARTED = "NOT_STARTED";
+    public static final String QUEUE_GIVE_UP = "QUEUE_GIVE_UP";
 
     private final StrReportRepository reports;
     private final ReportPdfRenderer renderer;
     private final ReportPdfStorage storage;
     private final TransactionTemplate readTx;
     private final TransactionTemplate writeTx;
+    /** publisher confirm timeout 등으로 같은 프로세스에 중복 전달된 작업의 동시 실행을 막는다. */
+    private final Set<Long> runningDrafts = ConcurrentHashMap.newKeySet();
 
     public GenerateStrReportPdf(StrReportRepository reports, ReportPdfRenderer renderer, ReportPdfStorage storage,
                                 PlatformTransactionManager transactionManager) {
@@ -63,6 +68,19 @@ public class GenerateStrReportPdf {
 
     /** @return 이번에 남긴 상태. PENDING 이 아니라 할 일이 없었으면 empty */
     public Optional<ReportPdfStatus> execute(long draftId) {
+        // confirm 응답이 늦어 로컬 fallback과 RabbitMQ 소비가 겹치거나 메시지가 중복 전달되어도 한 번만 렌더링한다.
+        if (!runningDrafts.add(draftId)) {
+            log.info("확정본 PDF 중복 작업 건너뜀 draft_no={}", DisplayNumber.draftNo(draftId));
+            return Optional.empty();
+        }
+        try {
+            return executeOnce(draftId);
+        } finally {
+            runningDrafts.remove(draftId);
+        }
+    }
+
+    private Optional<ReportPdfStatus> executeOnce(long draftId) {
         Optional<Job> job = readTx.execute(s -> reports.findByDraftId(draftId)
                 .filter(r -> r.getPdfStatus() == ReportPdfStatus.PENDING)
                 .map(r -> new Job(ReportPdfContent.submitted(r), ReportPdfStorage.keyOf(r.getReportNo(), r.getPdfAttempts() + 1))));
