@@ -31,6 +31,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
 import java.math.BigDecimal;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -177,7 +178,7 @@ class RequestScoresTest {
         scanned(d);
         Instant before = Instant.now();
         jdbc.update("insert into ops.batch_runs(batch_type, batch_date, status, triggered_by, started_at, finished_at) "
-                + "values ('SCORE_REQUEST', ?, 'SUCCEEDED', 1, now(), now())", d);   // 직접 실행이 그새 시작해 끝남
+                + "values ('SCORE_REQUEST', ?, 'SUCCEEDED', 1, ?, ?)", d, Timestamp.from(before), Timestamp.from(before));   // 직접 실행이 그새 시작해 끝남 — 시각은 앱과 같은 JVM 시계로(DB now()는 컨테이너 시계라 어긋날 수 있음)
 
         assertThat(requestScores.startUnlessStartedSince(d, SYSTEM, before)).isEmpty();
         assertThat(scoreRuns(d, null)).isEqualTo(1);

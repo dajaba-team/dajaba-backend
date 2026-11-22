@@ -14,6 +14,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
 import java.math.BigDecimal;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -57,7 +58,7 @@ class OpenCasesFromAlertsDbTest {
         LocalDate date = newDate();
         Instant before = Instant.now();
         jdbc.update("insert into ops.batch_runs(batch_type, batch_date, status, triggered_by, started_at, finished_at) "
-                + "values ('OPEN_CASES', ?, 'SUCCEEDED', 1, now(), now())", date);   // 직접 실행이 그새 시작해 끝남
+                + "values ('OPEN_CASES', ?, 'SUCCEEDED', 1, ?, ?)", date, Timestamp.from(before), Timestamp.from(before));   // 직접 실행이 그새 시작해 끝남 — 시각은 앱과 같은 JVM 시계로(DB now()는 컨테이너 시계라 어긋날 수 있음)
 
         assertThat(openCases.startUnlessStartedSince(date, CurrentUser.SYSTEM_ID, before)).isEmpty();
         assertThat(jdbc.queryForObject("select count(*) from ops.batch_runs where batch_type = 'OPEN_CASES' and batch_date = ?",
