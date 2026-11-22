@@ -17,12 +17,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.RequestBuilder;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -32,10 +34,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
-/** /api/v1/cases — 목록·상세·배정·담당자 변경·메모·에스컬레이션·종료를 HTTP 로 (SCRUM-106·176·177, 계약서 C1·C2·C8·A1·A2·A3·A4·A5). 실제 PostgreSQL. */
+/** /api/v1/cases — 목록·상세·배정·담당자 변경·메모·에스컬레이션·종료를 HTTP 로 (SCRUM-106·176·177·339, 계약서 C1·C2·C8·A1·A2·A3·A4·A5). 실제 PostgreSQL. */
 @Testcontainers
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -63,16 +66,18 @@ class CaseApiTest {
     private final ObjectMapper json = new ObjectMapper();
     private AppUserDetails inv;
     private AppUserDetails inv2;
+    private AppUserDetails assigner;   // 배정하는 관리자 (SCRUM-339 — 배정은 ADMIN 만)
 
     @BeforeEach
     void users() {
         long n = SEQ.incrementAndGet();
         inv = newUser("api_inv" + n, "INVESTIGATOR");
         inv2 = newUser("api_invb" + n, "INVESTIGATOR");
+        assigner = newUser("api_asg" + n, "ADMIN");
     }
 
     @Test
-    void 정상_조사역이_맡고_에스컬레이션하고_종료한다_응답에_원본_계좌가_없다() throws Exception {
+    void 정상_관리자가_배정하고_조사역이_에스컬레이션하고_종료한다_응답에_원본_계좌가_없다() throws Exception {
         String accountKey = "010_8000E%05dBD30".formatted(SEQ.incrementAndGet());
         String caseNo = newOpenCase(accountKey);
 
@@ -86,9 +91,8 @@ class CaseApiTest {
         assertThat(item.has("score")).isTrue();
         assertThat(listBody).doesNotContain(accountKey).doesNotContain("account_key");
 
-        // 배정 → REVIEWING
-        JsonNode assigned = json.readTree(body(post("/api/v1/cases/{caseNo}/assign", caseNo)
-                .contentType(MediaType.APPLICATION_JSON).content("{\"version\": 0}").with(as(inv)).with(csrf()), 200));
+        // 관리자 배정 → REVIEWING
+        JsonNode assigned = json.readTree(body(assignBy(caseNo, inv.loginId(), 0, assigner), 200));
         assertThat(assigned.get("status").asText()).isEqualTo("REVIEWING");
         assertThat(assigned.get("assignee").get("login_id").asText()).isEqualTo(inv.loginId());
         assertThat(assigned.get("current_draft_no").isNull()).isTrue();
@@ -102,7 +106,7 @@ class CaseApiTest {
         assertThat(detail.get("account_no").asText()).isEqualTo("010_****BD30");
         assertThat(texts(detail.get("available_actions"))).contains("ESCALATE", "CLOSE");
         assertThat(detail.get("history").get(0).get("action").asText()).isEqualTo("ASSIGN");
-        assertThat(detail.get("history").get(0).get("created_by").asText()).isEqualTo(inv.loginId());
+        assertThat(detail.get("history").get(0).get("created_by").asText()).isEqualTo(assigner.loginId());
         assertThat(detail.get("prior_alerts").isArray()).isTrue();
         JsonNode alert = detail.get("alert");                 // SCRUM-152 — 연결 경보·점수
         assertThat(alert.get("alert_no").asText()).startsWith("ALT-20230201-");
@@ -143,8 +147,7 @@ class CaseApiTest {
     @Test
     void 꺼짐_질문_답변이_꺼져_있으면_상세에_ASK_QUESTION이_없고_A8_C9는_404_NOT_FOUND() throws Exception {   // SCRUM-302 기본값
         String caseNo = newOpenCase("010_8000E%05dBD30".formatted(SEQ.incrementAndGet()));
-        body(post("/api/v1/cases/{caseNo}/assign", caseNo).contentType(MediaType.APPLICATION_JSON)
-                .content("{\"version\": 0}").with(as(inv)).with(csrf()), 200);
+        assign(caseNo, inv);
         assertThat(texts(json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(inv)), 200))
                 .get("available_actions"))).doesNotContain("ASK_QUESTION");
         assertThat(code(post("/api/v1/cases/{caseNo}/questions", caseNo).contentType(MediaType.APPLICATION_JSON)
@@ -194,8 +197,7 @@ class CaseApiTest {
         assertThat(code(post("/api/v1/cases/{caseNo}/escalate", caseNo).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"comment\": \"오래된 화면\", \"version\": 0}").with(as(inv)).with(csrf()), 409))
                 .isEqualTo("CONCURRENT_UPDATE");
-        assertThat(code(post("/api/v1/cases/{caseNo}/assign", caseNo).contentType(MediaType.APPLICATION_JSON)
-                .content("{\"version\": 1}").with(as(inv)).with(csrf()), 409)).isEqualTo("INVALID_CASE_TRANSITION");
+        assertThat(code(assignBy(caseNo, inv2.loginId(), 1, assigner), 409)).isEqualTo("INVALID_CASE_TRANSITION");
 
         // SCRUM-276 — CONCURRENT_UPDATE 만 동작별로 센다. 403·다른 409(INVALID_CASE_TRANSITION)는 안 섞인다
         assertThat(conflicts("ESCALATE")).isEqualTo(escalateConflicts + 1);
@@ -350,6 +352,109 @@ class CaseApiTest {
                 .containsEntry("version", 1L);
     }
 
+    // ── 배정 (SCRUM-339 — 관리자만) ──────────────────────────
+
+    @Test
+    void 배정_ADMIN이_조사역을_지정하면_200_REVIEWING_이력_ASSIGN은_관리자가_만든다() throws Exception {
+        AppUserDetails apr = newUser("api_apr" + SEQ.incrementAndGet(), "APPROVER");
+        String caseNo = newOpenCase("010_ASGN%05d".formatted(SEQ.incrementAndGet()));
+
+        // OPEN 버튼 — 관리자에게만 ASSIGN, 상세·목록 둘 다
+        assertThat(texts(json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(assigner)), 200))
+                .get("available_actions"))).contains("ASSIGN");
+        assertThat(texts(json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(inv)), 200))
+                .get("available_actions"))).doesNotContain("ASSIGN");
+        assertThat(texts(json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(apr)), 200))
+                .get("available_actions"))).doesNotContain("ASSIGN");
+        assertThat(texts(itemOf(json.readTree(body(get("/api/v1/cases").param("status", "OPEN").param("size", "100")
+                .with(as(inv)), 200)), caseNo).get("available_actions"))).doesNotContain("ASSIGN");
+        assertThat(texts(itemOf(json.readTree(body(get("/api/v1/cases").param("status", "OPEN").param("size", "100")
+                .with(as(assigner)), 200)), caseNo).get("available_actions"))).contains("ASSIGN");
+
+        JsonNode assigned = json.readTree(body(assignBy(caseNo, inv.loginId(), 0, assigner), 200));
+        assertThat(assigned.get("status").asText()).isEqualTo("REVIEWING");
+        assertThat(assigned.get("assignee").get("login_id").asText()).isEqualTo(inv.loginId());
+        assertThat(assigned.get("version").asLong()).isEqualTo(1);
+
+        Map<String, Object> h = jdbc.queryForMap("""
+                select h.action, h.from_status, h.to_status, h.from_assignee_id, h.to_assignee_id, h.created_by
+                from ops.case_history h join ops.cases c on c.id = h.case_id
+                where c.case_no = ? order by h.id desc limit 1""", caseNo);
+        assertThat(h).containsEntry("action", "ASSIGN").containsEntry("from_status", "OPEN")
+                .containsEntry("to_status", "REVIEWING").containsEntry("from_assignee_id", null)
+                .containsEntry("to_assignee_id", inv.userId()).containsEntry("created_by", assigner.userId());
+
+        // 배정받은 조사역은 바로 조사 버튼이 생긴다
+        assertThat(texts(json.readTree(body(get("/api/v1/cases/{caseNo}", caseNo).with(as(inv)), 200))
+                .get("available_actions"))).contains("ESCALATE", "CLOSE").doesNotContain("ASSIGN");
+        // 관리자가 대상을 안 주면 — 생략·null 409 NOT_ACTIVE_INVESTIGATOR(관리자 본인은 조사역 아님),
+        // 빈 문자열 400 INVALID_REQUEST(@Size), 공백만 404 USER_NOT_FOUND(그런 login_id 없음)
+        String other = newOpenCase("010_ASGE%05d".formatted(SEQ.incrementAndGet()));
+        JsonNode empty = json.readTree(body(assignBy(other, null, 0, assigner), 409)).get("error");
+        assertThat(empty.get("code").asText()).isEqualTo("INVALID_ASSIGNEE");
+        assertThat(empty.get("details").get("reason").asText()).isEqualTo("NOT_ACTIVE_INVESTIGATOR");
+        JsonNode explicitNull = json.readTree(body(post("/api/v1/cases/{caseNo}/assign", other)
+                .contentType(MediaType.APPLICATION_JSON).content("{\"assignee\": null, \"version\": 0}")
+                .with(as(assigner)).with(csrf()), 409)).get("error");
+        assertThat(explicitNull.get("details").get("reason").asText()).isEqualTo("NOT_ACTIVE_INVESTIGATOR");
+        assertThat(code(assignBy(other, "", 0, assigner), 400)).isEqualTo("INVALID_REQUEST");
+        assertThat(code(assignBy(other, "   ", 0, assigner), 404)).isEqualTo("USER_NOT_FOUND");
+        assertStillOpen(other);
+    }
+
+    @Test
+    void 배정_조사역_승인자는_403_FORBIDDEN이고_케이스는_그대로() throws Exception {
+        AppUserDetails apr = newUser("api_apr" + SEQ.incrementAndGet(), "APPROVER");
+        String caseNo = newOpenCase("010_ASGF%05d".formatted(SEQ.incrementAndGet()));
+
+        assertThat(code(assignBy(caseNo, null, 0, inv), 403)).isEqualTo("FORBIDDEN");              // 비움 = 예전 "본인"
+        assertThat(code(assignBy(caseNo, inv.loginId(), 0, inv), 403)).isEqualTo("FORBIDDEN");     // 본인 지정
+        assertThat(code(assignBy(caseNo, inv2.loginId(), 0, inv), 403)).isEqualTo("FORBIDDEN");    // 남 지정
+        assertThat(code(assignBy(caseNo, "", 0, inv), 403)).isEqualTo("FORBIDDEN");                // 빈 문자열
+        assertThat(code(assignBy(caseNo, inv.loginId(), 7, inv), 403)).isEqualTo("FORBIDDEN");     // 틀린 version 보다 먼저
+        assertThat(code(assignBy("CASE-2099-999999", null, 0, inv), 403)).isEqualTo("FORBIDDEN");  // 없는 케이스도 404 아님
+        assertThat(code(assignBy(caseNo, inv.loginId(), 0, apr), 403)).isEqualTo("FORBIDDEN");     // 승인자
+        assertThat(code(assignBy(caseNo, null, 0, apr), 403)).isEqualTo("FORBIDDEN");
+
+        assertStillOpen(caseNo);
+    }
+
+    @Test
+    void 배정_경로_메서드를_바꿔도_조사역은_OPEN_케이스를_맡지_못한다() throws Exception {
+        String caseNo = newOpenCase("010_ASGP%05d".formatted(SEQ.incrementAndGet()));
+        String self = "{\"assignee\": \"" + inv.loginId() + "\", \"version\": 0}";
+        Map<String, MockHttpServletRequestBuilder> tries = new java.util.LinkedHashMap<>();
+        tries.put("끝 슬래시", post("/api/v1/cases/{caseNo}/assign/", caseNo));
+        tries.put("대문자", post("/api/v1/cases/{caseNo}/ASSIGN", caseNo));
+        tries.put("첫 글자 대문자", post("/api/v1/cases/{caseNo}/Assign", caseNo));
+        tries.put("인코딩한 /", post(URI.create("/api/v1/cases/" + caseNo + "%2Fassign")));
+        tries.put("인코딩한 글자", post(URI.create("/api/v1/cases/" + caseNo + "/%61ssign")));
+        tries.put("; 매개변수", post(URI.create("/api/v1/cases/" + caseNo + "/assign;x=1")));
+        tries.put("인코딩한 ..", post(URI.create("/api/v1/cases/x/..%2F" + caseNo + "/assign")));
+        tries.put("겹친 슬래시", post("/api/v1/cases//{caseNo}/assign", caseNo));
+        tries.put("GET", get("/api/v1/cases/{caseNo}/assign", caseNo));
+        tries.put("PUT", put("/api/v1/cases/{caseNo}/assign", caseNo));
+        tries.put("PATCH", patch("/api/v1/cases/{caseNo}/assign", caseNo));
+        for (var t : tries.entrySet()) {
+            var response = mvc.perform(t.getValue().contentType(MediaType.APPLICATION_JSON).content(self)
+                    .with(as(inv)).with(csrf())).andReturn().getResponse();
+            assertThat(response.getStatus()).as(t.getKey() + " " + response.getContentAsString()).isBetween(400, 499);
+        }
+        // 다른 변경 API 로도 OPEN 을 못 움직인다 — 담당이 없으니 403 NOT_ASSIGNEE, 재배정은 URL 403
+        assertThat(code(post("/api/v1/cases/{caseNo}/escalate", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"comment\": \"맡기 전\", \"version\": 0}").with(as(inv)).with(csrf()), 403))
+                .isEqualTo("NOT_ASSIGNEE");
+        assertThat(code(post("/api/v1/cases/{caseNo}/close", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"close_reason\": \"NO_ACTION\", \"comment\": \"맡기 전\", \"version\": 0}")
+                .with(as(inv)).with(csrf()), 403)).isEqualTo("NOT_ASSIGNEE");
+        assertThat(code(notes(caseNo, "맡기 전 메모", 0, inv), 403)).isEqualTo("NOT_ASSIGNEE");
+        assertThat(code(post("/api/v1/cases/{caseNo}/refresh-summary", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"version\": 0}").with(as(inv)).with(csrf()), 403)).isEqualTo("NOT_ASSIGNEE");
+        assertThat(code(reassign(caseNo, inv.loginId(), null, 0, inv), 403)).isEqualTo("FORBIDDEN");
+
+        assertStillOpen(caseNo);
+    }
+
     // ── 담당자 변경 (SCRUM-177, 계약서 A2) ───────────────────
 
     @Test
@@ -483,9 +588,29 @@ class CaseApiTest {
     }
 
 
+    /** 관리자가 OPEN(version 0) 케이스를 who 에게 배정 → REVIEWING, version 1 (SCRUM-339). */
     private void assign(String caseNo, AppUserDetails who) throws Exception {
-        body(post("/api/v1/cases/{caseNo}/assign", caseNo).contentType(MediaType.APPLICATION_JSON)
-                .content("{\"version\": 0}").with(as(who)).with(csrf()), 200);
+        body(assignBy(caseNo, who.loginId(), 0, assigner), 200);
+    }
+
+    /** assignee 가 null 이면 body 에서 뺀다. */
+    private RequestBuilder assignBy(String caseNo, String assignee, long version, AppUserDetails who) throws Exception {
+        Map<String, Object> body = new java.util.HashMap<>();
+        if (assignee != null) {
+            body.put("assignee", assignee);
+        }
+        body.put("version", version);
+        return post("/api/v1/cases/{caseNo}/assign", caseNo).contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(body)).with(as(who)).with(csrf());
+    }
+
+    /** 배정이 막힌 뒤 케이스가 처음 그대로인지 — OPEN·담당 없음·version 0·이력 OPEN 1줄. */
+    private void assertStillOpen(String caseNo) {
+        assertThat(jdbc.queryForMap("select status, assignee_id, version from ops.cases where case_no = ?", caseNo))
+                .containsEntry("status", "OPEN").containsEntry("assignee_id", null).containsEntry("version", 0L);
+        assertThat(jdbc.queryForList("""
+                select h.action from ops.case_history h join ops.cases c on c.id = h.case_id
+                where c.case_no = ? order by h.id""", String.class, caseNo)).containsExactly("OPEN");
     }
 
     private String body(RequestBuilder request, int expectedStatus) throws Exception {

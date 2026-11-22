@@ -16,7 +16,7 @@
 | 현재 → 결과 | 메서드 | 누가 | 조건 |
 |---|---|---|---|
 | (생성) → OPEN | `Case.open(alert)` | SYSTEM (케이스 생성 배치) | CasePolicy 통과 |
-| OPEN → REVIEWING | `assign` | 조사역 본인 / ADMIN 지정 | 활성 조사역 |
+| OPEN → REVIEWING | `assign` | ADMIN 지정 (조사역 자기 배정 없음 — SCRUM-339) | 활성 조사역 |
 | (상태 그대로) | `reassign` | ADMIN | REVIEWING·ESCALATED·DRAFTED·REJECTED |
 | REVIEWING → ESCALATED | `escalate` | 담당 조사역 | 별도 버튼, AI 호출 없음 |
 | REVIEWING → CLOSED | `close(reason, comment)` | 담당 조사역 | 사유 필수 |
@@ -84,7 +84,7 @@
 |---|---|---|
 | 01 | `GET /cases` (status 복수·assignee=me·from/to·정렬) | 조회 3역할 |
 | 02 | `GET /cases/{case_no}` 통합 상세 (+ `available_actions`) | 조회 3역할, 열람 기록 |
-| 03 | `POST /cases/{case_no}/assign` | 조사역 본인 · ADMIN 지정 |
+| 03 | `POST /cases/{case_no}/assign` | ADMIN (지정) |
 | 04 | `POST /cases/{case_no}/reassign` | ADMIN |
 | 05 | `PUT /cases/{case_no}/notes` | 담당 |
 | 06 | `POST /cases/{case_no}/close` (초안 없을 때) | 담당 |
@@ -103,7 +103,7 @@
 |---|---|---|
 | `ListCases` (readOnly) | 01 `GET /cases` | `status` 비면 전체, `assignee` = `me`·login_id(없는 login_id면 빈 목록), `from`·`to` = **한국 날짜** 케이스 생성일 양 끝 포함. 정렬 `score`·`created_at`·`status`, 동률 `created_at DESC, id DESC`. 형식 검사(size ≤ 100, 정렬 화이트리스트, from ≤ to)는 컨트롤러 |
 | `GetCaseDetail` (readOnly 아님) | 02 `GET /cases/{case_no}` | 404 `CASE_NOT_FOUND`(기록 안 함) → `accessLog.view(CASE)` → 최근 이력 20건(최신 먼저, 작성자 login_id, **ASSIGN·REASSIGN은 `from_assignee`·`to_assignee`** `{login_id, display_name}` — 그 밖은 null, SCRUM-348. id가 있는데 사용자 행이 없으면 그 칸도 null — 사용자를 지우지 않으니 실제로는 안 생김) · `available_actions` |
-| `AssignCase` | 03 `POST …/assign` | 404 → version 409 `CONCURRENT_UPDATE` → 대상: 조사역이 남 지정 409 `INVALID_ASSIGNEE`(`details.reason = SELF_ONLY`), 없는 login_id 404 `USER_NOT_FOUND`, 비활성·조사역 아님 409 `INVALID_ASSIGNEE` → 상태 409 `INVALID_CASE_TRANSITION`. 조사역은 `assignee` 생략 = 본인, ADMIN은 필수 |
+| `AssignCase` | 03 `POST …/assign` `{assignee, version}` | **ADMIN만 — SecurityConfig URL 규칙 + 유스케이스 한 번 더(403 `FORBIDDEN`, SCRUM-339)** → 404 → version 409 `CONCURRENT_UPDATE` → 대상: 없는 login_id 404 `USER_NOT_FOUND`, 비활성·조사역 아님 409 `INVALID_ASSIGNEE`(`NOT_ACTIVE_INVESTIGATOR`) → 상태 409 `INVALID_CASE_TRANSITION`. **`assignee`를 안 주면** — 생략·`null` 409 `INVALID_ASSIGNEE`·`NOT_ACTIVE_INVESTIGATOR`(ADMIN 본인이 대상이 됨), 빈 문자열 `""` 400 `INVALID_REQUEST`(`@Size(min=1)`), 공백만 404 `USER_NOT_FOUND`(그런 login_id 없음) |
 | `EscalateCase` | 07 `POST …/escalate` | 404 → version 409 → 담당 403 `NOT_ASSIGNEE` → 상태 409 → 사유 |
 | `CloseCase` | 06 `POST …/close` | 404 → version 409 → 담당 403 → 상태 409 → **초안 있으면 409 `CLOSE_REQUIRES_STR`**(`Case.closeWithoutDraft`) → 사유. 초안 있는 종결은 str `close-with-draft`가 공개 기능 `CloseCaseWithDraft`(SCRUM-235)를 불러요 |
 | `ReassignCase` (SCRUM-177) | 04 `POST …/reassign` `{assignee, comment?, version}` | **ADMIN만 — SecurityConfig URL 규칙(403 `FORBIDDEN`)** → 404 → version 409 → 대상: 없는 login_id 404 `USER_NOT_FOUND`, 비활성·조사역 아님 409 `INVALID_ASSIGNEE`(`NOT_ACTIVE_INVESTIGATOR`) → 상태 409(REVIEWING·ESCALATED·DRAFTED·REJECTED만). 같은 담당자면 no-op. 이력 REASSIGN에 `from_assignee_id`·`to_assignee_id`(V010)·사유. 대상 확인은 `AssignCase`와 같은 `ActiveInvestigators` |
@@ -114,13 +114,13 @@
 | 상세 `aggregates` (SCRUM-179) | 02 | 근거 거래 전체로 `CaseAggregates`: 통화별 유입(amount_received)·유출(amount_paid), 경유·자기계좌 거래 제외, 환산 없음. `transaction_count`·`first_ts`·`last_ts`는 전체 기준 |
 
 - 세 변경 유스케이스는 공통 변경 응답(`CaseChangeResult` — 계약서 5.3 M)을 돌려줘요. `version`·`updated_at`은 flush 뒤 값. 요청 `version` 비교 뒤 커밋 때 `@Version`이 한 번 더 막아서 동시에 맡기면 뒤 요청은 409 `CONCURRENT_UPDATE`.
-- **`available_actions` (`CaseAction`)** — 계약서 §4의 8개 + 상세에만 `ASK_QUESTION`(아래 "질문 답변"). `ASSIGN`(OPEN, 조사역·ADMIN) · `REASSIGN`(ADMIN, 재배정 가능 상태) · 담당만: `UPDATE_NOTES`·`REFRESH_SUMMARY`(REVIEWING·ESCALATED·DRAFTED·보완 반려) · `ESCALATE` · `CLOSE`/`CLOSE_WITH_DRAFT`(닫을 수 있는 상태에서 초안 유무로 하나) · `GENERATE_DRAFT`(초안을 붙일 수 있는 상태). 상태 판단은 **`CaseStatus.allows(CaseAction, 반려 코드)` 한 곳**이에요 — 상태를 바꾸는 동작은 전이 표 그대로, 상태가 그대로인 동작(재배정·메모·요약)은 같은 enum의 집합으로. `Case.reassign`·`isEditableByAssignee`도 이걸 불러요. 누가(역할·담당자)와 초안 유무는 `availableFor`·유스케이스가 더 봐요 [SCRUM-171, 3주차 리뷰 질문 2].
+- **`available_actions` (`CaseAction`)** — 계약서 §4의 8개 + 상세에만 `ASK_QUESTION`(아래 "질문 답변"). `ASSIGN`(OPEN, ADMIN만 — SCRUM-339) · `REASSIGN`(ADMIN, 재배정 가능 상태) · 담당만: `UPDATE_NOTES`·`REFRESH_SUMMARY`(REVIEWING·ESCALATED·DRAFTED·보완 반려) · `ESCALATE` · `CLOSE`/`CLOSE_WITH_DRAFT`(닫을 수 있는 상태에서 초안 유무로 하나) · `GENERATE_DRAFT`(초안을 붙일 수 있는 상태). 상태 판단은 **`CaseStatus.allows(CaseAction, 반려 코드)` 한 곳**이에요 — 상태를 바꾸는 동작은 전이 표 그대로, 상태가 그대로인 동작(재배정·메모·요약)은 같은 enum의 집합으로. `Case.reassign`·`isEditableByAssignee`도 이걸 불러요. 누가(역할·담당자)와 초안 유무는 `availableFor`·유스케이스가 더 봐요 [SCRUM-171, 3주차 리뷰 질문 2].
 - **경보·점수 칸** — 상세 `alert`(alert_no·rule_id·batch_date·window_start·window_end·reference_ts·transaction_count)와 `latest_score`(score_status·score·score_band·failure_code·model_version·feature_version·data_quality_status·reasons)는 detection `GetAlertSummary`로 채워요(SCRUM-152·103). `latest_score`는 늘 있고, 점수 전(PENDING)·실패(FAILED)면 score_status만 있고 점수 칸은 null, reasons는 `[]`. `score_band`는 지금 운영 정책(`CasePolicy`)으로 계산 — 정책이 설정되지 않았으면 null(상세는 막지 않음, LOW로 바꾸지 않음). 계약서 C2에 없던 `transaction_count`·`failure_code`는 계약서에 한 줄씩 추가.
 - **맨 위 `score`·`score_band`·`policy_version`** — 계약서 Q2 MVP대로 `latest_score.score`·`score_band`와 그때 쓴 정책 버전(#78 리뷰). 케이스 생성 때 저장하는 스냅샷은 후속.
 - **목록 점수 (SCRUM-236)** — 목록 `score`는 생성 당시 점수(`opened_score`), `score_band`·`policy_version`은 지금 정책으로 계산(정책 없으면 null, 목록은 막지 않음). `sort=score,asc|desc`는 `CaseRepository.searchByScore` — 쿼리에 `nulls last`를 직접 적어요(Spring Data가 문자열 쿼리의 `Sort`에 nulls 처리를 안 붙여서). 점수 없는 케이스는 오름·내림 모두 맨 뒤, 같은 점수는 `created_at DESC, id DESC`, 전체 정렬 뒤 페이지. 내림차순 인덱스 `cases_opened_score_idx`.
 - **상세 `opened_score` (SCRUM-237)** — `{score, model_version, feature_version, policy_version, low_to_medium, medium_to_high}` 또는 null. `latest_score`와 섞지 않아요. 내부 점수 행 id는 안 내보내요. 〔계약서 C2에 한 줄 추가 필요〕
 - **아직 null인 칸 (후속)** — `current_draft`는 str 조합 계층(미결 17, SCRUM-245).
-- 조사역이 다른 assignee를 지정하면 **409 `INVALID_ASSIGNEE`(`details.reason = SELF_ONLY`)** 로 확정(11/6). 명세 API-03은 400이었지만 400 `INVALID_REQUEST`는 형식 오류용이에요. 프론트는 `reason`으로 문구를 나눠요(`08_decisions.md` 11/6, SCRUM-153).
+- **배정은 관리자만 (SCRUM-339, 11/21)** — 조사역이 OPEN 케이스를 스스로 맡는 길을 없앴어요(실제 업무처럼 관리자가 먼저 배정, 조사역은 받은 것만). 조사역·승인자가 `assign`을 부르면 403 `FORBIDDEN` — URL 규칙이 먼저 막고, 유스케이스도 한 번 더 봐요(`CaseQuestionAccess`와 같은 방식). 11/6의 `SELF_ONLY`(조사역이 남 지정 409)는 닿을 길이 없어 지웠어요 — `INVALID_ASSIGNEE`의 `details.reason`은 이제 `NOT_ACTIVE_INVESTIGATOR` 하나. 이미 조사역이 맡아 둔 케이스·이력은 그대로. 승인자 배정 권한은 발표 뒤 검토(`08_decisions.md` 11/21).
 
 **컨트롤러 — 구현됨 (SCRUM-106)** `CaseController` `/api/v1/cases` — 01 목록 · 02 상세 · 03 배정 · 07 에스컬레이션 · 06 종료(초안 없음). 응답은 계약서 v0.2 C1·C2·5.3 모양이에요.
 - **요청 검사(400 `INVALID_REQUEST`)** — 목록 `CaseListQuery`: `status` 쉼표 여럿(없는 값 400), `sort` = `score|created_at|status,asc|desc`, `page ≥ 0`, `1 ≤ size ≤ 100`(기본 20), `from ≤ to`. 변경 요청: `version` 필수, `comment` 공백 아님·2,000자 이하, `close_reason`은 세 값 중 하나. 상태·담당자 검사는 지금처럼 유스케이스·엔티티가 해요.

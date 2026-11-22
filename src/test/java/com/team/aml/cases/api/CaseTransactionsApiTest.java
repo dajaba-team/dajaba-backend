@@ -60,12 +60,14 @@ class CaseTransactionsApiTest {
     private final ObjectMapper json = new ObjectMapper();
     private AppUserDetails inv;
     private AppUserDetails apr;
+    private AppUserDetails adm;
 
     @BeforeEach
     void users() {
         long n = SEQ.incrementAndGet();
         inv = newUser("tx_inv" + n, "INVESTIGATOR");
         apr = newUser("tx_apr" + n, "APPROVER");
+        adm = newUser("tx_adm" + n, "ADMIN");
     }
 
     // ── C3 근거 거래 ─────────────────────────────────────────
@@ -240,8 +242,8 @@ class CaseTransactionsApiTest {
     @Test
     void 이력_전체는_최신_먼저_NOTE_빼고_action_필터() throws Exception {
         Fixture f = newCase();
-        body(post("/api/v1/cases/{caseNo}/assign", f.caseNo).contentType(MediaType.APPLICATION_JSON)
-                .content("{\"version\": 0}").with(user(inv)).with(csrf()), 200);
+        body(post("/api/v1/cases/{caseNo}/assign", f.caseNo).contentType(MediaType.APPLICATION_JSON)   // 관리자 배정 (SCRUM-339)
+                .content("{\"assignee\": \"" + inv.loginId() + "\", \"version\": 0}").with(user(adm)).with(csrf()), 200);
         body(put("/api/v1/cases/{caseNo}/notes", f.caseNo).contentType(MediaType.APPLICATION_JSON)
                 .content("{\"investigator_notes\": \"메모\", \"version\": 1}").with(user(inv)).with(csrf()), 200);
         body(post("/api/v1/cases/{caseNo}/escalate", f.caseNo).contentType(MediaType.APPLICATION_JSON)

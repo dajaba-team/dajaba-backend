@@ -122,8 +122,10 @@ public class CaseController {
                 query.sizeOrDefault()));
     }
 
-    @Operation(summary = "담당 맡기 / 배정",
-            description = "OPEN → REVIEWING. 조사역은 본인만(남 지정 409 INVALID_ASSIGNEE·SELF_ONLY), ADMIN 은 assignee 필수. "
+    @Operation(summary = "담당자 배정",
+            description = "ADMIN 만(그 밖은 403 FORBIDDEN — 조사역 자기 배정 없음, SCRUM-339). OPEN → REVIEWING. "
+                    + "assignee 필수 — 생략·null 409 INVALID_ASSIGNEE(NOT_ACTIVE_INVESTIGATOR), 빈 문자열 400 INVALID_REQUEST, "
+                    + "없는 login_id(공백만 포함) 404 USER_NOT_FOUND, 비활성·조사역 아님 409 INVALID_ASSIGNEE. "
                     + "버전 다르면 409 CONCURRENT_UPDATE")
     @PostMapping("/{caseNo}/assign")
     @CountsConflicts(CaseAction.ASSIGN)
