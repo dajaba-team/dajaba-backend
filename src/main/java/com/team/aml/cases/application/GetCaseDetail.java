@@ -79,9 +79,40 @@ public class GetCaseDetail {
                               String featureVersion, String dataQualityStatus, JsonNode reasons) {
     }
 
-    /** 이력 한 줄 (명세 API-11 모양). createdBy 는 login_id. 최신이 먼저. */
+    /**
+     * 이력 한 줄 (명세 API-11 모양). createdBy 는 login_id. 최신이 먼저.
+     * fromAssignee·toAssignee 는 담당이 바뀐 줄만 — ASSIGN 은 받은 사람, REASSIGN 은 둘 다, 그 밖은 null (SCRUM-348).
+     */
     public record History(CaseHistoryAction action, CaseStatus fromStatus, CaseStatus toStatus, String reasonCode,
-                          String comment, String createdBy, Instant createdAt) {
+                          String comment, String createdBy, Instant createdAt,
+                          UserRef fromAssignee, UserRef toAssignee) {
+
+        /** 엔티티 한 줄 → 응답 한 줄. refs 에는 작성자·넘긴 사람·받은 사람 id 가 들어 있어야 한다({@link #peopleOf}). */
+        static History of(CaseHistory h, Map<Long, UserRef> refs) {
+            UserRef by = refs.get(h.getCreatedBy());
+            return new History(h.getAction(), h.getFromStatus(), h.getToStatus(), h.getReasonCode(), h.getComment(),
+                    by == null ? null : by.loginId(), h.getCreatedAt().truncatedTo(ChronoUnit.SECONDS),
+                    refOf(refs, h.getFromAssigneeId()), refOf(refs, h.getToAssigneeId()));
+        }
+
+        /** 이력 줄들을 그리는 데 필요한 사람 id — 작성자와 담당 변경의 두 사람. null 은 UserRefs 가 건너뛴다. */
+        static List<Long> peopleOf(List<CaseHistory> rows) {
+            List<Long> ids = new ArrayList<>();
+            for (CaseHistory h : rows) {
+                ids.add(h.getCreatedBy());
+                ids.add(h.getFromAssigneeId());
+                ids.add(h.getToAssigneeId());
+            }
+            return ids;
+        }
+
+        /**
+         * id 가 있는데 사용자 행이 없으면 null — "받은 사람 없음"과 구분되지 않는다.
+         * 사용자를 지우지 않는 설계라 실제로는 생기지 않는다(PR #162 리뷰).
+         */
+        private static UserRef refOf(Map<Long, UserRef> refs, Long id) {
+            return id == null ? null : refs.get(id);
+        }
     }
 
     private final CaseRepository cases;
@@ -120,13 +151,11 @@ public class GetCaseDetail {
         accessLog.view(TargetType.CASE, c.getId());
 
         List<CaseHistory> recent = histories.findTop20ByCaseIdAndActionNotOrderByIdDesc(c.getId(), CaseHistoryAction.NOTE);
-        List<Long> people = new ArrayList<>(recent.stream().map(CaseHistory::getCreatedBy).toList());
+        List<Long> people = History.peopleOf(recent);
         people.add(c.getAssigneeId());
         Map<Long, UserRef> refs = userRefs.of(people);
 
-        List<History> history = recent.stream().map(h -> new History(h.getAction(), h.getFromStatus(), h.getToStatus(),
-                h.getReasonCode(), h.getComment(), loginIdOf(refs.get(h.getCreatedBy())),
-                h.getCreatedAt().truncatedTo(ChronoUnit.SECONDS))).toList();
+        List<History> history = recent.stream().map(h -> History.of(h, refs)).toList();
         List<CaseAction> actions = new ArrayList<>(CaseAction.availableFor(c, me.userId(), Role.valueOf(me.role())));
         // 질문 답변 — 켜져 있고 담당 조사역·승인자일 때만. 목록 한 줄에는 붙이지 않는다(계약서 C2, SCRUM-302)
         if (properties.ai().askEnabled() && CaseAction.canAsk(c, me.userId(), Role.valueOf(me.role()))) {
@@ -159,9 +188,5 @@ public class GetCaseDetail {
         } catch (PolicyNotConfiguredException e) {
             return null;
         }
-    }
-
-    private static String loginIdOf(UserRef ref) {
-        return ref == null ? null : ref.loginId();
     }
 }
