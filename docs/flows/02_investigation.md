@@ -1,4 +1,4 @@
-# ② 조사 — 로그인 → 목록 → 상세(+AI 요약) → 배정 → 에스컬레이션
+# ② 조사 — 로그인 → 목록 → 상세(+AI 요약) → 관리자 배정 → 에스컬레이션
 
 조사역 한 명이 케이스 하나를 다루는 흐름. **cases 폴더는 str 폴더를 모른다**(의존 방향 `cases ← str`). 그래서 "케이스 상세 + 현재 초안"은 **str 쪽 조회 유스케이스가 cases 공개 상세 조회를 불러 조합**하고(str → cases 방향만), 화면 요청은 하나다(미결 17, 10/30).
 
@@ -20,8 +20,14 @@ sequenceDiagram
     SEC-->>FE: Set-Cookie SESSION + XSRF-TOKEN, {id, role}
     note over FE: 이후 모든 쓰기 요청에 X-XSRF-TOKEN 헤더 (axios 기본)
 
-    Inv->>FE: 케이스 목록
-    FE->>CAS: GET /cases?status=OPEN&sort=score,desc&page=0
+    note over Inv,CAS: ① 관리자 배정이 먼저 (SCRUM-339) — 조사역 화면엔 배정 버튼 없음, 조사역이 부르면 403 FORBIDDEN
+    FE->>CAS: (관리자 화면) POST /cases/{id}/assign {assignee: inv01, version: 0}
+    CAS->>CAS: ADMIN 확인(케이스 읽기 전) · 활성 조사역 확인 · Case.assign(inv01) — OPEN→REVIEWING, @Version 검사
+    CAS->>DB: UPDATE cases(version 1), INSERT case_history(ASSIGN, created_by = 관리자)
+    CAS-->>FE: 200 {status: REVIEWING, assignee: inv01, version: 1}
+
+    Inv->>FE: ② 내 케이스 목록 (받은 것만)
+    FE->>CAS: GET /cases?status=REVIEWING&assignee=me&sort=score,desc&page=0
     CAS->>DB: cases ⋈ alert_scores (점수순)
     CAS-->>FE: Page<CaseListItem> (계좌번호 마스킹)
 
@@ -46,8 +52,8 @@ sequenceDiagram
     CAS->>DET: 근거 거래 ID → source 거래 조회(읽기)
     CAS-->>FE: Page<TransactionRow>
 
-    opt 요약이 없을 때 (또는 새로고침 버튼)
-        FE->>CAS: POST /cases/{case_no}/refresh-summary {version}
+    opt 요약이 없을 때 (또는 새로고침 버튼) — 담당 조사역만, 배정 전 OPEN 이면 403 NOT_ASSIGNEE
+        FE->>CAS: POST /cases/{case_no}/refresh-summary {version} (방금 상세에서 받은 배정 뒤 version)
         CAS->>DB: 짧은 읽기 트랜잭션 — version·담당·편집 가능 상태 확인, 요청 구성 + input_sha256
         CAS->>AI: POST /v1/cases/summary {case_no, alert, evidence_transaction_ids, reasons, prior_alert_count} (AiClient, 트랜잭션 밖, ≤90초 — 규약 v0.4 §6.1)
         note over AI: facts는 AI가 원천을 읽어 계산 — 초안과 같은 규칙(안건 23)
@@ -58,12 +64,6 @@ sequenceDiagram
         CAS-->>FE: 201 {case_no, summary{summary_lines, is_current, …}, case_version}
         note right of AI: 실패해도 조사는 계속 — 요약 칸만 "생성 실패, 다시 시도"
     end
-
-    Inv->>FE: "내게 배정"
-    FE->>CAS: POST /cases/{id}/assign
-    CAS->>CAS: Case.assign(currentUser) — OPEN→REVIEWING, @Version 검사
-    CAS->>DB: UPDATE cases, INSERT case_history(ASSIGN)
-    CAS-->>FE: 200 {status: REVIEWING}
 
     alt 오탐으로 판단
         Inv->>FE: 종료 + 사유
@@ -85,7 +85,7 @@ sequenceDiagram
 | 질문 | 답 |
 |---|---|
 | 상세 응답에 현재 초안을 어디서 합치나? (지윤) | **str 쪽 조회 유스케이스**가 cases 공개 상세 조회를 불러 조합한다. CASES는 초안 참조 ID·버전과 케이스 정보를 DTO로 주고 str을 역호출하지 않는다. 시점은 짧은 읽기 전용 REPEATABLE READ 트랜잭션, 화면 요청은 하나, 초안이 없으면 `current_draft = null` (미결 17, 10/30) |
-| 남의 케이스를 열람하면? | 허용. 대신 `access_logs`에 남는다. **수정**(배정·종료·에스컬레이션·메모)만 담당자 제한 → `NotAssigneeException` 403. **예외 — 현재 초안 본문**은 담당 조사역·승인자만, 그 밖에는 상태·날짜만 (서식 안건 4) |
+| 남의 케이스를 열람하면? | 허용. 대신 `access_logs`에 남는다. **수정**은 둘로 나뉜다 — 최초 배정은 **관리자만**(그 밖은 403 `FORBIDDEN`, SCRUM-339), 담당 작업(종료·에스컬레이션·메모·요약)은 **담당 조사역만**(그 밖은 `NotAssigneeException` 403 `NOT_ASSIGNEE`). **예외 — 현재 초안 본문**은 담당 조사역·승인자만, 그 밖에는 상태·날짜만 (서식 안건 4) |
 | 메모는 어디에? | `case_history` NOTE 행, 별도 테이블 없음 (미결 8, 10/30) |
 | `case_history` action 이름 | 동사형 — `OPEN`·`ASSIGN`·`REASSIGN`·`NOTE`·`ESCALATE`·`CLOSE` (그림의 이전 `ASSIGNED`·`CLOSED`·`ESCALATED`는 옛 표기, 미결 8) |
 | 요약 AI가 죽어 있으면? | 조사는 계속. 요약 칸만 실패 표시. [④ 실패 경로](04_failure_paths.md) |

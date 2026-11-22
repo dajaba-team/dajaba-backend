@@ -5,6 +5,7 @@ import com.team.aml.shared.audit.LoginAccessLogWriter;
 import com.team.aml.shared.config.AmlProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.actuate.autoconfigure.security.servlet.EndpointRequest;
 import org.springframework.boot.actuate.autoconfigure.web.server.ManagementPortType;
 import org.springframework.boot.actuate.health.HealthEndpoint;
@@ -40,7 +41,8 @@ import java.util.List;
  *  - 성공 200 {id, login_id, display_name, role}, 실패 401 LOGIN_FAILED(사유 숨김), 본문 누락 400 INVALID_REQUEST.
  *  - 필터는 JsonLoginConfigurer 로 등록해 세션 ID 교체·maximumSessions(1)·세션 저장·CSRF 토큰 교체가 Spring 전략으로 걸린다.
  *  - 세션 쿠키, CSRF, 30분 만료, /auth/me, /auth/logout(204), 401/403 JSON.
- *  - 세션 저장소는 서버 메모리. SessionRegistry·HttpSessionEventPublisher 빈은 MemorySessionConfig (SCRUM-273).
+ *  - 세션 저장소는 서버 메모리(기본, MemorySessionConfig) 또는 Redis(aml.session.redis.enabled=true, RedisSessionConfig).
+ *    SessionRegistry 빈은 그 두 설정 중 하나가 만든다 (SCRUM-273).
  *
  * URL 규칙:
  *  /api/v1/auth/login, /actuator/health, swagger → 누구나 (8080 /actuator/health 는 MainPortHealthController — 호환용)
@@ -48,6 +50,7 @@ import java.util.List;
  *  /api/v1/admin/**                              → ADMIN
  *  GET  /api/v1/approvals/**                     → ADMIN·APPROVER (10/29)
  *  POST /api/v1/approvals/**                     → APPROVER
+ *  POST /api/v1/cases/{case_no}/assign          → ADMIN (권한 표 6, SCRUM-339 — 조사역 자기 배정 없음)
  *  POST /api/v1/cases/{case_no}/reassign        → ADMIN (권한 표 7, SCRUM-177)
  *  /api/v1/cases/{case_no}/questions (A8·C9)    → INVESTIGATOR·APPROVER (설계 문서 7.2, SCRUM-302). 담당 여부는 유스케이스
  *  /api/**                                       → 로그인만
@@ -57,6 +60,9 @@ import java.util.List;
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
+
+    /** 로그아웃 URL — Redis 장애 때 {@link SessionStoreFailureFilter} 도 이 경로만 쿠키를 지운다. */
+    static final String LOGOUT_URL = "/api/v1/auth/logout";
 
     private static final Logger log = LoggerFactory.getLogger(SecurityConfig.class);
     private final LoginAccessLogWriter accessLog;
@@ -82,7 +88,8 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http, UserDetailsService users, PasswordEncoder encoder,
-                                           SessionRegistry sessionRegistry, Environment env) throws Exception {
+                                           SessionRegistry sessionRegistry, Environment env,
+                                           ObjectProvider<RedisSessionLogoutHandler> redisLogout) throws Exception {
         // 관리 포트가 따로일 때만 연다. EndpointRequest 는 그때 관리 포트 요청에만 맞는다(8080 의 같은 경로는 아래 denyAll).
         // 누가 management.server.port 를 지워 포트가 같아지면 이 규칙이 빠져 막힌다(fail-closed) — 지표가 8080 으로 새지 않게.
         boolean separateManagementPort = ManagementPortType.get(env) == ManagementPortType.DIFFERENT;
@@ -106,6 +113,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.GET, "/api/v1/approvals/**").hasAnyRole("ADMIN", "APPROVER")
                 .requestMatchers("/api/v1/approvals/**").hasRole("APPROVER")
+                .requestMatchers(HttpMethod.POST, "/api/v1/cases/*/assign").hasRole("ADMIN")     // 권한 표 6 (SCRUM-339)
                 .requestMatchers(HttpMethod.POST, "/api/v1/cases/*/reassign").hasRole("ADMIN")   // 권한 표 7 (SCRUM-177)
                 .requestMatchers("/api/v1/cases/*/questions").hasAnyRole("INVESTIGATOR", "APPROVER")   // 질문 답변 — 관리자 403 (SCRUM-302)
                 .requestMatchers("/api/**").authenticated()
@@ -123,7 +131,8 @@ public class SecurityConfig {
                 .successHandler(handlers.loginSuccess())
                 .failureHandler(handlers.loginFailure()))
             .logout(l -> l
-                .logoutUrl("/api/v1/auth/logout")
+                .logoutUrl(LOGOUT_URL)
+                .addLogoutHandler((req, res, auth) -> redisLogout.ifAvailable(h -> h.logout(req, res, auth)))   // Redis 모드만 (SCRUM-273)
                 .deleteCookies("SESSION")
                 .logoutSuccessHandler((req, res, auth) -> {
                     if (auth != null && auth.getPrincipal() instanceof AppUserDetails me) {

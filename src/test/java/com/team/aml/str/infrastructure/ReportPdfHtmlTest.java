@@ -1,5 +1,6 @@
 package com.team.aml.str.infrastructure;
 
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.w3c.dom.Document;
@@ -7,6 +8,7 @@ import org.w3c.dom.Document;
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import static com.team.aml.str.infrastructure.ReportPdfFixtures.preview;
 import static com.team.aml.str.infrastructure.ReportPdfFixtures.snapshot;
@@ -136,6 +138,39 @@ class ReportPdfHtmlTest {
         ObjectNode snap = snapshot(1);
         ((ObjectNode) snap.path("subject")).put("entity_name", "한빛\uFFFF무역\uD800");
         assertThatCode(() -> xml(ReportPdfHtml.build(submitted(snap), "pdf_v1"))).doesNotThrowAnyException();
+    }
+
+    // 12
+    @Test
+    void 정상_VI_의심_유형은_코드가_아니라_분류_제목과_이름표로_서식_순서대로() {   // 11/21 리뷰 — 코드가 그대로 찍히던 버그
+        String html = ReportPdfHtml.build(submitted(snapshot(1)), "pdf_v2");          // 고른 순서: VI-4 빈번한 입출금 → VI-2 불특정다수
+
+        assertThat(html).containsSubsequence("VI-2. 의심스러운 거래자의 태도 및 특징 관련", "· 불특정다수와의 거래",
+                "VI-4. 거래유형 관련", "· 빈번한 입출금(입출고)");
+        assertThat(html).doesNotContain("DEMO_VI");
+    }
+
+    // 13
+    @Test
+    void 정상_모르는_코드는_숨기지_않고_맨_끝에_확인_필요한_유형으로() {   // 프론트 suspicionTypeLabel 과 같은 글자
+        assertThat(ReportPdfHtml.suspicionTypes(List.of("VI-9-99", "DEMO_VI5_01", "VI-9-99")))
+                .isEqualTo("<b>VI-5. 기타 특징 및 유형</b><br/>· 기타 (특징·유형을 따로 기술)<br/>확인 필요한 유형 (VI-9-99)");
+        assertThat(ReportPdfHtml.suspicionTypes(List.of("<x>"))).isEqualTo("확인 필요한 유형 (&lt;x&gt;)");
+    }
+
+    // 14
+    @Test
+    void 경계_유형_배열에_null이나_숫자가_섞여도_null로_찍지_않고_건너뛴다() {   // 11/21 리뷰 4
+        ObjectNode snap = snapshot(1);
+        ((ArrayNode) snap.path("suspicion").path("types")).removeAll().addNull().add(7).add("DEMO_VI2_09");
+
+        String html = ReportPdfHtml.build(submitted(snap), "pdf_v2");
+
+        assertThat(html).contains("· 불특정다수와의 거래").doesNotContain("(null)", "(7)");
+
+        ((ArrayNode) snap.path("suspicion").path("types")).removeAll().addNull();
+        assertThat(ReportPdfHtml.build(submitted(snap), "pdf_v2"))
+                .contains("<th>의심 유형</th><td><span class=\"na\">「원천 미제공」</span>");
     }
 
     private static Document xml(String html) throws Exception {

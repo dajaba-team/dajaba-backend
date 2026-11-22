@@ -26,6 +26,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.domain.Page;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
@@ -111,31 +112,46 @@ class CaseUseCasesDbTest {
     // ── 배정 ──────────────────────────────────────────────────
 
     @Test
-    void 정상_조사역이_스스로_맡으면_REVIEWING_ASSIGN_이력_version_증가() {
-        Case c = newCase();
-        login(inv);
-
-        CaseChangeResult r = assign.execute(c.getCaseNo(), c.getVersion(), null);
-
-        assertThat(r.status()).isEqualTo(CaseStatus.REVIEWING);
-        assertThat(r.assignee()).isEqualTo(new UserRef(inv.loginId(), inv.displayName()));
-        assertThat(r.version()).isEqualTo(c.getVersion() + 1);
-        assertThat(r.updatedAt()).isNotNull();
-        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId())).last().satisfies(h -> {
-            assertThat(h.getAction()).isEqualTo(CaseHistoryAction.ASSIGN);
-            assertThat(h.getCreatedBy()).isEqualTo(inv.userId());
-        });
-    }
-
-    @Test
-    void 정상_ADMIN은_다른_조사역을_지정한다() {
+    void 정상_ADMIN이_조사역을_지정하면_REVIEWING_ASSIGN_이력_version_증가() {
         Case c = newCase();
         login(admin);
 
         CaseChangeResult r = assign.execute(c.getCaseNo(), c.getVersion(), inv2.loginId());
 
-        assertThat(r.assignee().loginId()).isEqualTo(inv2.loginId());
+        assertThat(r.status()).isEqualTo(CaseStatus.REVIEWING);
+        assertThat(r.assignee()).isEqualTo(new UserRef(inv2.loginId(), inv2.displayName()));
+        assertThat(r.version()).isEqualTo(c.getVersion() + 1);
+        assertThat(r.updatedAt()).isNotNull();
         assertThat(cases.findById(c.getId()).orElseThrow().getAssigneeId()).isEqualTo(inv2.userId());
+        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId())).last().satisfies(h -> {
+            assertThat(h.getAction()).isEqualTo(CaseHistoryAction.ASSIGN);
+            assertThat(h.getCreatedBy()).isEqualTo(admin.userId());
+        });
+    }
+
+    @Test
+    void 실패_조사역_승인자가_직접_부르면_케이스를_읽기_전에_거절하고_아무것도_안_바뀐다() {   // SCRUM-339 — URL 을 안 거치는 호출
+        Case c = newCase();
+        login(inv);
+        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), null))
+                .isInstanceOf(AccessDeniedException.class);       // 비움 = 예전 "본인"
+        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), inv.loginId()))
+                .isInstanceOf(AccessDeniedException.class);       // 본인 지정
+        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), inv2.loginId()))
+                .isInstanceOf(AccessDeniedException.class);       // 남 지정
+        assertThatThrownBy(() -> assign.execute("CASE-2099-999999", 0, null))
+                .isInstanceOf(AccessDeniedException.class);       // 없는 케이스도 404 가 아니라 거절 먼저
+        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion() + 1, null))
+                .isInstanceOf(AccessDeniedException.class);       // 버전 검사보다 먼저
+        login(apr);
+        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), inv.loginId()))
+                .isInstanceOf(AccessDeniedException.class);
+
+        Case after = cases.findById(c.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(CaseStatus.OPEN);
+        assertThat(after.getAssigneeId()).isNull();
+        assertThat(after.getVersion()).isEqualTo(c.getVersion());
+        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId())).hasSize(1);   // OPEN 만
     }
 
     @Test
@@ -145,15 +161,13 @@ class CaseUseCasesDbTest {
         assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), apr.loginId()))
                 .isInstanceOf(InvalidAssigneeException.class);       // 조사역 아님
         assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), null))
-                .isInstanceOf(InvalidAssigneeException.class);       // ADMIN 본인은 조사역 아님
+                .isInstanceOf(InvalidAssigneeException.class)        // 대상 비움 — ADMIN 본인은 조사역 아님
+                .satisfies(e -> assertThat(((InvalidAssigneeException) e).details())
+                        .containsEntry("reason", "NOT_ACTIVE_INVESTIGATOR"));
         assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), "nobody"))
                 .isInstanceOf(UserNotFoundException.class);
-        login(inv);
-        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), inv2.loginId()))
-                .isInstanceOf(InvalidAssigneeException.class)
-                .satisfies(e -> assertThat(((InvalidAssigneeException) e).details()).containsEntry("reason", "SELF_ONLY"));
         jdbc.update("update ops.users set is_active = false where id = ?", inv.userId());
-        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), null))
+        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), inv.loginId()))
                 .isInstanceOf(InvalidAssigneeException.class);       // 비활성
 
         Case after = cases.findById(c.getId()).orElseThrow();
@@ -165,22 +179,22 @@ class CaseUseCasesDbTest {
     @Test
     void 실패_화면이_읽은_뒤_바뀌었으면_409_이미_배정됐으면_상태_오류() {
         Case c = newCase();
-        login(inv);
-        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion() + 1, null))
+        login(admin);
+        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion() + 1, inv.loginId()))
                 .isInstanceOf(OptimisticLockException.class);
-        CaseChangeResult first = assign.execute(c.getCaseNo(), c.getVersion(), null);
+        CaseChangeResult first = assign.execute(c.getCaseNo(), c.getVersion(), inv.loginId());
 
-        login(inv2);
-        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), null))   // 옛 version
+        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), c.getVersion(), inv2.loginId()))   // 옛 version
                 .isInstanceOf(OptimisticLockException.class);
-        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), first.version(), null))  // 최신 version, 이미 REVIEWING
+        assertThatThrownBy(() -> assign.execute(c.getCaseNo(), first.version(), inv2.loginId()))  // 최신 version, 이미 REVIEWING
                 .isInstanceOf(InvalidCaseTransitionException.class);
     }
 
     @Test
     void 실패_없는_케이스는_404() {
-        login(inv);
-        assertThatThrownBy(() -> assign.execute("CASE-2099-999999", 0, null)).isInstanceOf(CaseNotFoundException.class);
+        login(admin);
+        assertThatThrownBy(() -> assign.execute("CASE-2099-999999", 0, inv.loginId()))
+                .isInstanceOf(CaseNotFoundException.class);
     }
 
     // ── 에스컬레이션·종료 ─────────────────────────────────────
@@ -294,7 +308,7 @@ class CaseUseCasesDbTest {
         assertThat(r.assignee().loginId()).isEqualTo(inv.loginId());
         assertThat(r.history()).extracting(GetCaseDetail.History::action)
                 .containsExactly(CaseHistoryAction.ASSIGN, CaseHistoryAction.OPEN);   // 최신 먼저
-        assertThat(r.history().get(0).createdBy()).isEqualTo(inv.loginId());
+        assertThat(r.history().get(0).createdBy()).isEqualTo(admin.loginId());   // 관리자 배정
         assertThat(r.availableActions()).containsExactly(CaseAction.UPDATE_NOTES, CaseAction.REFRESH_SUMMARY,
                 CaseAction.ESCALATE, CaseAction.CLOSE);
         assertThat(viewLogs(c.getId(), inv.userId())).isEqualTo(1);
@@ -447,7 +461,7 @@ class CaseUseCasesDbTest {
         return tx().execute(s -> {
             Case c = Case.open("CASE-2023-%06d".formatted(SEQ.incrementAndGet()), alertId, "010_U" + alertId, null,
                     opened, SYSTEM);
-            c.assign(who.userId(), who.userId());
+            c.assign(who.userId(), admin.userId());   // 관리자 배정 (SCRUM-339)
             Case saved = cases.saveAndFlush(c);
             histories.saveAll(saved.takePendingHistories());
             return saved;
@@ -466,11 +480,30 @@ class CaseUseCasesDbTest {
         });
     }
 
+    /** OPEN → admin 이 inv 에게 배정한 REVIEWING (SCRUM-339). */
+    @Test
+    void 예전_조사역_자기_배정_이력은_그대로_보이고_담당_조사역은_계속_조사한다() {   // SCRUM-339 — 이력 안 바꿈
+        Case c = reviewing(inv);
+        login(inv);
+
+        GetCaseDetail.Result r = detail.execute(c.getCaseNo());
+
+        assertThat(r.history().get(0).action()).isEqualTo(CaseHistoryAction.ASSIGN);
+        assertThat(r.history().get(0).createdBy()).isEqualTo(inv.loginId());
+        assertThat(r.availableActions()).contains(CaseAction.ESCALATE, CaseAction.CLOSE).doesNotContain(CaseAction.ASSIGN);
+    }
+
+    /** OPEN → admin 이 inv 에게 배정한 REVIEWING (SCRUM-339). */
     private Case reviewing() {
+        return reviewing(admin);
+    }
+
+    /** actor 가 배정 이력 작성자 — 예전 조사역 자기 배정 이력을 만들 때만 inv. */
+    private Case reviewing(AppUserDetails actor) {
         Case opened = newCase();
         return tx().execute(s -> {
             Case c = cases.findById(opened.getId()).orElseThrow();
-            c.assign(inv.userId(), inv.userId());
+            c.assign(inv.userId(), actor.userId());
             Case saved = cases.saveAndFlush(c);
             histories.saveAll(saved.takePendingHistories());
             return saved;

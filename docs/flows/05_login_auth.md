@@ -30,10 +30,10 @@ sequenceDiagram
     FE->>SEC: GET /api/v1/auth/me (쿠키)
     SEC-->>FE: 200 {role: INVESTIGATOR}
 
-    U->>FE: 케이스 배정 버튼
-    FE->>SEC: POST /api/v1/cases/42/assign<br/>Cookie: SESSION · Header: X-XSRF-TOKEN
-    SEC->>SEC: ① 세션 유효? ② CSRF 토큰 일치? ③ URL 역할 규칙?
-    SEC->>UC: AssignCase(42)  — actor는 CurrentUser 빈에서
+    U->>FE: 에스컬레이션 버튼
+    FE->>SEC: POST /api/v1/cases/42/escalate<br/>Cookie: SESSION · Header: X-XSRF-TOKEN
+    SEC->>SEC: ① 세션 유효? ② CSRF 토큰 일치? ③ URL 역할 규칙? (예: /assign·/reassign 은 ADMIN만 → 조사역 403 FORBIDDEN)
+    SEC->>UC: EscalateCase(42)  — actor는 CurrentUser 빈에서
     UC->>UC: ④ 객체 규칙: case.isAssignedTo / 상태 전이 허용?
     UC->>DB: UPDATE cases, case_history
     UC-->>FE: 200

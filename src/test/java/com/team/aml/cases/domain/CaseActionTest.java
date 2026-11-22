@@ -46,9 +46,9 @@ class CaseActionTest {
     }
 
     @Test
-    void OPEN은_조사역과_관리자에게_배정만_보인다() {
-        assertThat(CaseAction.availableFor(opened(), INV, Role.INVESTIGATOR)).containsExactly(ASSIGN);
+    void OPEN은_관리자에게만_배정이_보인다() {   // SCRUM-339 — 조사역 자기 배정 없음
         assertThat(CaseAction.availableFor(opened(), ADMIN, Role.ADMIN)).containsExactly(ASSIGN);
+        assertThat(CaseAction.availableFor(opened(), INV, Role.INVESTIGATOR)).isEmpty();
         assertThat(CaseAction.availableFor(opened(), APR, Role.APPROVER)).isEmpty();
     }
 
