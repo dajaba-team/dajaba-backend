@@ -12,7 +12,10 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Optional;
+import java.util.OptionalLong;
 
 /**
  * 케이스 생성 배치 요청 (CASES 명세 API-14, 계약서 B4 — 202 비동기, 11/4 준혁 제안·지윤 동의).
@@ -59,7 +62,21 @@ public class RequestOpenCases {
      * 실행기가 작업을 거절하면 run() 이 안 돌아 RUNNING 이 남고 그 날짜가 막히므로 FAILED 로 기록하고 다시 던진다.
      */
     public Accepted execute(LocalDate batchDate) {
-        long batchRunId = openCases.start(batchDate, currentUser.require().userId());
+        return dispatch(openCases.start(batchDate, currentUser.require().userId()), batchDate);
+    }
+
+    /**
+     * 배치 잇기(OpenCasesAfterScore, SCRUM-349)용 — 큐 리스너에는 로그인 세션이 없어 앞 단계(점수) 요청자를 넘겨받는다.
+     * since(점수가 끝난 시각) 뒤에 그 날짜 케이스 생성이 이미 시작됐으면 행을 만들지 않고 빈 값 — 시작 잠금 안에서 확인한다.
+     * 나머지(거절·큐/실행기)는 화면 요청과 같다.
+     */
+    public Optional<Accepted> executeUnlessStartedSince(LocalDate batchDate, long triggeredBy, Instant since) {
+        OptionalLong batchRunId = openCases.startUnlessStartedSince(batchDate, triggeredBy, since);
+        return batchRunId.isEmpty() ? Optional.empty() : Optional.of(dispatch(batchRunId.getAsLong(), batchDate));
+    }
+
+    /** RUNNING 을 커밋한 실행을 큐로 보내고, 못 보내면 앱 안 실행기로. */
+    private Accepted dispatch(long batchRunId, LocalDate batchDate) {
         if (publisher.publish(JobQueues.CASE_OPEN_CASES, new BatchRunMessage(batchRunId))) {
             log.info("케이스 생성 큐에 넣음 batch_run_id={}", batchRunId);
             return new Accepted(batchRunId, BatchType.OPEN_CASES, batchDate, BatchStatus.RUNNING);

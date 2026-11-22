@@ -10,9 +10,11 @@ import java.time.LocalDate;
  * 그래서 detection 이 아니라 shared 에 있다 (10/22 안건 14). created_at 만 있고 updated_* 없음 → BaseEntity 상속 안 함.
  *
  * 쓰는 법: BatchRun.start(type, date, userId) → 저장 → 일 끝나면 succeed(rowsIn, rowsOut) 또는 fail(message) → 저장.
+ * 끝난 실행은 커밋 뒤 {@link BatchRunMetrics}가 시간·건수 지표로 센다(SCRUM-349).
  */
 @Entity
 @Table(name = "batch_runs")
+@EntityListeners(BatchRunMetrics.class)
 public class BatchRun {
 
     @Id

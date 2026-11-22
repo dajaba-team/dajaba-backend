@@ -9,12 +9,15 @@ import com.team.aml.shared.batch.BatchRunQuery;
 import com.team.aml.shared.config.AmlProperties;
 import com.team.aml.shared.domain.DomainException;
 import com.team.aml.shared.security.CurrentUser;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
@@ -28,6 +31,8 @@ import java.util.TreeSet;
  *       AI_BAD_RESPONSE 로 묶음째 거절한다 — 신뢰할 수 없는 응답은 저장하지 않는다(08_decisions 11/6, flows/01).</li>
  *   <li>다시 누르면 남은 대상만 보낸다. SCORED 는 다시 보내지 않아 alert_scores 가 두 번 생기지 않는다.</li>
  *   <li>대상 조회·저장처럼 묶음 호출이 아닌 곳에서 실패하면 FAILED 를 남기고 다시 던진다(500). 이미 커밋한 묶음은 그대로.</li>
+ *   <li>끝나면 지표 {@code aml.score.alerts{result}}·{@code aml.score.chunks{result}}를 세고, SUCCEEDED 면 배치 잇기(BatchChain)가
+ *       켜져 있을 때 같은 날짜 케이스 생성으로 이어진다(SCRUM-349).</li>
  * </ul>
  */
 @Service
@@ -42,9 +47,12 @@ public class RequestScores {
     private final BatchRunQuery batchRuns;
     private final CurrentUser currentUser;
     private final int chunkSize;
+    private final MeterRegistry meters;
+    private final BatchChain chain;
 
     public RequestScores(ScoreBatchRecorder recorder, ScoreChunkWriter writer, AlertScoreRepository scores,
-                         AiClient ai, BatchRunQuery batchRuns, CurrentUser currentUser, AmlProperties props) {
+                         AiClient ai, BatchRunQuery batchRuns, CurrentUser currentUser, AmlProperties props,
+                         MeterRegistry meters, BatchChain chain) {
         this.recorder = recorder;
         this.writer = writer;
         this.scores = scores;
@@ -52,6 +60,11 @@ public class RequestScores {
         this.batchRuns = batchRuns;
         this.currentUser = currentUser;
         this.chunkSize = props.ai().maxBatch();
+        this.meters = meters;
+        this.chain = chain;
+        // 앱이 뜰 때 0으로 등록 — 첫 배치가 Prometheus increase() 에서 빠지지 않게
+        countAlerts(0, 0, 0);
+        countChunk(0, 0);
     }
 
     public ScoreBatchResult execute(LocalDate date) {
@@ -62,6 +75,11 @@ public class RequestScores {
     /** 409 RULE_SCAN_NOT_DONE·BATCH_RUNNING 이면 아무것도 남기지 않는다. */
     public long start(LocalDate date, long triggeredBy) {
         return recorder.start(date, triggeredBy);
+    }
+
+    /** 배치 잇기(SCRUM-349)용 — since 뒤에 그 날짜 점수가 이미 시작됐으면 빈 값(시작 잠금 안에서 확인). 거절은 start 와 같다. */
+    public OptionalLong startUnlessStartedSince(LocalDate date, long triggeredBy, Instant since) {
+        return recorder.startUnlessStartedSince(date, triggeredBy, since);
     }
 
     public ScoreBatchResult run(long batchRunId, LocalDate date) {
@@ -75,7 +93,34 @@ public class RequestScores {
             throw e;
         }
         log.info("점수 배치 batch_run_id={} date={} {}", batchRunId, date, summary.describe());
-        return new ScoreBatchResult(batchRuns.get(batchRunId), summary);
+        ScoreBatchResult result = new ScoreBatchResult(batchRuns.get(batchRunId), summary);
+        chain.afterScore(batchRunId, result.run().status());   // SUCCEEDED 면 같은 날짜 케이스 생성으로 이어짐
+        return result;
+    }
+
+    /**
+     * 경보 단위 결과 (SCRUM-349) — 묶음을 커밋한 직후마다 센다. 뒤 묶음에서 배치가 실패해도 이미 커밋된 결과는 빠지지 않는다
+     * (다시 돌리면 SCORED 는 다시 보내지 않으니 끝에 한 번 세면 영영 빠짐). 실패율 = (failed_retryable + failed_final) / 전체.
+     * failed_final 은 다시 보내도 같은 실패(RULE_NOT_SUPPORTED 등 코드 있는 실패). 세다 실패해도 점수 결과는 그대로(fail-open).
+     */
+    private void countAlerts(int scored, int failedRetryable, int failedFinal) {
+        try {
+            meters.counter("aml.score.alerts", "result", "scored").increment(scored);
+            meters.counter("aml.score.alerts", "result", "failed_retryable").increment(failedRetryable);
+            meters.counter("aml.score.alerts", "result", "failed_final").increment(failedFinal);
+        } catch (RuntimeException e) {
+            log.warn("점수 지표 기록 실패 cause={}", e.getClass().getSimpleName());
+        }
+    }
+
+    /** 묶음 단위 결과 — ok 는 저장까지 커밋한 묶음, ai_failed 는 AI 호출이 실패해 전부 FAILED 로 커밋한 묶음. */
+    private void countChunk(int ok, int aiFailed) {
+        try {
+            meters.counter("aml.score.chunks", "result", "ok").increment(ok);
+            meters.counter("aml.score.chunks", "result", "ai_failed").increment(aiFailed);
+        } catch (RuntimeException e) {
+            log.warn("점수 지표 기록 실패 cause={}", e.getClass().getSimpleName());
+        }
     }
 
     private ScoreBatchSummary scoreAll(long batchRunId, LocalDate date) {
@@ -95,6 +140,8 @@ public class RequestScores {
                 results = ai.scores(batchRunId, chunk.stream().map(ScoreTarget::payload).toList()).scores();
             } catch (AiClientException e) {
                 writer.markAllFailed(chunk);
+                countAlerts(0, chunk.size(), 0);
+                countChunk(0, 1);
                 chunksFailed++;
                 failed += chunk.size();
                 retryable += chunk.size();
@@ -108,6 +155,8 @@ public class RequestScores {
                 }
             });
             ScoreChunkWriter.Counts c = writer.save(chunk, results);
+            countAlerts(c.scored(), c.retryable(), c.failed() - c.retryable());
+            countChunk(1, 0);
             scored += c.scored();
             failed += c.failed();
             retryable += c.retryable();
