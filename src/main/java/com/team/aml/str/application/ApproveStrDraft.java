@@ -50,11 +50,12 @@ public class ApproveStrDraft {
     private final StrCaseChangeReader caseChange;
     private final StrReportRepository reports;
     private final StrReportFormAssembler reportForm;
+    private final StrReferenceIndexTrigger referenceIndexTrigger;
 
     public ApproveStrDraft(StrDraftRepository drafts, VerificationResultRepository verifications,
                            ApprovalRepository approvals, ApproveCase approveCase, CurrentUser currentUser,
                            StrCaseChangeReader caseChange, StrReportRepository reports,
-                           StrReportFormAssembler reportForm) {
+                           StrReportFormAssembler reportForm, StrReferenceIndexTrigger referenceIndexTrigger) {
         this.drafts = drafts;
         this.verifications = verifications;
         this.approvals = approvals;
@@ -63,6 +64,7 @@ public class ApproveStrDraft {
         this.caseChange = caseChange;
         this.reports = reports;
         this.reportForm = reportForm;
+        this.referenceIndexTrigger = referenceIndexTrigger;
     }
 
     /**
@@ -90,6 +92,7 @@ public class ApproveStrDraft {
         reports.save(StrReport.approve(draft, approval, reports.nextReportSeq(), approval.getCreatedAt(),
                 reportForm.assemble(draft, approval, verification, me.userId()), StrReportForm.VERSION));
 
+        referenceIndexTrigger.afterCommit(draftId);
         return caseChange.read(draft.getCaseId());
     }
 }
