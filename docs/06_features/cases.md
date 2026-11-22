@@ -207,6 +207,25 @@
 - 검사 순서: 케이스 잠금 404 → version 409 → 담당자 403 `NOT_ASSIGNEE` → 현재 초안(다른 초안 409 `DRAFT_SUPERSEDED`, 초안 없음 409 `INVALID_CASE_TRANSITION` — 그건 화면용 `close`로) → 상태 409(DRAFTED, REJECTED+NOT_REPORTABLE만) → 사유(`COMMENT_REQUIRED`, 형식 400은 str DTO).
 - CLOSED·`close_reason`·`CLOSE` 이력(`reason_code`=종결 사유), 반려 코드 지움. `current_draft_id`는 남겨요(V006 — CLOSED는 둘 다 허용).
 
+**업무 알림 조회 — `GET /api/v1/notifications` (SCRUM-355)** `NotificationController` → `ListMyNotifications`. 근거: 노션 「비동기 작업 알림 설계 문서」 6.5·9절 #29~#43·12절. 이미 쌓이는 `case_history`를 **읽기만** 해요 — 알림 테이블·마이그레이션 없음, 배정·승인 같은 전이 코드는 그대로. 읽기 전용 트랜잭션, 열람 기록(`access_logs`) 안 남김(본문 없는 목록).
+- **요청** — `since`: 이 시각 **뒤**부터 응답 `server_time`까지(`since < created_at <= server_time`). `Z`로 끝나는 ISO 시각만(`2026-11-24T02:10:00Z`, 초 아래 허용 — DB가 마이크로초라 그 아래는 잘라서 비교). 없으면 7일 전, 30일보다 오래되면 30일 전으로 맞춰요. 오프셋(`+09:00`)·날짜만·그 밖 형식은 400 `INVALID_REQUEST`(`details.since`). `size`: 1~50, 기본 20(밖이면 400). 받는 사람은 세션의 사용자·역할뿐 — 남의 알림을 지정하는 인자가 없어서 403도 없어요.
+- **응답 200** `{items: [{type, case_no, draft_no, reason_code, actor{login_id, display_name}, at}], total, server_time}`. 최신순(`created_at DESC, id DESC`). `total` = 같은 조건의 `since` 뒤 전체 건수(`size`와 무관), **99에서 멈춤**(화면은 99를 "99+"로). `server_time` = **지금(초 아래 버림) − 5초**(`ListMyNotifications.COMMIT_LAG`, `Z`)이자 읽는 구간의 끝 — 화면이 다음 `since`로 주면 경계 초의 알림이 두 번 나오지 않고, 조회 직후에 커밋된 이력도 다음 조회에 들어와요(`created_at`은 커밋 전에 찍혀서). 그래서 방금 생긴 알림은 다음 조회에 보여요(화면 30초 + 5초). 서버 시계가 뒤로 가도 `server_time`은 받은 `since`보다 작아지지 않아요(`max`) — 작아지면 이미 받은 알림을 다시 읽어요(추가 검토 2). 목록과 `total`은 한 스냅샷(읽기 전용 `REPEATABLE_READ`, 승인함 P1과 같음)에서 읽어 서로 어긋나지 않아요. `draft_no`는 `APPROVAL_REQUESTED`와 STR 3종에만, 케이스의 **현재** 초안 번호(`DisplayNumber.draftNo`)라 재생성 뒤엔 옛 알림에도 새 번호. 없으면 null. `reason_code`는 반려일 때만. **넣지 않는 것**: 반려 코멘트·메모·계좌·금액·DB 숫자 id(쿼리가 `comment`를 읽지 않아요).
+
+  | `type` | 이력 `action` | 받는 사람 (역할) |
+  |---|---|---|
+  | `CASE_ASSIGNED` | `ASSIGN` | 받은 사람 `to_assignee_id` (INVESTIGATOR) |
+  | `CASE_REASSIGNED_TO_ME` | `REASSIGN` | 받은 사람 `to_assignee_id` (INVESTIGATOR) |
+  | `CASE_REASSIGNED_AWAY` | `REASSIGN` | 넘긴 사람 `from_assignee_id` (INVESTIGATOR) |
+  | `APPROVAL_REQUESTED` | `SUBMIT_FOR_APPROVAL` | 승인자 전원, 단 그 케이스를 **지금 맡았거나 받은·넘긴 적이 있는 사람 제외** (APPROVER) |
+  | `STR_APPROVED` · `STR_REJECTED` · `STR_REPORTED` | `APPROVE` · `REJECT` · `REPORT` | **지금 담당** `cases.assignee_id` (INVESTIGATOR) |
+
+- **막는 곳** — 받는 사람은 **SQL 한 쿼리**에서 골라요(거른 뒤에 `size`·`total`이 맞게). 자기가 한 일은 `created_by <> 나`. 관리자는 쿼리 없이 빈 목록(배치 알림은 화면 작업 추적기 몫). 모의 제출은 지금 담당 조사역만 — 관리자·비담당·승인자에겐 안 나가요(보고 사실 비공개). "지금·예전에 맡은 사람"은 `WasCaseAssignee`(지금 담당 OR `to_assignee_id` 이력)를 SQL로 다시 적고 **`from_assignee_id` 이력까지 더 막아요** — V010 전에 배정받아 받은 사람 칸이 비고 그 뒤 넘긴 사람은 넘긴 사람 칸에만 남기 때문이에요(추가 검토 1). 목록에서 케이스마다 부를 수 없어서 따로 적었고, "알림 쪽이 더 넓게 막는다"를 `NotificationApiTest`가 묶어요. 〔확인 필요〕 같은 빈틈이 승인 권한(`WasCaseAssignee`)에도 있어요 — 그런 사람이 승인자가 되면 자기 케이스를 승인할 수 있음. 이번엔 cases 기존 코드를 안 고쳐서 지윤 님 확인 요청. `OPEN`(배치가 수십 건)·`NOTE`·`ESCALATE`·`CLOSE`·`ATTACH_DRAFT`·`REOPEN_DRAFT`는 알림이 아니에요. V010 전 배정 이력(담당자 칸 빔)은 `= 나` 비교에 안 걸려 조용히 빠져요.
+- **알고 남김** — 역할은 세션 값이라 역할이 바뀌면 다시 로그인한 뒤부터 반영. 역할 변경·비활성화 뒤 세션 만료가 실패하면(Redis 장애 등) 그 세션은 회수된 역할로 계속 읽어요 — 세션 역할을 믿는 모든 API가 같은 구조라 이 조회만 막지 않고, 세션 만료 쪽 공통 과제로 남겨요(추가 검토 1). `created_at`은 커밋 전 앱 시각이라, **5초보다 오래 걸려 커밋된** 행은 화면이 이미 넘긴 `since` 앞에 찍혀 안 보일 수 있어요. 아래 세 가지와 함께 1단계(알림을 저장하지 않고 이력을 읽는 방식)의 한계예요 — 정확히 한 번 전달·커서는 알림 저장(설계 10절, 2단계)에서 풀어요(추가 검토 2).
+  - **한 구간에 `size`보다 많으면** 나머지는 다음 `since`로 못 받아요(커서 없음). 화면은 목록을 열 때 `size=50`(최대)으로 부르고, `total > items` 개수면 "이전 알림 n건 더 있음" 한 줄을 보여 줘요.
+  - **반려 뒤 재배정**되면 반려 알림은 그때의 지금 담당 기준이라, 새 담당이 이미 반려 시각을 지난 `since`로 부르면 둘 다 반려 알림을 못 받을 수 있어요. 새 담당은 `CASE_REASSIGNED_TO_ME`를 받고 케이스 화면에서 반려 상태를 봐요("지금 담당" 기준은 설계 13절 7번).
+  - **세션 만료 실패** 뒤 회수된 승인 권한으로 승인 요청을 읽는 것도 위 세션 줄과 같은 공통 과제예요.
+  - 인덱스는 지금 것 그대로(`created_at`이 앞인 인덱스 없음 — 느려지면 추가, 설계 6.5).
+
 **아직 남은 공개 기능** 〔초안 — CASES 명세 §6.2〕 `GetCaseEvidence`(필요 여부 결정 — SCRUM-243). Java 호출이고, str이 `Case` 메서드를 직접 부르지 않아요. 협력 트랜잭션은 str이 시작하고 cases가 참여(`REQUIRED`).
 
 **지표 (Prometheus) — 구현됨 (SCRUM-276)** 이름·태그 규칙은 [`03_shared.md` §13](../03_shared.md). Grafana 「CASES」(`ops/grafana/dashboards/cases.json`).
