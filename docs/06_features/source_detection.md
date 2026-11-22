@@ -172,9 +172,11 @@
 - **룰 스캔 성공 → 같은 날짜 점수 → 점수 `SUCCEEDED` → 같은 날짜 케이스 생성.** 원천 적재는 날짜가 없는 최초 1회라 잇지 않아요. 화면에서 직접 실행한 단계도 성공하면 이어져요(연쇄는 "앞 단계 성공 뒤"에 걸림).
 - 큐 `batch.score`(메시지: 룰 스캔 `batch_run_id`) → `ScoreChainListener` → `ScoreAfterRuleScan` · `batch.open-cases`(메시지: 점수 `batch_run_id`) → cases `OpenCasesChainListener` → `OpenCasesAfterScore` → 기존 `RequestOpenCases`(→ `case.open-cases`). 날짜·요청자(`triggered_by`)는 앞 단계 행에서 읽어요.
 - **점수에 다시 보낼 실패가 남으면(`FAILED`) 멈춰요.** 재처리해서 `SUCCEEDED`가 되면 그때 이어져요.
+- **케이스 생성이 이미 성공한 날짜에 점수 재처리가 성공하면 케이스 생성이 보충 실행으로 한 번 더 돌아요.** 케이스 생성은 성공한 날짜도 다시 돌 수 있고(V014·SCRUM-238, 시작은 같은 날짜 `RUNNING`일 때만 409) 앞 케이스 생성은 점수가 끝나기 전에 시작했으니 "이미 시작됨"에 걸리지 않아요. 재처리로 새로 HIGH가 된 경보만 케이스가 되고 이미 케이스인 경보는 건너뛰어요. [SCRUM-349 리뷰]
 - **같은 메시지가 두 번 와도 한 번만** — 앞 단계가 끝난 시각 뒤에 다음 단계가 이미 시작됐으면 건너뛰어요. 이 확인은 **다음 단계의 시작 잠금 안에서** 해요(`ScoreBatchRecorder`·`OpenCasesRecorder`의 `startUnlessStartedSince`) — 잠금 밖에서 보면 확인과 시작 사이에 직접 실행이 시작해 끝나 한 번 더 돌 수 있어요. 동시 실행은 지금 규칙(시작 advisory lock + `RUNNING`이면 409)이 그대로 막고, 걸리면 건너뛰어요(ACK). [SCRUM-349 리뷰]
 - 꺼져 있거나 브로커가 받지 않으면 로그(`배치 잇기 못 함`)만 — 관리자가 다음 단계를 직접 실행해요. 앞 단계 결과에는 영향 없음.
 - 포기 처리(`JobGiveUpHandler`)는 안 둬요. 예외는 다음 단계 행을 만들기 전(DB 오류)에만 나가고, 행을 만든 뒤 실패는 각 단계가 `FAILED`로 남겨요. 처리 중 앱이 죽으면 재시작 정리가 `FAILED`로 바꾸고, 다시 온 메시지는 위 규칙으로 건너뛰어요.
+- **점수는 리스너 안에서 동기로 돌아요**(끝난 뒤 ACK). RabbitMQ `consumer_timeout`(기본 30분)을 넘기면 브로커가 채널을 닫고 메시지를 다시 보내요 — 다시 온 메시지는 "이미 시작됨"으로 건너뛰고 채널 오류 로그만 남아요. [SCRUM-349 리뷰]
 - **점수 실패 기록까지 실패하면** — DB가 끊겨 `RequestScores`의 `FAILED` 기록도 실패하면 행이 `RUNNING`으로 남아 그 날짜 점수가 409로 막혀요. 큐 재시도로는 다시 온 메시지가 "이미 시작됨"으로 건너뛰어 못 고치니, `ScoreAfterRuleScan`이 1·2·4초 간격으로 `FAILED` 기록을 다시 해 봐요. 그래도 안 되면 에러 로그(`배치 잇기 점수 실패 기록 못 함 batch_run_id=…`) — `03_shared.md` §14 손 정리나 앱 재시작 정리로 풀어요. [SCRUM-349 리뷰]
 
 **〔확인 필요〕** 룰 스캔 날짜 범위(9/1~9/10만 일반 스캔?), 통화가 섞인 창의 `rule_facts`, 목업 점수 → 실제 모델 전환 때 재채점 방법, `typology_hint` null 허용·`rule_facts` 빈 객체 세칙(ML 규약 미확인 표).
