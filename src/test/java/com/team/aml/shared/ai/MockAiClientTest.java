@@ -257,6 +257,17 @@ class MockAiClientTest {
     }
 
     @Test
+    void indexApprovedStr_nel_only_section_is_blank_like_ai_and_passes_response_check() {
+        // NEL(U+0085)·전각 공백만인 섹션은 파이썬 기준 공백 → 청크 아님. 짧은 단락 둘(상한 2)과 섞여도 자기 확인 통과
+        StrIndexRequest request = strIndex(List.of("FAN_IN"), LONG, LONG, "\u0085", "\u0085　 ");
+        StrIndexResponse res = client.indexApprovedStr(request);
+
+        assertThat(res.status()).isEqualTo(StrIndexStatus.INDEXED);
+        assertThat(res.chunkCount()).isEqualTo(2);
+        WebClientAiClient.requireStrIndexResponse(request, res.raw());
+    }
+
+    @Test
     void indexApprovedStr_scatter_gather_is_raw_account_before_too_short() {
         StrIndexRequest request = strIndex(List.of("FAN_IN", "SCATTER_GATHER"), "짧음");
         StrIndexResponse res = client.indexApprovedStr(request);

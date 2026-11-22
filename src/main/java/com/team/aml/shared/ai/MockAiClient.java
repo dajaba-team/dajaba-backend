@@ -367,9 +367,10 @@ public class MockAiClient implements AiClient {
         return new StrIndexResponse(producedAt, request.reportNo(), status, reason, chunks, MOCK_RETRIEVAL_VERSION, raw);
     }
 
+    /** 공백 판정은 AI(파이썬 `isspace`)와 같은 {@link WebClientAiClient#isPythonSpace} — JDK 판정은 NEL(U+0085)을 놓친다. */
     private static long nonSpaceChars(String text) {
         return text == null ? 0 : text.codePoints()
-                .filter(cp -> !Character.isWhitespace(cp) && !Character.isSpaceChar(cp)).count();
+                .filter(cp -> cp > Character.MAX_VALUE || !WebClientAiClient.isPythonSpace((char) cp)).count();
     }
 
     @Override
