@@ -36,7 +36,7 @@ class NotificationJdbcRows implements NotificationRows {
             """;
 
     /**
-     * 지금 담당이거나 받은·넘긴 사람으로 남은 이력이 있으면 제외. WasCaseAssignee(to 만)보다 넓다 — V010 전 배정은 받은 사람
+     * 지금 담당이거나 받은·넘긴 사람으로 남은 이력이 있으면 제외. WasCaseAssignee 와 같은 기준 — V010 전 배정은 받은 사람
      * 칸이 비어 있어, 그 뒤 넘긴 사람은 from 에만 남는다(추가 검토 1). from 은 인덱스가 없지만 case_id 로 그 케이스 행만 본다.
      */
     private static final String APPROVER = """
