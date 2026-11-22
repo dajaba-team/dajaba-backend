@@ -26,7 +26,7 @@ import java.util.Map;
 /**
  * 케이스 근거 거래 조회 (CASES 명세 API-08·09·10, 계약서 C3·C4·C5). 조회 3역할. 거래는 detection ListAlertTransactions 로만 읽는다.
  * 방향은 케이스 계좌 기준(TransactionDirection). 계좌 가리기는 컨트롤러(AccountDisplay).
- * CONTEXT(경보 밖 참고 거래)는 저장소가 아직 없어 빈 결과 — 화면은 "참고 거래 없음"으로 보인다.
+ * CONTEXT(경보 밖 참고 거래)는 MVP 에서 빈 결과로 확정(SCRUM-244, 등록 규칙은 미결 36) — 화면은 "참고 거래 없음"으로 보인다.
  */
 @Service
 public class CaseTransactions {

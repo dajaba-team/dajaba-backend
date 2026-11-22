@@ -1,6 +1,7 @@
 package com.team.aml.detection.domain;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -17,6 +18,12 @@ public interface AlertRepository {
 
     /** 초안 요청용 경보 원문 + reasons + 같은 법인의 앞선 경보 수. 없으면 empty. */
     Optional<AlertForDraft> findForDraft(long alertId);
+
+    /**
+     * 같은 법인에서 reference_ts 가 before 보다 앞선 경보, 최근 것부터 limit 건 (케이스 상세 prior_alerts, SCRUM-239).
+     * 조건은 findForDraft 의 앞선 경보 수와 같다.
+     */
+    List<PriorAlert> findPriorByEntity(String entityId, LocalDateTime before, int limit);
 
     /** 케이스 상세용 경보 + 점수 + 거래 수. 없으면 empty. */
     Optional<AlertSummary> findSummary(long alertId);

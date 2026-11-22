@@ -54,6 +54,9 @@ public interface CaseRepository {
     Optional<Case> findByCaseNo(String caseNo);
     boolean existsByAlertId(Long alertId);
 
+    /** 이 경보들로 만든 케이스 (경보 하나에 케이스 최대 하나). 상세 prior_alerts 의 case_no 용 (SCRUM-239). 비우지 않고 넘긴다. */
+    List<Case> findByAlertIdIn(Collection<Long> alertIds);
+
     /**
      * 목록 (API-01). statuses 는 비우지 않고 넘긴다(전체면 CaseStatus 전부). assigneeId 는 null 이면 조건 없음.
      * 생성 시각은 createdFrom 이상 createdTo 미만 — 둘 다 null 불가(PostgreSQL 이 null timestamptz 파라미터 타입을 못 정한다).

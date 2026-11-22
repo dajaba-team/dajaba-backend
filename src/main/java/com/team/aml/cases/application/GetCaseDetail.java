@@ -16,8 +16,10 @@ import com.team.aml.cases.domain.PolicyNotConfiguredException;
 import com.team.aml.cases.domain.RejectionReasonCode;
 import com.team.aml.cases.domain.ScoreBand;
 import com.team.aml.cases.domain.ScoreClassification;
+import com.team.aml.detection.application.FindAlertsByEntity;
 import com.team.aml.detection.application.GetAlertSummary;
 import com.team.aml.detection.domain.AlertSummary;
+import com.team.aml.detection.domain.PriorAlert;
 import com.team.aml.shared.audit.AccessLogWriter;
 import com.team.aml.shared.audit.TargetType;
 import com.team.aml.shared.config.AmlProperties;
@@ -35,6 +37,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 케이스 상세 (CASES 명세 API-02, 계약서 C2). 조회 3역할, <b>열람 기록을 남긴다</b> (SCRUM-101, 03_shared §9).
@@ -46,7 +49,9 @@ import java.util.Map;
  * 최근 이력 20건에는 NOTE 를 넣지 않는다 — 메모 전문은 API-15(명세 API-11).
  * score·score_band·policy_version 은 계약서 Q2 MVP 대로 latest_score 와 같은 값(지금 정책으로 계산).
  * openedScore 는 케이스 생성 당시 점수·모델·정책 스냅샷(V013, SCRUM-237) — latest_score 와 섞지 않고 따로 준다.
- * aggregates 는 근거 거래 전체로 계산(CaseAggregates, SCRUM-179). 아직 없는 것(후속): current_draft 본문(str 조합 계층, 노션 미결 17). 컨트롤러가 그 칸은 null 로 내보낸다.
+ * aggregates 는 근거 거래 전체로 계산(CaseAggregates, SCRUM-179).
+ * priorAlerts 는 같은 법인의 이전 경보 최근 {@value #PRIOR_ALERTS_LIMIT}건(detection FindAlertsByEntity, SCRUM-239) —
+ * 기준은 AI 요청의 prior_alert_count 와 같고, 그 경보로 만든 케이스가 있으면 case_no 를 붙인다. 아직 없는 것(후속): current_draft 본문(str 조합 계층, 노션 미결 17). 컨트롤러가 그 칸은 null 로 내보낸다.
  */
 @Service
 public class GetCaseDetail {
@@ -56,9 +61,10 @@ public class GetCaseDetail {
                          long version, Instant createdAt, Instant updatedAt, Alert alert, LatestScore latestScore,
                          String policyVersion, OpenedScore openedScore, CaseSummaryResult.Summary latestSummary,
                          String investigatorNotes,
-                         CaseAggregates aggregates, List<History> history,
+                         CaseAggregates aggregates, List<PriorAlertItem> priorAlerts, List<History> history,
                          List<CaseAction> availableActions) {
         public Result {
+            priorAlerts = priorAlerts == null ? List.of() : List.copyOf(priorAlerts);
             history = history == null ? List.of() : List.copyOf(history);
             availableActions = availableActions == null ? List.of() : List.copyOf(availableActions);
         }
@@ -77,6 +83,14 @@ public class GetCaseDetail {
     public record LatestScore(String scoreStatus, BigDecimal score, ScoreBand scoreBand, String failureCode,
                               String modelVersion,
                               String featureVersion, String dataQualityStatus, JsonNode reasons) {
+    }
+
+    /**
+     * 같은 법인의 이전 경보 한 건 (C2 prior_alerts, SCRUM-239). accountKey 는 내부 키 — 컨트롤러가 가린 값으로 바꾼다.
+     * score 는 점수가 없으면(PENDING·FAILED) null. caseNo 는 그 경보로 만든 케이스가 없으면 null. 데이터 시각이라 LocalDateTime.
+     */
+    public record PriorAlertItem(String alertNo, String ruleId, LocalDate batchDate, LocalDateTime referenceTs,
+                                 String accountKey, String scoreStatus, BigDecimal score, String caseNo) {
     }
 
     /**
@@ -115,6 +129,9 @@ public class GetCaseDetail {
         }
     }
 
+    /** 상세 prior_alerts 최대 건수 — 최근 이력(20건)과 같은 크기. 더 앞선 경보는 건수(prior_alert_count)에만 들어간다. */
+    static final int PRIOR_ALERTS_LIMIT = 20;
+
     private final CaseRepository cases;
     private final CaseHistoryRepository histories;
     private final UserRefs userRefs;
@@ -126,11 +143,13 @@ public class GetCaseDetail {
     private final CaseNotes notes;
     private final CaseTransactions transactions;
     private final AmlProperties properties;
+    private final FindAlertsByEntity alertsByEntity;
 
     public GetCaseDetail(CaseRepository cases, CaseHistoryRepository histories, UserRefs userRefs,
                          AccessLogWriter accessLog, CurrentUser currentUser, GetAlertSummary alertSummary,
                          CasePolicySource policySource, GetCaseSummary caseSummary, CaseNotes notes,
-                         CaseTransactions transactions, AmlProperties properties) {
+                         CaseTransactions transactions, AmlProperties properties,
+                         FindAlertsByEntity alertsByEntity) {
         this.cases = cases;
         this.histories = histories;
         this.userRefs = userRefs;
@@ -142,6 +161,7 @@ public class GetCaseDetail {
         this.notes = notes;
         this.transactions = transactions;
         this.properties = properties;
+        this.alertsByEntity = alertsByEntity;
     }
 
     @Transactional
@@ -175,7 +195,19 @@ public class GetCaseDetail {
                         s.modelVersion(), s.featureVersion(), s.dataQualityStatus(), s.reasons()),
                 band == null ? null : band.policyVersion(), c.getOpenedScore(), caseSummary.latestOf(c),
                 notes.currentOf(c.getId()),
-                transactions.aggregatesOf(c), history, actions);
+                transactions.aggregatesOf(c), priorAlertsOf(c.getEntityId(), a.referenceTs()), history, actions);
+    }
+
+    /** 법인이 없으면 [] — 계좌로 임의 연결하지 않는다. 케이스 번호는 한 쿼리로 찾는다. */
+    private List<PriorAlertItem> priorAlertsOf(String entityId, LocalDateTime before) {
+        List<PriorAlert> prior = alertsByEntity.execute(entityId, before, PRIOR_ALERTS_LIMIT);
+        if (prior.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, String> caseNos = cases.findByAlertIdIn(prior.stream().map(PriorAlert::alertId).toList()).stream()
+                .collect(Collectors.toMap(Case::getAlertId, Case::getCaseNo, (x, y) -> x));
+        return prior.stream().map(p -> new PriorAlertItem(p.alertNo(), p.ruleId(), p.batchDate(), p.referenceTs(),
+                p.accountKey(), p.scoreStatus(), p.score(), caseNos.get(p.alertId()))).toList();
     }
 
     /** 점수가 없거나 정책이 설정되지 않았으면 null. 등급이 없다고 LOW 로 바꾸지 않는다. */
