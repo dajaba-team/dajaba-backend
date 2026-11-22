@@ -51,7 +51,33 @@ class OpenCasesFromAlertsDbTest {
                     "/docker-entrypoint-initdb.d/01_roles.sh");
 
     @Autowired OpenCasesFromAlerts openCases;
+    @Autowired OpenCasesRecorder recorder;
     @Autowired JdbcTemplate jdbc;
+
+    @Test
+    void 앱_재시작으로_남은_RUNNING_케이스_생성만_FAILED로_끝난_행과_다른_배치는_그대로() {   // SCRUM-246
+        LocalDate date = newDate();
+        String insert = "insert into ops.batch_runs(batch_type, batch_date, status, triggered_by) values (?, ?, ?, 1) returning id";
+        long running = jdbc.queryForObject(insert, Long.class, "OPEN_CASES", date, "RUNNING");
+        long done = jdbc.queryForObject(insert, Long.class, "OPEN_CASES", date, "SUCCEEDED");
+        long otherType = jdbc.queryForObject(insert, Long.class, "SCORE_REQUEST", date, "RUNNING");
+
+        recorder.failAbandonedOpenCases();
+
+        Map<String, Object> cleaned = jdbc.queryForMap(
+                "select status, error_message, finished_at from ops.batch_runs where id = ?", running);
+        assertThat(cleaned.get("status")).isEqualTo("FAILED");
+        assertThat(cleaned.get("error_message")).isEqualTo("앱 재시작으로 중단된 케이스 생성");
+        assertThat(cleaned.get("finished_at")).isNotNull();
+        assertThat(statusOf(done)).isEqualTo("SUCCEEDED");
+        assertThat(statusOf(otherType)).isEqualTo("RUNNING");   // 점수는 ScoreBatchRecorder 가 따로 정리
+        assertThat(openCases.start(date, CurrentUser.SYSTEM_ID)).isPositive();   // 그 날짜가 다시 열림
+        jdbc.update("update ops.batch_runs set status = 'FAILED' where id = ?", otherType);   // 다른 테스트에 남기지 않게
+    }
+
+    private String statusOf(long batchRunId) {
+        return jdbc.queryForObject("select status from ops.batch_runs where id = ?", String.class, batchRunId);
+    }
 
     @Test
     void 배치_잇기_시작은_그_시각_뒤_시작된_케이스_생성이_있으면_잠금_안에서_건너뛰고_행을_남기지_않는다() {   // SCRUM-349 리뷰

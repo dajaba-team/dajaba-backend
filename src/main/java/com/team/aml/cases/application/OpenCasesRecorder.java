@@ -6,6 +6,10 @@ import com.team.aml.shared.batch.BatchRunRepository;
 import com.team.aml.shared.batch.BatchRunningException;
 import com.team.aml.shared.batch.BatchStatus;
 import com.team.aml.shared.batch.BatchType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +26,9 @@ import java.util.OptionalLong;
  */
 @Service
 class OpenCasesRecorder {
+
+    private static final Logger log = LoggerFactory.getLogger(OpenCasesRecorder.class);
+    static final String ABANDONED_MESSAGE = "앱 재시작으로 중단된 케이스 생성";
 
     private final BatchRunRepository batchRuns;
     private final CaseRepository cases;
@@ -72,5 +79,19 @@ class OpenCasesRecorder {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void fail(long batchRunId, String message) {
         batchRuns.findById(batchRunId).orElseThrow().fail(message);
+    }
+
+    /**
+     * 앱이 뜰 때 남은 케이스 생성 RUNNING 을 FAILED 로 (SCRUM-246) — 적재·룰 스캔·점수 Recorder 와 같은 단일 서버 전제.
+     * 뜰 때 RUNNING 인 행은 모두 버려진 작업이라 시작 시각으로 거르지 않는다(남기면 앱 안 실행기 경로에선 영원히 RUNNING).
+     * 큐에 남은 메시지가 뒤에 와도 RunOpenCasesOnce 가 RUNNING 이 아닌 행은 건너뛰고, 같은 날짜를 다시 실행하면 남은 경보만 처리한다.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    @Transactional
+    public void failAbandonedOpenCases() {
+        int cleaned = batchRuns.failRunning(BatchType.OPEN_CASES.name(), ABANDONED_MESSAGE);
+        if (cleaned > 0) {
+            log.warn("중단된 케이스 생성 {}건을 FAILED로 정리", cleaned);
+        }
     }
 }
