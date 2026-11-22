@@ -72,7 +72,7 @@ DB를 완전히 초기화하려면 `docker compose down -v` (볼륨 삭제 → �
 
 1. **원본 파일 3개를 `./data`에** — Kaggle 「IBM Transactions for Anti Money Laundering (AML)」의 HI-Small 세 파일 `HI-Small_Trans.csv`·`HI-Small_accounts.csv`·`HI-Small_Patterns.txt`를 리포 루트 `data/`에 그대로 둬요(파일 이름 바꾸지 않음, 커밋 안 됨). compose 앱은 `./data`를 `/data`로 읽기 전용으로 붙이고, IDE는 `AML_DATASET_DIR` 기본 `./data`.
    - `src/test/resources/fixtures/ibm_small/`(축소본)은 **테스트 전용**이에요. 계좌 파일이 없고, 적재는 HI-Small 전체 건수(508만)로 검사해서 축소본을 넣으면 `DATASET_FILES_MISSING` 또는 "검증값 불일치"로 실패해요.
-2. **`.env`에 케이스 등급 경계값 세 줄** — `AML_CASE_POLICY_VERSION`·`AML_CASE_POLICY_LOW_TO_MEDIUM`·`AML_CASE_POLICY_MEDIUM_TO_HIGH`(값은 노션 `.env`). 없으면 4단계가 `POLICY_NOT_CONFIGURED`로 거절돼요. rc2 실제 모델로 바꾸는 날 값이 바뀌어요(SCRUM-329).
+2. **`.env`에 케이스 등급 경계값 세 줄** — `AML_CASE_POLICY_VERSION`·`AML_CASE_POLICY_LOW_TO_MEDIUM`·`AML_CASE_POLICY_MEDIUM_TO_HIGH`(값은 노션 `.env`). 없으면 4단계가 `POLICY_NOT_CONFIGURED`로 거절돼요. 11/22부터 rc2 시연 값(`rc2-20261120` · 0.15 · 0.70)이에요 — `.env`에 예전 임시값 `tmp-1108`(0.3 · 0.7)이 남아 있으면 노션 값으로 바꾸세요(SCRUM-329). 케이스는 만들 때 쓴 정책을 `opened_policy_version`·경계값으로 남기고 한 경보에 한 번만 생겨서, 임시값으로 이미 만든 케이스는 그대로예요 — 시연 DB는 `docker compose down -v`부터 다시.
 3. **`admin`으로 로그인해 배치 네 개를 순서대로 돌리고 담당을 배정** — 프론트 `/admin/batches` 화면 버튼으로 하거나, swagger로 아래를 차례로 불러요. 날짜는 **`2022-09-07` 하나만** 써요(경계값을 9/7 기준으로 골라서, 다른 날은 HIGH가 하루 30건을 넘을 수 있어요 — 11/20 #개발).
 
    | 순서 | 호출 | 응답 | 다음으로 넘어가는 때 |
