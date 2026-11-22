@@ -394,6 +394,23 @@ class CaseUseCasesDbTest {
     }
 
     @Test
+    void 경계_V010_전에_배정받고_그_뒤_넘긴_사람은_넘긴_사람_칸으로_예전_담당이다() {
+        Case c = newCase();
+        // V010 전에 배정된 케이스처럼 ASSIGN 이력(받은 사람)이 없고, 그 뒤 재배정해 넘긴 사람 칸에만 남는다 (SCRUM-355 리뷰)
+        jdbc.update("update ops.cases set status = 'REVIEWING', assignee_id = ? where id = ?", inv.userId(), c.getId());
+        tx().executeWithoutResult(s -> {
+            Case found = cases.findById(c.getId()).orElseThrow();
+            found.reassign(inv2.userId(), admin.userId(), "업무 분담");
+            histories.saveAll(cases.saveAndFlush(found).takePendingHistories());
+        });
+
+        assertThat(histories.findByCaseIdOrderByIdAsc(c.getId()))
+                .noneMatch(h -> inv.userId().equals(h.getToAssigneeId()));
+        assertThat(wasAssignee.execute(c.getId(), inv.userId())).isTrue();    // 넘긴 사람 이력으로
+        assertThat(wasAssignee.execute(c.getId(), apr.userId())).isFalse();
+    }
+
+    @Test
     void 실패_없는_케이스면_예전_담당_조회도_404() {
         assertThatThrownBy(() -> wasAssignee.execute(-1L, inv.userId())).isInstanceOf(CaseNotFoundException.class);
     }

@@ -30,6 +30,9 @@ public interface CaseHistoryRepository {
     Optional<CaseHistory> findFirstByCaseIdAndActionAndIdLessThanOrderByIdDesc(Long caseId, CaseHistoryAction action,
                                                                                Long id);
 
-    /** 이 사람이 이 케이스를 받은 적이 있나 — ASSIGN·REASSIGN 의 to_assignee_id (V010, 자기 승인 막기). */
-    boolean existsByCaseIdAndToAssigneeId(Long caseId, Long toAssigneeId);
+    /**
+     * 이 사람이 이 케이스를 받거나 넘긴 적이 있나 — ASSIGN·REASSIGN 의 to_assignee_id 또는 from_assignee_id (V010, 자기 승인 막기).
+     * 넘긴 사람까지 보는 이유: V010 전에 배정받아 받은 사람 칸이 빈 사람이 그 뒤 넘기면 from 에만 남는다 (SCRUM-355 리뷰).
+     */
+    boolean existsAssigneeHistory(Long caseId, Long userId);
 }

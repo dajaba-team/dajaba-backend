@@ -54,6 +54,8 @@ class WebClientReferenceSearchTest {
     private static final String SEARCH_QUERY = "  해외 계좌 비밀검색어 흐름 ";
     private static final String TITLE_WORD = "Laundering";   // 예시 문서 제목에 든 낱말
     private static final String VERSION = "text-embedding-3-small@36b5a2d5";
+    /** 기록(`ai_version`)에는 manifest 해시만 남는다(SCRUM-357 추가 검토 2). */
+    private static final String LOGGED_VERSION = "@36b5a2d5";
 
     private final ObjectMapper om = new ObjectMapper().setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE);
     private MockWebServer server;
@@ -194,7 +196,7 @@ class WebClientReferenceSearchTest {
         assertThat(row.getStatusCode()).isEqualTo(200);
         assertThat(row.getErrorCode()).isNull();
         assertThat(row.getGenerationId()).isNull();
-        assertThat(row.getAiVersion()).isEqualTo(VERSION);
+        assertThat(row.getAiVersion()).isEqualTo(LOGGED_VERSION);
         assertThat(row.getDurationMs()).isBetween(0, 2_000);
     }
 
@@ -331,7 +333,7 @@ class WebClientReferenceSearchTest {
         AiCallLog row = writer.rows.get(0);
         assertThat(row.getStatusCode()).isEqualTo(200);
         assertThat(row.getErrorCode()).isEqualTo("AI_BAD_RESPONSE");
-        assertThat(row.getAiVersion()).isEqualTo(VERSION);   // 본문 메타는 남음
+        assertThat(row.getAiVersion()).isEqualTo(LOGGED_VERSION);   // 본문 메타는 남음(해시만)
         assertThat(row.getTargetType()).isEqualTo("DRAFT");
     }
 
@@ -362,17 +364,17 @@ class WebClientReferenceSearchTest {
 
         assertThat(writer.rows).extracting(AiCallLog::getErrorCode).containsExactly(null, "AI_BAD_RESPONSE");
         assertThat(writer.rows).extracting(AiCallLog::getGenerationId).containsOnlyNulls();
-        assertThat(writer.rows).extracting(AiCallLog::getAiVersion).containsOnly(VERSION);
+        assertThat(writer.rows).extracting(AiCallLog::getAiVersion).containsOnly(LOGGED_VERSION);
     }
 
     @Test
-    void 경계_retrieval_version이_문자열이_아니거나_64자_넘으면_ai_version은_null이다() throws Exception {
+    void 경계_retrieval_version이_문자열이_아니면_null이고_길이와_상관없이_해시만_남는다() throws Exception {
         ObjectNode longVersion = (ObjectNode) om.readTree(searchExample("empty"));
-        longVersion.put("retrieval_version", "v".repeat(65));
+        longVersion.put("retrieval_version", "m".repeat(56) + "@36b5a2d5");   // 65자
         ObjectNode numberVersion = (ObjectNode) om.readTree(searchExample("empty"));
         numberVersion.put("retrieval_version", 3);   // 응답 확인도 실패
         ObjectNode exact = (ObjectNode) om.readTree(searchExample("empty"));
-        exact.put("retrieval_version", "v".repeat(64));
+        exact.put("retrieval_version", "m".repeat(55) + "@36b5a2d5");     // 64자 — 모양이 맞아야 남음(357 검토 1)
         server.enqueue(json(200, longVersion.toString()));
         server.enqueue(json(200, numberVersion.toString()));
         server.enqueue(json(200, exact.toString()));
@@ -381,8 +383,75 @@ class WebClientReferenceSearchTest {
         assertBadResponse(catchThrowable(() -> client.searchReferences("DRF-000312", searchReq("q"))));
         client.searchReferences("DRF-000312", searchReq("q"));
 
-        assertThat(writer.rows).extracting(AiCallLog::getAiVersion).containsExactly(null, null, "v".repeat(64));
+        // 357 추가 검토 2 — 길이와 상관없이 마지막 @ 뒤 해시만 남음, 문자열이 아니면 null
+        assertThat(writer.rows).extracting(AiCallLog::getAiVersion).containsExactly(LOGGED_VERSION, null, LOGGED_VERSION);
         assertThat(writer.rows).extracting(AiCallLog::getErrorCode).containsExactly(null, "AI_BAD_RESPONSE", null);
+    }
+
+    // --- 기록 버전 모양 · 뒤에 붙은 JSON (SCRUM-357 추가 검토 1 — 색인과 같은 공통 메서드) ------------------------
+
+    @ParameterizedTest(name = "[{index}] {0} → {1}")
+    @CsvSource(value = {"CUSTOMER-50438@36b5a2d5|@36b5a2d5", "/srv/AI Models/bge-m3@36b5a2d5|@36b5a2d5",
+            "a@b@36b5a2d5|@36b5a2d5", "보고 대상자는 Sole Proprietorship|NULL", "' '|NULL", "text-embedding-3-small|NULL",
+            "text-embedding-3-small@36b5a2d|NULL", "text-embedding-3-small@36B5A2D5|NULL",
+            "'text-embedding-3-small@36b5a2d5 '|NULL", "@36b5a2d5x|NULL"}, delimiter = '|', nullValues = "NULL")
+    void 검토357_H1_ai_version은_마지막_골뱅이_뒤_해시만이고_응답은_그대로다(String version, String logged) throws Exception {
+        ObjectNode b = (ObjectNode) om.readTree(searchExample("found"));
+        b.put("retrieval_version", version);
+        server.enqueue(json(200, b.toString()));
+
+        // 응답 확인은 그대로(검색은 문자열 1자 이상만 봄) — DTO 값은 받은 그대로, 기록에만 해시
+        assertThat(client.searchReferences("DRF-000312", searchReq("q")).retrievalVersion()).isEqualTo(version);
+        assertThat(writer.rows).hasSize(1);
+        assertThat(writer.rows.get(0).getAiVersion()).isEqualTo(logged);
+    }
+
+    @Test
+    void 검토357_H1_2xx_확인_실패_행도_해시만_남는다() throws Exception {
+        ObjectNode b = (ObjectNode) om.readTree(searchExample("found"));
+        ((ObjectNode) b.get("results").get(0)).put("source_type", "APPROVED_STR");   // 확인 실패
+        b.put("retrieval_version", "CUSTOMER-50438@36b5a2d5");   // 앞부분이 섹션 글이어도
+        server.enqueue(json(200, b.toString()));
+
+        assertBadResponse(catchThrowable(() -> client.searchReferences("DRF-000312", searchReq("q"))));
+        assertThat(writer.rows.get(0).getAiVersion()).isEqualTo(LOGGED_VERSION);   // 해시만
+        assertThat(writer.rows.get(0).getErrorCode()).isEqualTo("AI_BAD_RESPONSE");
+    }
+
+    @Test
+    void 검토357_M4_2xx_본문_뒤에_JSON이_더_붙으면_재시도_없이_AI_BAD_RESPONSE_한_행이다() throws Exception {
+        server.enqueue(json(200, searchExample("found") + searchExample("empty")));
+
+        assertBadResponse(catchThrowable(() -> client.searchReferences("DRF-000312", searchReq("q"))));
+        assertThat(server.getRequestCount()).isEqualTo(1);
+        assertThat(writer.rows).hasSize(1);
+        assertThat(writer.rows.get(0).getStatusCode()).isEqualTo(200);
+        assertThat(writer.rows.get(0).getErrorCode()).isEqualTo("AI_BAD_RESPONSE");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"status", "results", "retrieval_version"})
+    void 검토357_M2_2xx_본문에_같은_칸이_두_번이면_순서와_상관없이_AI_BAD_RESPONSE_한_행이다(String field) throws Exception {
+        String body = searchExample("found");
+        String dup = switch (field) {
+            case "status" -> "\"status\":\"EMPTY\",";
+            case "results" -> "\"results\":[],";
+            default -> "\"retrieval_version\":\"x@00000000\",";
+        };
+        server.enqueue(json(200, body.replaceFirst("\\{", "{" + dup)));                       // 앞에 겹친 칸
+        server.enqueue(json(200, body.replaceFirst("\\}\\s*$", "," + dup.replaceAll(",$", "") + "}")));   // 뒤에 겹친 칸
+
+        assertBadResponse(catchThrowable(() -> client.searchReferences("DRF-000312", searchReq("q"))));
+        assertBadResponse(catchThrowable(() -> client.searchReferences("DRF-000312", searchReq("q"))));
+        assertThat(server.getRequestCount()).isEqualTo(2);   // 재시도 없음(호출 두 번에 요청 두 번)
+        assertThat(writer.rows).extracting(AiCallLog::getStatusCode).containsExactly(200, 200);
+        assertThat(writer.rows).extracting(AiCallLog::getErrorCode).containsOnly("AI_BAD_RESPONSE");
+    }
+
+    @Test
+    void 검토357_M2_JSON_뒤_공백_줄바꿈은_그대로_성공이다() throws Exception {
+        server.enqueue(json(200, searchExample("found") + " \n\t\r\n"));
+        assertThat(client.searchReferences("DRF-000312", searchReq("q")).status()).isEqualTo(ReferenceSearchStatus.FOUND);
     }
 
     // --- 로그 (H1) ---------------------------------------------------------------
