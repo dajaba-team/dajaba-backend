@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.team.aml.shared.domain.DisplayNumber;
+import com.team.aml.shared.messaging.JobPublisher;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.str.domain.NarrativeHash;
 import com.team.aml.str.domain.ReportPdfRenderer;
@@ -82,6 +83,7 @@ class GenerateStrReportPdfDbTest {
     }
 
     @Autowired GenerateStrReportPdf generate;
+    @Autowired JobPublisher publisher;
     @Autowired ReportStrDraft reportDraft;
     @Autowired ApproveStrDraft approveDraft;
     @Autowired SubmitStrDraft submitDraft;
@@ -184,7 +186,7 @@ class GenerateStrReportPdfDbTest {
     void 실패_커밋_뒤_실행기가_거절하면_FAILED_NOT_STARTED가_실제로_커밋된다() {   // #149 리뷰
         long draftId = reportedDraft();                     // pdf_status PENDING 커밋됨
         // 서버 종료 중처럼 실행기가 거절 — Spring 없이 mock 으로 보는 StrReportPdfTriggerTest 는 이 트랜잭션 문제를 못 잡는다
-        StrReportPdfTrigger trigger = new StrReportPdfTrigger(generate,
+        StrReportPdfTrigger trigger = new StrReportPdfTrigger(generate, publisher,
                 task -> { throw new TaskRejectedException("shutting down"); }, true);
 
         // 진짜 트랜잭션 안에서 걸어 afterCommit 경로로 — 끝난 트랜잭션에 합류하면 FAILED 가 커밋되지 않고 PENDING 이 남는다

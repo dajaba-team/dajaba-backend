@@ -456,7 +456,7 @@ try {
 | `case.open-cases` | `BatchRunMessage`(OPEN_CASES `batch_run_id`, `RUNNING` 커밋 뒤) | `RequestOpenCases` → `OpenCasesMessageListener` → `RunOpenCasesOnce` | 지윤 |
 | `batch.score` | `BatchRunMessage`(성공한 RULE_SCAN `batch_run_id`) | `RunRuleScan` → `ScoreChainListener` → `ScoreAfterRuleScan` | 준혁(SCRUM-349) |
 | `batch.open-cases` | `BatchRunMessage`(SUCCEEDED SCORE_REQUEST `batch_run_id`) | `RequestScores` → `OpenCasesChainListener`(cases) → `OpenCasesAfterScore` → `RequestOpenCases` | 준혁(SCRUM-349) |
-| `str.pdf.*` | 〔협의〕 `draft_id` | 확정본 PDF 생성 | 채영 |
+| `str.pdf.generate` | `StrReportPdfMessage`(`draft_id`, PDF `PENDING` 커밋 뒤) | `StrReportPdfTrigger` → `StrReportPdfMessageListener` → `GenerateStrReportPdf` | 채영 |
 
 **ACK·재시도·DLQ 기본값** (`spring.rabbitmq.listener.simple`)
 
