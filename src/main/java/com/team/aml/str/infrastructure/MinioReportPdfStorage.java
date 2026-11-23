@@ -2,6 +2,7 @@ package com.team.aml.str.infrastructure;
 
 import com.team.aml.str.domain.ReportPdfStorage;
 import com.team.aml.shared.domain.ReportPdfStorageUnavailableException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -30,6 +31,8 @@ public class MinioReportPdfStorage implements ReportPdfStorage {
     private final String bucket;
     private final Path fallbackRoot;
 
+    /** 생성자가 둘이라 Spring 이 쓸 쪽을 정해 둔다 — 없으면 기본 생성자를 찾다가 기동 실패(storage=minio). */
+    @Autowired
     public MinioReportPdfStorage(
             S3Client s3,
             @Value("${aml.str.pdf.bucket:str-reports}") String bucket) {
