@@ -149,6 +149,17 @@
 | `FindAlertsByEntity(entityId, before, limit)` | cases 상세 (`prior_alerts`) | 같은 법인의 과거 경보 — `reference_ts < before`만, 최근 것부터 `limit`건. 조건은 `prior_alert_count`와 같은 한 줄(`PRIOR_ALERT_WHERE`). 법인 null이면 `[]`(임의 연결 안 함). 경보 번호·룰·날짜·기준 시각·계좌 키·점수 상태·점수만, 정답 칸 없음 [SCRUM-239] | 읽기 |
 | `GetAlertForDraft(alertId)` (명세 이름 GetAlertPayload) | str 초안 요청 (`RequestStrDraft`) | `AlertPayload`(규약 §2, `created_at` 포함) + `reasons`(점수 payload 그대로, 없으면 `[]`) + `prior_alert_count`(같은 법인·앞선 경보 수) [SCRUM-155] | 읽기 |
 | ~~`RecordScoreBand`~~ | — | 안 만듦. 등급·정책 버전은 cases가 케이스 생성 때 자기 행에 저장(계약서 Q2, SCRUM-152) | — |
+| `GetDlRanking(scanDate)` | 없음 — 케이스 목록·상세(다음 이슈) | AI ML+DL 조사 순위를 그 날짜 경보·점수와 맞춰 보고 `Available`/`Unavailable(reason)`. 아래 "ML+DL 조사 순위 대조 조회" [SCRUM-376] | AI 호출은 트랜잭션 밖, 그 뒤 읽기 |
+
+**ML+DL 조사 순위 대조 조회 — 구현됨 (SCRUM-376)** `GetDlRanking.execute(LocalDate scanDate)` → `DlRankingResult`. AI `getDlRankings`(`03_shared.md` 「ML+DL 조사 순위」 — 응답 모양 확인까지 거기서)를 **트랜잭션 밖에서** 부르고, 그 뒤 그날 경보 번호·룰·점수·모델을 쿼리 하나로 읽어 맞춰 봐요. 오래된 점수와 새 순위가 섞이지 않게 **하나라도 어긋나면 순위 전체를 버려요**(경보 몇 건만 빼고 쓰지 않음).
+- `Available(scanDate, snapshotSha256, mlModel, dlModel, ranks)` — `ranks` = 경보 번호 → `{ml_rank, fused_rank, fallback_reason, dl_score}`(그날 경보 전부, 순위 null 가능)
+- `Unavailable(reason)` — 이유 5종, 앞 단계부터 보고 처음 어긋난 하나만: `AI_UNAVAILABLE`(AI 호출이 던진 예외 전부 — 503 `DL_RANKING_UNAVAILABLE`·연결 실패·10초 넘김·응답 확인 실패 502) → `ALERT_SET_MISMATCH`(그날 `alert_no` 집합 ≠ 응답 `alert_id` 집합 — 크기·원소) → `RULE_MISMATCH`(경보별 `rule_id`) → `MODEL_MISMATCH`(DB 점수가 있는 경보의 `alert_scores.model_version` ≠ `ml_model`) → `SCORE_MISMATCH`(\|DB `score` − `ml_score`\| > 1e-6, 또는 DB 점수 있음↔응답 `ml_score` 없음이 한쪽만)
+- **왜 집합까지 보나** — `alert_no` 는 전역 시퀀스라 DB 를 만든 뒤 9/7 을 **처음** 스캔했을 때만 스냅샷 번호(`…-000001`~)와 맞아요. 다른 날을 먼저 스캔하면 같은 1,545건이어도 번호가 밀려 엉뚱한 경보에 순위가 붙어요 → `ALERT_SET_MISMATCH`
+- **부르는 쪽(케이스 조회)은 조회 트랜잭션을 끝낸 뒤 밖에서 불러요** — `execute` 는 `NOT_SUPPORTED` 라 바깥 트랜잭션 안에서 불러도 AI 호출은 트랜잭션 밖이지만, 멈춘 바깥 트랜잭션의 DB 커넥션은 AI 를 기다리는 동안(최대 10초) 그대로 잡혀 있어요(추가 검토 1)
+- 점수 비교는 십진수로(DB `numeric` − 응답 점수, 정확히 1e-6 은 통과)
+- **예외 안 나감은 AI 호출·대조 쪽 범위예요. DB 장애(읽기 쿼리 실패)는 그대로 던져요** — 순위가 없는 것과 DB 가 죽은 것을 같은 "조회 불가"로 숨기지 않게
+- 목업(`aml.ai.mock=true`)도 대조를 건너뛰지 않아요 — 목업 응답은 경보 3건이라 대부분 `ALERT_SET_MISMATCH`(화면엔 "순위 조회 불가"). `2022-09-01` 은 `AI_UNAVAILABLE`. `Available` 모양은 테스트 예시(`GetDlRankingDbTest`) 참고
+- 저장·캐시 없음(AI 가 `no-store`). 채점·`CasePolicy`·케이스 생성에서 부르지 않아요. 로그는 날짜·건수·이유·걸린 시간만(경보 번호·점수 없음)
 
 **관리자 API** 〔SD 명세 v0.3, 11/23〕 룰 스캔 `POST /admin/batches/rule-scan?date=`(202), 점수 `POST /admin/batches/score?date=`(202, SCRUM-349), 경보 위험 등급 통계 `GET /admin/alerts/stats?date=`(코드는 cases — `cases.md` 「관리자 경보 위험 등급 집계」, SCRUM-360). 룰 `GET /admin/rules`·`PUT /admin/rules/{rule_id}/params`는 **미구현**(컨트롤러 없음) — 설계는 새 버전 행 추가 + 이전 행 비활성을 한 트랜잭션, `(rule_id, version)` unique로 409. 지금 기준값은 Flyway 시드로만 바꿔요.
 
