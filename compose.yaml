@@ -99,9 +99,10 @@ services:
       AML_STR_PDF_STORAGE: ${AML_STR_PDF_STORAGE:-filesystem}
       AML_STR_PDF_BUCKET: str-reports
       AML_STR_PDF_ENDPOINT: http://minio:9000
-      AML_STR_PDF_REGION: us-east-1
+      AML_STR_PDF_REGION: ap-northeast-2
       AML_STR_PDF_ACCESS_KEY: ${MINIO_ROOT_USER:-}
       AML_STR_PDF_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-}
+      AML_STR_PDF_TIMEOUT_SECONDS: ${AML_STR_PDF_TIMEOUT_SECONDS:-10}
     ports:
       - "8080:8080"
     volumes:

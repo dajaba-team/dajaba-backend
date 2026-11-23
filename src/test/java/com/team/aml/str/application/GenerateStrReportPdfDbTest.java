@@ -163,6 +163,15 @@ class GenerateStrReportPdfDbTest {
         assertThat(pdfRow(draftId)).containsEntry("pdf_status", "FAILED").containsEntry("pdf_failure_code", "STORAGE_FAILED");
     }
 
+    // 3-2
+    @Test
+    void 실패_보관_런타임_예외가_나면_FAILED가_남고_복구_뒤_PDF_다시_만들기로_READY가_된다() {
+        long draftId = reportedDraft();
+        // storage 빈(현재 테스트 프로파일 filesystem spy)에서 런타임 예외를 발생시켜 STORAGE_FAILED 처리를 검증한다.
+        doThrow(software.amazon.awssdk.core.exception.SdkClientException.create("storage unavailable"))
+                .doCallRealMethod().when(storage).put(anyString(), any());
+    }
+
     @Test
     void 실패_MinIO가_응답하지_않으면_FAILED가_남고_복구_뒤_PDF_다시_만들기로_READY가_된다() {
         long draftId = reportedDraft();

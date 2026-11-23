@@ -9,7 +9,13 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /** MinIO의 S3 호환 API에 STR 확정본 PDF를 보관한다. */
 @Component
@@ -18,12 +24,21 @@ public class MinioReportPdfStorage implements ReportPdfStorage {
 
     private final S3Client s3;
     private final String bucket;
+    private final Path fallbackRoot;
 
     public MinioReportPdfStorage(
             S3Client s3,
             @Value("${aml.str.pdf.bucket:str-reports}") String bucket) {
+        this(s3, bucket, null);
+    }
+
+    public MinioReportPdfStorage(
+            S3Client s3,
+            String bucket,
+            Path fallbackRoot) {
         this.s3 = s3;
         this.bucket = bucket;
+        this.fallbackRoot = fallbackRoot == null ? null : fallbackRoot.toAbsolutePath().normalize();
     }
 
     @Override
@@ -38,10 +53,24 @@ public class MinioReportPdfStorage implements ReportPdfStorage {
 
     @Override
     public byte[] get(String key) {
-        ResponseBytes<GetObjectResponse> response = s3.getObjectAsBytes(GetObjectRequest.builder()
-                .bucket(bucket)
-                .key(key)
-                .build());
-        return response.asByteArray();
+        try {
+            ResponseBytes<GetObjectResponse> response = s3.getObjectAsBytes(GetObjectRequest.builder()
+                    .bucket(bucket)
+                    .key(key)
+                    .build());
+            return response.asByteArray();
+        } catch (NoSuchKeyException e) {
+            if (fallbackRoot != null) {
+                Path localFile = fallbackRoot.resolve(key).normalize();
+                if (localFile.startsWith(fallbackRoot) && !localFile.equals(fallbackRoot) && Files.isRegularFile(localFile)) {
+                    try {
+                        return Files.readAllBytes(localFile);
+                    } catch (IOException ioe) {
+                        throw new UncheckedIOException("로컬 전환 fallback PDF 읽기 실패: " + key, ioe);
+                    }
+                }
+            }
+            throw e;
+        }
     }
 }

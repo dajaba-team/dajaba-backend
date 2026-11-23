@@ -56,4 +56,19 @@ class MinioReportPdfStorageTest {
         assertThatThrownBy(() -> storage.put("2026/STR-2026-000001-1.pdf", new byte[]{1}))
                 .isInstanceOf(SdkClientException.class);
     }
+
+    @Test
+    void 설정_자격증명이_비어있으면_빈_생성_시_예외가_발생한다() {
+        MinioReportPdfStorageConfig config = new MinioReportPdfStorageConfig();
+        assertThatThrownBy(() -> config.strPdfS3Client("http://localhost:9000", "ap-northeast-2", "", "secret", 10))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void 설정_유효한_값이면_S3Client가_생성된다() {
+        MinioReportPdfStorageConfig config = new MinioReportPdfStorageConfig();
+        try (S3Client client = config.strPdfS3Client("http://localhost:9000", "ap-northeast-2", "key", "secret", 10)) {
+            assertThat(client).isNotNull();
+        }
+    }
 }

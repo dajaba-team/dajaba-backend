@@ -2,7 +2,7 @@ package com.team.aml.str.domain;
 
 /**
  * 확정본 PDF 보관소 (서식 회의 10/30 결정 2 — 파일은 저장소에, DB 에는 보관 키·SHA-256·템플릿 버전·생성 상태).
- * 구현은 str.infrastructure. 지금은 로컬 폴더, MinIO(버킷 str-reports, 11/17 결정)는 ops 붙이기에서 같은 인터페이스로 바꾼다.
+ * 구현은 str.infrastructure — {@code aml.str.pdf.storage} 로 {@code filesystem}(기본) 또는 {@code minio} 를 선택한다.
  * 지우는 메서드는 두지 않는다 — 5년 보관본(법 제5조의4).
  */
 public interface ReportPdfStorage {
