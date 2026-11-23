@@ -33,7 +33,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
-import com.team.aml.str.domain.ReportPdfStorageUnavailableException;
+import com.team.aml.shared.domain.ReportPdfStorageUnavailableException;
 
 import java.sql.SQLException;
 import java.util.Collections;

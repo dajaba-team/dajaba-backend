@@ -1,7 +1,7 @@
 package com.team.aml.str.infrastructure;
 
 import com.team.aml.str.domain.ReportPdfStorage;
-import com.team.aml.str.domain.ReportPdfStorageUnavailableException;
+import com.team.aml.shared.domain.ReportPdfStorageUnavailableException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
