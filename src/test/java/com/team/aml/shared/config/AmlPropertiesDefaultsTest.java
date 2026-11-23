@@ -219,6 +219,49 @@ class AmlPropertiesDefaultsTest {
                 .isInstanceOf(BindException.class);
     }
 
+    // --- SCRUM-376 ML+DL 조사 순위 설정 ------------------------------------------------
+
+    @Test
+    void 정상_조사_순위는_10초이고_다른_예산은_그대로다() {
+        for (String profile : List.of("local", "test", "prod")) {
+            AmlProperties.Ai ai = ai(profile, Map.of());
+            assertThat(ai.dlRankingTimeoutSeconds()).as(profile).isEqualTo(10);
+            assertThat(ai.strIndexTimeoutSeconds()).as(profile).isEqualTo(30);
+            assertThat(ai.referenceSearchTimeoutSeconds()).as(profile).isEqualTo(8);
+            assertThat(ai.askTimeoutSeconds()).as(profile).isEqualTo(30);
+            assertThat(ai.timeoutSeconds()).as(profile).isEqualTo(90);
+        }
+    }
+
+    @Test
+    void 경계_yml에_칸이_빠져도_10초이고_예전_8칸_10칸_12칸_생성자도_같은_기본값이다() {
+        MockEnvironment env = new MockEnvironment().withProperty("aml.ai.base-url", "http://x");
+        assertThat(Binder.get(env).bind("aml", AmlProperties.class).get().ai().dlRankingTimeoutSeconds()).isEqualTo(10);
+
+        assertThat(new AmlProperties.Ai("http://ai", "key", 90, 500, false, 30, false, 5).dlRankingTimeoutSeconds())
+                .isEqualTo(10);
+        assertThat(new AmlProperties.Ai("http://ai", "key", 90, 500, false, 30, false, 5, 7, true)
+                .dlRankingTimeoutSeconds()).isEqualTo(10);
+        AmlProperties.Ai twelve = new AmlProperties.Ai("http://ai", "key", 90, 500, false, 30, false, 5, 7, true, 20, true);
+        assertThat(twelve.dlRankingTimeoutSeconds()).isEqualTo(10);
+        assertThat(twelve.strIndexTimeoutSeconds()).isEqualTo(20);
+        assertThat(twelve.strIndexEnabled()).isTrue();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest(name = "dl-ranking-timeout-seconds=\"{0}\"")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"", "0", "-1"})
+    void 실패_dl_ranking_timeout_seconds가_빈_값_0_음수면_묶기에_실패한다(String value) {
+        MockEnvironment env = new MockEnvironment().withProperty("aml.ai.dl-ranking-timeout-seconds", value);
+        assertThatThrownBy(() -> Binder.get(env).bind("aml", AmlProperties.class))
+                .isInstanceOf(BindException.class);
+    }
+
+    @Test
+    void 경계_dl_ranking_timeout_seconds_1은_그대로_뜬다() {
+        MockEnvironment env = new MockEnvironment().withProperty("aml.ai.dl-ranking-timeout-seconds", "1");
+        assertThat(Binder.get(env).bind("aml", AmlProperties.class).get().ai().dlRankingTimeoutSeconds()).isEqualTo(1);
+    }
+
     private static AmlProperties.Ai ai(String profile, Map<String, Object> osEnv) {
         SpringApplicationBuilder app = new SpringApplicationBuilder(Empty.class)
                 .web(WebApplicationType.NONE)

@@ -289,4 +289,43 @@ class MockAiClientTest {
         StrIndexRequest exact100 = strIndex(List.of(), "가".repeat(50), "가".repeat(50));
         assertThat(client.indexApprovedStr(exact100).status()).isEqualTo(StrIndexStatus.INDEXED);
     }
+
+    // --- SCRUM-376 ML+DL 조사 순위 -------------------------------------------------
+
+    /** 목업 DTO 를 AI 응답 JSON 모양(snake_case · 날짜 문자열)으로 되돌려 응답 확인에 넣는다. */
+    private JsonNode asAiJson(DlRankingResponse r) {
+        ObjectMapper wire = new ObjectMapper().setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+                .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
+                .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        return wire.valueToTree(r);
+    }
+
+    @Test
+    void getDlRankings_uses_request_date_three_reasons_and_passes_response_check() {
+        java.time.LocalDate date = java.time.LocalDate.of(2022, 9, 7);
+        DlRankingResponse res = client.getDlRankings(date);
+
+        assertThat(res.scanDate()).isEqualTo(date);
+        assertThat(res.mlModel()).isEqualTo("mock-0.0.1");   // 목업 채점 모델과 같음
+        assertThat(res.alerts()).extracting(DlRankedAlert::alertId)
+                .containsExactly("ALT-20220907-000001", "ALT-20220907-000002", "ALT-20220907-000003");
+        assertThat(res.alerts()).extracting(DlRankedAlert::fallbackReason)
+                .containsExactly(null, DlFallbackReason.INCOMPLETE_DL_EVIDENCE, DlFallbackReason.ML_UNSCORED);
+        WebClientAiClient.requireDlRankingResponse(date, asAiJson(res));
+
+        java.time.LocalDate other = java.time.LocalDate.of(2022, 9, 2);
+        DlRankingResponse otherRes = client.getDlRankings(other);
+        assertThat(otherRes.alerts().get(0).alertId()).isEqualTo("ALT-20220902-000001");
+        WebClientAiClient.requireDlRankingResponse(other, asAiJson(otherRes));
+    }
+
+    @Test
+    void getDlRankings_2022_09_01_is_unavailable_like_ai_503() {
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(
+                () -> client.getDlRankings(java.time.LocalDate.of(2022, 9, 1))))
+                .isInstanceOfSatisfying(AiClientException.class, e -> {
+                    assertThat(e.code()).isEqualTo("DL_RANKING_UNAVAILABLE");
+                    assertThat(e.httpStatus()).isEqualTo(502);
+                });
+    }
 }

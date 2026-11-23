@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -237,6 +238,38 @@ public final class AiDtos {
     public record StrIndexResponse(String producedAt, String reportNo, StrIndexStatus status,
                                    StrIndexSkipReason skipReason, int chunkCount, String retrievalVersion,
                                    JsonNode raw) {}
+
+    /**
+     * ML+DL 조사 순위에서 결합 순위를 못 쓴 이유 (AI `dl_ranking.py` `RankedAlert.fallback_reason`, SCRUM-376).
+     * null = ML·DL 둘 다 연결. 모르는 값은 `requireDlRankingResponse` 가 먼저 거부한다.
+     */
+    public enum DlFallbackReason {
+        /** DL 근거가 하나라도 빠짐 — ML 순위 자리 유지, `dl_score` null. */
+        INCOMPLETE_DL_EVIDENCE,
+        /** ML 점수 없음 — 두 순위 null, 배열 맨 뒤. DL 근거가 다 있으면 `dl_score` 는 올 수 있다. */
+        ML_UNSCORED
+    }
+
+    /**
+     * 조사 순위 한 건 (AI `RankedAlert`). `alertId` 는 **경보 번호**(`ALT-YYYYMMDD-NNNNNN`, DB 숫자 id 아님).
+     * 순위는 1이 최상위, ML 점수가 있는 경보 안에서 1…k.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record DlRankedAlert(String alertId, String ruleId, Double mlScore, String mlFailureCode, Double dlScore,
+                                int evidenceCount, int dlLinked, DlFallbackReason fallbackReason, Integer mlRank,
+                                Integer fusedRank) {}
+
+    /**
+     * GET /v1/dl-rankings/{scan_date} 응답 (규약 6절 v0.4, AI `ReviewRanking`, SCRUM-376). 스캔 하루치 경보 전부,
+     * 배열 순서 = `fused_rank` 순 다음 ML 점수 없는 경보. 규칙은 `WebClientAiClient.requireDlRankingResponse` 가 record 로
+     * 바꾸기 전에 확인한다. 저장하지 않는 응답이고 칸이 전부 record 에 있어 `raw` 는 두지 않는다(원칙 4 의 예외).
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record DlRankingResponse(LocalDate scanDate, String snapshotSha256, String mlModel, String dlModel,
+                                    int evidenceTransactions, int scoredTransactions, int linkedAlerts,
+                                    int mlOnlyAlerts, int unscoredAlerts, List<DlRankedAlert> alerts) {
+        public DlRankingResponse { alerts = alerts == null ? List.of() : List.copyOf(alerts); }
+    }
 
     /**
      * GET /v1/health (AI `main.py` `health()`, SCRUM-22 — 미결 28). 전부 String, 없으면 null.

@@ -26,7 +26,8 @@ public record AmlProperties(Ai ai, DevUsers devUsers, Cors cors, String datasetD
                      @DefaultValue("8") int referenceSearchTimeoutSeconds,
                      @DefaultValue("false") boolean referenceSearchEnabled,
                      @DefaultValue("30") int strIndexTimeoutSeconds,
-                     @DefaultValue("false") boolean strIndexEnabled) {
+                     @DefaultValue("false") boolean strIndexEnabled,
+                     @DefaultValue("10") int dlRankingTimeoutSeconds) {
 
         /** 규약 6.2 점수 묶음 상한. */
         private static final int MAX_BATCH_LIMIT = 500;
@@ -36,6 +37,8 @@ public record AmlProperties(Ai ai, DevUsers devUsers, Cors cors, String datasetD
         private static final int DEFAULT_REFERENCE_SEARCH_TIMEOUT_SECONDS = 8;
         /** 승인 STR 색인 칸이 없을 때의 기본값 — 예전 8칸·10칸 생성자가 쓴다. */
         private static final int DEFAULT_STR_INDEX_TIMEOUT_SECONDS = 30;
+        /** ML+DL 조사 순위 칸이 없을 때의 기본값 — 예전 8칸·10칸·12칸 생성자가 쓴다(SCRUM-376). */
+        private static final int DEFAULT_DL_RANKING_TIMEOUT_SECONDS = 10;
 
         @ConstructorBinding
         public Ai {
@@ -59,6 +62,10 @@ public record AmlProperties(Ai ai, DevUsers devUsers, Cors cors, String datasetD
                 throw new IllegalArgumentException(
                         "aml.ai.str-index-timeout-seconds 는 1 이상이어야 함: " + strIndexTimeoutSeconds);
             }
+            if (dlRankingTimeoutSeconds <= 0) {
+                throw new IllegalArgumentException(
+                        "aml.ai.dl-ranking-timeout-seconds 는 1 이상이어야 함: " + dlRankingTimeoutSeconds);
+            }
         }
 
         /**
@@ -80,6 +87,19 @@ public record AmlProperties(Ai ai, DevUsers devUsers, Cors cors, String datasetD
                   int referenceSearchTimeoutSeconds, boolean referenceSearchEnabled) {
             this(baseUrl, internalKey, timeoutSeconds, maxBatch, mock, askTimeoutSeconds, askEnabled, askPerMinute,
                     referenceSearchTimeoutSeconds, referenceSearchEnabled, DEFAULT_STR_INDEX_TIMEOUT_SECONDS, false);
+        }
+
+        /**
+         * 357 모양 12칸 생성자 — ML+DL 조사 순위 칸은 기본값(10초). 칸을 더해도 이 모양으로 부르는 테스트가 그대로이게 (SCRUM-376).
+         * 설정 바인딩은 위 정식 생성자(`@ConstructorBinding`)만 쓴다.
+         */
+        public Ai(String baseUrl, String internalKey, int timeoutSeconds, int maxBatch, boolean mock,
+                  int askTimeoutSeconds, boolean askEnabled, int askPerMinute,
+                  int referenceSearchTimeoutSeconds, boolean referenceSearchEnabled,
+                  int strIndexTimeoutSeconds, boolean strIndexEnabled) {
+            this(baseUrl, internalKey, timeoutSeconds, maxBatch, mock, askTimeoutSeconds, askEnabled, askPerMinute,
+                    referenceSearchTimeoutSeconds, referenceSearchEnabled, strIndexTimeoutSeconds, strIndexEnabled,
+                    DEFAULT_DL_RANKING_TIMEOUT_SECONDS);
         }
     }
 

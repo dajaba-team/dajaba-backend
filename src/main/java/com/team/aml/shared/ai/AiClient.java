@@ -2,15 +2,16 @@ package com.team.aml.shared.ai;
 
 import com.team.aml.shared.ai.AiDtos.*;
 
+import java.time.LocalDate;
 import java.util.List;
 
 /**
- * AI 서버(FastAPI) 호출 인터페이스 (레퍼런스 8.5). 규약 엔드포인트 여덟 개 = 메서드 여덟 개.
+ * AI 서버(FastAPI) 호출 인터페이스 (레퍼런스 8.5). 규약 엔드포인트 아홉 개 = 메서드 아홉 개.
  * 유스케이스는 이 인터페이스만 본다. 구현은 두 개:
  *  - MockAiClient      aml.ai.mock=true  (local/test). AI 서버 없이 고정 응답.
  *  - WebClientAiClient aml.ai.mock=false (prod, 또는 local 에서 진짜 서버 붙일 때). SCRUM-17.
  *
- * 공통 동작(구현체가 지킨다): X-Internal-Key, X-Request-Id(UUID), 화면 요청 전체 90초(재시도 포함 — 질문 답변만 30초, 참고 사례 검색만 8초, 승인 STR 색인만 30초).
+ * 공통 동작(구현체가 지킨다): X-Internal-Key, X-Request-Id(UUID), 화면 요청 전체 90초(재시도 포함 — 질문 답변만 30초, 참고 사례 검색만 8초, 승인 STR 색인만 30초, ML+DL 조사 순위만 10초).
  * 재시도 1회는 HTTP 5xx 여부가 아니라 코드/원인으로 — LLM_UNAVAILABLE·MODEL_UNAVAILABLE·503 DB_UNAVAILABLE,
  * 또는 연결 거부(ConnectException)만. 그 밖의 5xx·4xx·타임아웃·409 는 재시도 없이 AiClientException (규약 6.2).
  * AI 409 GENERATION_IN_PROGRESS → 409 DRAFT_IN_PROGRESS. 호출은 트랜잭션 밖에서 (레퍼런스 8.4).
@@ -53,6 +54,15 @@ public interface AiClient {
      * 실패·SKIPPED 여도 승인은 그대로 — 예외 처리와 켜기 설정(`strIndexEnabled`)은 부르는 쪽이 본다.
      */
     StrIndexResponse indexApprovedStr(StrIndexRequest request);
+
+    /**
+     * ML+DL 조사 순위 (규약 6절 v0.4, AI #103, SCRUM-376). `GET /v1/dl-rankings/{scan_date}` — 본문 없음, 날짜는 ISO 로 경로에.
+     * **이 호출만 전체 10초**(재시도 포함, `aml.ai.dl-ranking-timeout-seconds`). 재시도는 연결 단계 실패만 1회 — 503
+     * `DL_RANKING_UNAVAILABLE`(스냅샷 문제)은 다시 불러도 같아 0회, 코드 그대로 502. 날짜·경보 번호 모양·순위 1…k·배열 순서·
+     * 건수 합이 틀리면 502 `AI_BAD_RESPONSE`. 그 날짜 DB 경보·점수와 맞춰 보는 일은 부르는 쪽 몫(이 메서드는 DB 를 안 봄).
+     * 기존 채점·케이스 생성과 별개 — 그 흐름에서 부르지 않는다. 날짜는 `ai_call_logs.target_id` 에 쓴다.
+     */
+    DlRankingResponse getDlRankings(LocalDate scanDate);
 
     /** 기동 시 1회 호출. 실패해도 기동은 한다(경고 로그). */
     HealthResponse health();

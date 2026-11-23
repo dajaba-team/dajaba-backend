@@ -29,6 +29,7 @@ class AiHealthCheckTest {
             @Override public AskResponse ask(AskRequest request) { throw new UnsupportedOperationException(); }
             @Override public ReferenceSearchResponse searchReferences(String draftId, ReferenceSearchRequest request) { throw new UnsupportedOperationException(); }
             @Override public StrIndexResponse indexApprovedStr(StrIndexRequest request) { throw new UnsupportedOperationException(); }
+            @Override public DlRankingResponse getDlRankings(java.time.LocalDate scanDate) { throw new UnsupportedOperationException(); }
             @Override public HealthResponse health() { return h; }
         };
         return new AiHealthCheck(new StaticListableBeanFactory(Map.of("aiClient", client)).getBeanProvider(AiClient.class));

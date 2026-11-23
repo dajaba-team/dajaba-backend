@@ -144,6 +144,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | `ask(request)` | `POST /v1/cases/ask` — 조사역 질문 답변(규약 5.4). 아래 "질문 답변" [SCRUM-291] | cases 질문 답변 유스케이스(지윤 님 이슈) |
 | `searchReferences(draftId, request)` | `POST /v1/references/search` — 참고 사례 검색(규약 5.5). `draftId` 는 `ai_call_logs` 에만 쓰고 요청 본문엔 안 넣음. 아래 "참고 사례 검색" [SCRUM-309] | str 참고 사례 검색 유스케이스(채영 님 이슈) |
 | `indexApprovedStr(request)` | `POST /v1/references/str` — 승인 STR 색인. 초안 번호는 요청 본문 `draft_id` 그대로(따로 안 받음). 아래 "승인 STR 색인" [SCRUM-357] | str 승인 뒤 트리거(채영 님 SCRUM-314) |
+| `getDlRankings(scanDate)` | `GET /v1/dl-rankings/{scan_date}` — ML+DL 조사 순위(규약 6절, 본문 없음). 스캔 하루치 경보 전부의 `ml_rank`·`fused_rank`. 아래 "ML+DL 조사 순위" [SCRUM-376] | 없음 — 뒤 PR(detection `GetDlRanking`) |
 | `health()` | `GET /v1/health` — 기동 시 1회, 실패해도 기동은 함. 응답 `status·db·llm·server_version·model_version·feature_version·retrieval_version` 을 info 한 줄로 찍고, `status`·`db`·`llm` 중 하나라도 `ok` 가 아니면(null 포함) warn 한 줄 더 (SCRUM-22) | `AiHealthCheck` |
 
 **공통 동작**
@@ -151,6 +152,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 - **시간 한도** — 초안·검증·요약처럼 **화면에서 부르는 요청은 전체 90초**(재시도 포함, 호출마다 90초가 아님). 점수 배치는 **500건 묶음 호출 하나마다** 같은 규칙이에요(배치 전체가 90초가 아님). MVP는 **동기**(`@Async`·큐·폴링은 고도화). [10/29]
   - **질문 답변(`ask`)만 전체 30초**(재시도 포함, 규약 6.2) — `aml.ai.ask-timeout-seconds`(기본 30, 빈 값·0·음수면 기동 실패). 나머지는 `aml.ai.timeout-seconds`(90) 그대로예요. 한도는 호출마다 따로 재고, `X-Budget-Ms`도 그 한도에서 남은 값이라 질문 답변 첫 시도는 약 30000이에요. 재시도 규칙(아래)은 같아요. [SCRUM-291]
   - **참고 사례 검색(`searchReferences`)만 전체 8초**(재시도 포함, 규약 6.2) — `aml.ai.reference-search-timeout-seconds`(기본 8, 빈 값·0·음수면 기동 실패). 첫 시도 `X-Budget-Ms` 는 약 8000이에요. 재시도 규칙은 같아요. [SCRUM-309]
+  - **ML+DL 조사 순위(`getDlRankings`)만 전체 10초**(재시도 포함, 규약 6.2 — AI 실측 전 가정값) — `aml.ai.dl-ranking-timeout-seconds`(기본 10, 빈 값·0·음수면 기동 실패). 재시도는 연결 단계 실패만 1회 — 503 `DL_RANKING_UNAVAILABLE` 은 스냅샷 문제라 다시 불러도 같아 재시도하지 않아요(아래 "ML+DL 조사 순위") [SCRUM-376]
   - **승인 STR 색인(`indexApprovedStr`)만 전체 30초**(재시도 포함) — `aml.ai.str-index-timeout-seconds`(기본 30, 빈 값·0·음수면 기동 실패). 승인 뒤 뒤 스레드에서 불러 기다리는 사람은 없지만 실행기 스레드를 잡는 시간이라 길게 두지 않아요. AI 는 절대 마감을 안 쓰고 `X-Budget-Ms` 는 받기만 해요(임베딩은 AI 공통 한도 35초). 재시도 규칙은 같아요. [SCRUM-357]
 - 4xx는 재시도 없이 `AiClientException` → 502. 단 409 `GENERATION_IN_PROGRESS`는 409 `DRAFT_IN_PROGRESS`로. [10/29]
 - **재시도** — 최대 **1회**, 그리고 **위 시간 한도 안에 남은 시간이 있을 때만**. [10/29]
@@ -176,6 +178,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   | `/v1/cases/ask` | `CASE` / `caseNo` | `generation_meta.prompt_version`, null 이면(`OUT_OF_SCOPE` — 답 호출을 안 함) `plan_prompt_version` [SCRUM-291] |
   | `/v1/references/search` | `DRAFT` / `draftId` (str 이 `verify` 때 쓰는 값과 같음) | `retrieval_version` [SCRUM-309] |
   | `/v1/references/str` | `DRAFT` / 요청 `draft_id` (승인된 초안 번호 `DRF-…`) | `retrieval_version`(SKIPPED·DISABLED 면 null) [SCRUM-357] |
+  | `/v1/dl-rankings` (경로의 날짜는 빼고 고정 — 엔드포인트별로 묶어 보게) | null / 스캔 날짜 `2022-09-07` | **늘 null**(성공·2xx 확인 실패 모두 — 응답 칸 모양으로는 모델 이름과 잘못 담긴 경보 번호·점수를 가를 수 없어서, 추가 검토 1) [SCRUM-376] |
   | `/v1/health` | null / null | null |
 
   모델 이름·`feature_version` 같은 나머지 버전은 저장하지 않아요. `generation_id`·`request_id`로 AI 쪽 기록에서 찾아요.
@@ -223,10 +226,38 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
   - **응답 확인**(`requireStrIndexResponse`, 하나라도 틀리면 502 `AI_BAD_RESPONSE` + 실패 행·재시도 없음, 메시지에 칸 이름만) — 필수 칸 여섯 개(`produced_at`·`report_no`·`status`·`skip_reason`·`chunk_count`·`retrieval_version`, 값 null 은 아래대로) · `produced_at` Z · `report_no` = 보낸 값 · 모르는 상태·이유는 실패 · `chunk_count` 정수 · `INDEXED` ↔ 이유 null·`chunk_count` 1 이상 **상한 이하**(상한 = 공백만이 아닌 섹션마다 ⌊글자 수 ÷ 600⌋ + 1 의 합. 글자 수는 원문 그대로 코드 포인트로 셈 — AI `len` 과 같음, 앞뒤 공백 안 뺌. 공백만·null 섹션은 0)·`retrieval_version` 앞뒤 공백 뺀 1자 이상(AI 와 같은 공백 처리) · `SKIPPED` ↔ 이유 있음·`chunk_count` 0·`retrieval_version` 문자열 또는 null. AI 스키마와 다르게 두는 곳: `report_no` 대조와 청크 수 상한은 백엔드가 더 봐요(엄격 — AI 는 단락을 1200자 안쪽 청크로 나눔(SCRUM-361), 공백만인 섹션은 뺌. 문장을 앞부터 1200자까지 채우고 넘치면 다음 청크로 넘겨서 이웃 두 청크 합이 늘 1200 을 넘음 → 청크 k 개면 글자 수 > 600×(k−1). 옛 AI(섹션 하나 = 청크 하나)도 이 상한 안). `SKIPPED` 의 `retrieval_version` null 을 `DISABLED` 에만 묶지 않아요(AI 도 안 묶음)
   - 색인 실패·SKIPPED 는 로그와 ai_call_logs 로만 확인, 다시 보내기 없음(MVP)
   - `ai_call_logs.ai_version` 은 검색과 같은 규칙(마지막 `@` 뒤 소문자 16진 8자면 `@` + 8자만, 아니면 null — 성공·2xx 확인 실패 행 모두, 응답 DTO 는 받은 그대로), `generation_id` 늘 null. 로그·`ai_call_logs` 에 섹션 글을 넣지 않아요 — 공통 줄(경로·`request_id`·시간·회차·코드)만
-  - **호출·재시도 루프는 참고 사례 검색과 같은 것**(`selfBudgetedPost`) — 바이트 송수신 · 연결 뒤 `X-Budget-Ms` · 오류 코드 허용 목록(검색과 같은 7개) + 고정 문구 · 감사 저장 시간은 예산에서 뺌 · 2xx 본문은 JSON 값 하나만·같은 칸 두 번 없음(뒤에 다른 값이 붙거나 같은 키가 겹치면 재시도 없는 `AI_BAD_RESPONSE`, 검색도 같음 — 추가 검토 1·2. 뒤따르는 공백·줄바꿈은 그대로 성공). 다른 건 경로·예산(30초)·문구·응답 확인뿐이에요
+  - **호출·재시도 루프는 참고 사례 검색과 같은 것**(`callSelfBudgeted` — SCRUM-376 에서 GET 도 받게 넓히며 `selfBudgetedPost` 에서 이름만 바꿈) — 바이트 송수신 · 연결 뒤 `X-Budget-Ms` · 오류 코드 허용 목록(검색과 같은 7개) + 고정 문구 · 감사 저장 시간은 예산에서 뺌 · 2xx 본문은 JSON 값 하나만·같은 칸 두 번 없음(뒤에 다른 값이 붙거나 같은 키가 겹치면 재시도 없는 `AI_BAD_RESPONSE`, 검색도 같음 — 추가 검토 1·2. 뒤따르는 공백·줄바꿈은 그대로 성공). 다른 건 경로·예산(30초)·문구·응답 확인뿐이에요
   - **30초는 AI 호출 기준, 감사 저장 시간은 빠짐 — 다른 호출과 같음.** 감사 DB 가 밀리면(풀 고갈 등) 저장 시간만큼 뒤 스레드를 더 잡아요(시도마다 저장, 연결 대기는 공통 풀 한도). 감사 저장을 따로 떼면 기록 유실·순서 문제가 생겨 309 에서 되돌린 결정 그대로 — 발표 뒤 여섯 호출과 같이 다뤄요(추가 검토 1)
   - **목업**(`aml.ai.mock=true`) — 고르는 순서는 AI 와 같아요: ① 보낸 유형에 `SCATTER_GATHER` 가 있으면 `SKIPPED`·`RAW_ACCOUNT` ② 섹션 글에서 공백을 뺀 글자 수 합이 100 미만이면 `SKIPPED`·`TOO_SHORT` ③ 그 밖 `INDEXED`, `chunk_count` = 공백만이 아닌 섹션 수. 공백은 ②·③ 모두 AI 와 같은 파이썬 기준(NEL 포함, SCRUM-361). `DISABLED`·`NO_FACTS` 는 목업에 없어요(꺼짐은 아래 설정이 먼저 막고, `NO_FACTS` 는 진짜 AI 에서만). 위 확인을 통과하는 모양이에요
   - **켜기 설정** `aml.ai.str-index-enabled`(환경 변수 `AML_AI_STR_INDEX_ENABLED`, 기본 false) — `AmlProperties.ai().strIndexEnabled()`. 읽는 쪽은 str 승인 뒤 트리거(채영 님 SCRUM-314). AI 쪽 스위치(`STR_INDEX_ENABLED`·`RAG_ENABLED`)가 꺼져 있으면 AI 가 200 `SKIPPED`·`DISABLED` 를 줘요(검색의 400 과 다름)
+- **ML+DL 조사 순위 요청·응답** (규약 6.1·6.2·6.3 v0.4, AI #103 `scoring/application/dl_ranking.py`, SCRUM-376) — 고정 스냅샷(시연 9/7)의 ML 점수·DL 점수로 그날 경보 전부의 조사 순위를 받아요. 조회 전용, 응답은 저장하지 않아요. 기존 채점 점수·HIGH 기준·케이스 생성과 별개예요(채점·`CasePolicy`·케이스 생성에서 부르지 않음)
+  - 요청 `getDlRankings(LocalDate scanDate)` → `GET /v1/dl-rankings/{scan_date}`, 본문 없음. 날짜는 `ISO_LOCAL_DATE`(`2022-09-07`)로 URI 변수에 넣어요(문자열 이어붙이기 없음). 헤더는 공통 셋 그대로
+  - 응답 `DlRankingResponse(scanDate, snapshotSha256, mlModel, dlModel, evidenceTransactions, scoredTransactions, linkedAlerts, mlOnlyAlerts, unscoredAlerts, alerts)` · 한 건 `DlRankedAlert(alertId, ruleId, mlScore, mlFailureCode, dlScore, evidenceCount, dlLinked, fallbackReason, mlRank, fusedRank)` — 점수 `Double`·순위 `Integer`(없으면 null), `fallbackReason` enum `DlFallbackReason`(`INCOMPLETE_DL_EVIDENCE`·`ML_UNSCORED`, null = ML·DL 둘 다 연결). `alertId` 는 **경보 번호** `ALT-YYYYMMDD-NNNNNN`(DB 숫자 id 아님). `raw` 칸은 없어요 — 저장하지 않고 칸이 전부 record 에 있어서(원칙 4 의 예외)
+  - **응답 확인**(`requireDlRankingResponse`, 하나라도 틀리면 502 `AI_BAD_RESPONSE` + 실패 행·재시도 없음, 메시지에 칸 이름만 — 경보 번호·점수 없음)
+    - 필수 칸 열 개. `scan_date` = 보낸 날짜, `snapshot_sha256` 소문자 16진 64자, `ml_model`·`dl_model` 빈 값 아닌 문자열, 건수 칸 0 이상 정수, `scored_transactions` ≤ `evidence_transactions`, `alerts` 1건 이상
+    - 경보 `alert_id` 는 `ALT-{보낸 날짜 yyyyMMdd}-` + 숫자 6~18자리, 중복 없음 · `rule_id` 빈 값 아님 · 1 ≤ `evidence_count` ≤ `evidence_transactions` · 0 ≤ `dl_linked` ≤ `evidence_count`, `dl_linked` ≤ `scored_transactions`(같은 거래가 여러 경보에 쓰일 수 있어 경보별 합은 안 맞춤 — 추가 검토 1)
+    - 점수는 null 이거나 유한한 0~1. 모르는 `fallback_reason` 은 실패
+    - ML: `ml_score` null ⇔ `ML_UNSCORED` ⇔ `ml_rank`·`fused_rank` 둘 다 null. `ml_score` 가 있으면 `ml_failure_code` null, 없으면 빈 값 아닌 문자열(값 종류는 안 봄)
+    - DL: ML 점수가 있는 경보는 `fallback_reason` null ⇔ `dl_score` 있음 ⇔ `dl_linked == evidence_count`. **`ML_UNSCORED` 경보도 DL 근거가 다 있으면 `dl_score` 가 와요**(AI 가 모든 경보에 DL 점수를 채움) — 그 경보는 `dl_score` 있음 ⇔ `dl_linked == evidence_count`
+    - 순위: ML 점수가 있는 k건의 `ml_rank`·`fused_rank` 가 각각 1…k 빠짐·겹침 없이. **`ml_rank` 는 응답 `ml_score` 로 다시 계산해 대조**(점수 내림차순, 같으면 경보 번호 오름차순 — AI 기본 순위와 같음, `-0.0` 과 `0.0` 은 같은 점수). `INCOMPLETE_DL_EVIDENCE` 경보는 `ml_rank == fused_rank`(ML 자리 유지 — AI 문서 3번)
+    - **알고 남김** — `fused_rank` 값(결합 규칙: 동점 평균 순위·max·번호 순)은 다시 계산하지 않아요. 정본은 AI(`dl_ranking.py`·`test_dl_ranking.py`)이고 백엔드에 복사하면 정본이 둘이 돼요. 그래서 결합 동점 두 경보의 순서가 뒤바뀐 응답은 통과해요(추가 검토 1) — 백엔드는 1…k·자리 유지·배열 순서만 봐요
+    - 배열 순서: `fused_rank` 1…k 순서, 그 뒤에 `ML_UNSCORED` 경보를 `alert_id` 오름차순으로
+    - 건수: `linked_alerts` = 이유 null 수 · `ml_only_alerts` = `INCOMPLETE_DL_EVIDENCE` 수 · `unscored_alerts` = `ML_UNSCORED` 수, 셋 합 = `alerts` 길이
+    - AI 스키마와 다르게 두는 곳: 더 엄격 — `alert_id` 뒤 숫자 6~18자리(AI 는 앞부분만), `evidence_count` ≥ 1(AI 는 근거 없는 경보면 0 가능 — 백엔드 경보는 근거가 늘 있음), 순위·순서·건수는 AI 가 계산하는 것을 다시 봐요. 더 느슨 — `ml_failure_code` 값 종류, 모르는 칸(받아 둠)
+  - **오류 코드** — 이 입구가 낼 수 있는 셋만 **(HTTP 상태, 코드) 쌍이 맞을 때** 그대로(예: 500 + `UNAUTHENTICATED` 는 `AI_BAD_RESPONSE`, 추가 검토 1 — 검색·색인은 코드만 보는 그대로), 메시지는 코드별 고정 문구(AI 문장 안 씀). 모두 502 `AiClientException`(기존 규칙 — AI 원래 상태는 `ai_call_logs.status_code` 에 남음), 재시도 없음
+
+    | AI | 백엔드 code | 메시지 |
+    |---|---|---|
+    | 503 `DL_RANKING_UNAVAILABLE`(스냅샷 설정 없음·파일 없음·해시·날짜 불일치 — 이유는 AI 로그에만) | `DL_RANKING_UNAVAILABLE` | ML+DL 조사 순위를 지금 쓸 수 없음 |
+    | 401 `UNAUTHENTICATED` | `AI_UNAUTHENTICATED` | AI 서버 인증 실패 |
+    | 400 `INVALID_REQUEST` | `AI_INVALID_REQUEST` | AI ML+DL 조사 순위 요청이 거부됨 |
+    | 그 밖(`INTERNAL` 포함, 상태가 안 맞는 쌍 포함) | `AI_BAD_RESPONSE` | AI 응답 처리 실패 |
+  - **알고 남김** — 재시도 판정은 다른 호출과 같은 공통 규칙이라 연결 거부뿐 아니라 이름 조회 실패·경로 없음(연결 단계 실패)도 1회 다시 보내요. 순위만 따로 두면 규칙이 갈라져서 그대로 둬요(추가 검토 1)
+  - **호출·재시도 루프는 참고 사례 검색·색인과 같은 것**(`callSelfBudgeted`) — 바이트로 받기 · 연결 뒤 `X-Budget-Ms` · 감사 저장 시간은 예산에서 뺌 · 2xx 본문은 JSON 값 하나·같은 칸 두 번 없음(순위는 **오류 본문도** 같은 엄격 읽기 — 같은 칸이 두 번이거나 뒤에 다른 값이 붙으면 코드 없음으로 보고 `AI_BAD_RESPONSE`·재시도 0·`status_code` 는 실제 상태, 추가 검토 2). 다른 건 GET·본문 없음·경로·예산(10초)·오류 표·응답 확인·기록 칸(위 `ai_call_logs` 표)뿐이에요
+  - **알고 남김** — 검색·색인의 오류 본문은 예전처럼 너그럽게 읽어요(같은 칸이 두 번이면 뒤 값). 기존 동작을 안 바꾸려고 순위에만 엄격 읽기를 넣었어요(추가 검토 2)
+  - 로그·`ai_call_logs` 에 경보 번호·점수를 넣지 않아요 — 공통 줄(경로·`request_id`·시간·회차·코드)만
+  - **목업**(`aml.ai.mock=true`) — 보낸 날짜로 `ALT-{yyyyMMdd}-000001~000003` 세 건(연결 1 · `INCOMPLETE_DL_EVIDENCE` 1 · `ML_UNSCORED` 1)을 위 확인을 통과하는 모양으로, `ml_model` 은 목업 채점 모델과 같은 `mock-0.0.1`. **`2022-09-01` 이면 `DL_RANKING_UNAVAILABLE`** 을 던져요(화면 "순위 조회 불가" 확인용). 목업 DB 의 경보와는 번호가 안 맞아 대조 조회는 대부분 Unavailable 이에요 — Available 모양은 테스트 예시를 봐요
+  - 켜기 설정은 없어요 — 꺼진 건 AI 가 503 `DL_RANKING_UNAVAILABLE` 로 알려 줘요
 
 **트랜잭션 패턴 — "DB → HTTP → DB"** 네 군데 [레퍼런스 §8.4]
 1. 점수 요청: `RequestScores` (500개 묶음마다 커밋)

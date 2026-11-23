@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -28,11 +29,15 @@ import java.net.UnknownHostException;
 import java.text.Normalizer;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
@@ -50,6 +55,7 @@ import java.util.regex.Pattern;
  *    질문 답변(/v1/cases/ask)만 전체 30초 = aml.ai.ask-timeout-seconds (규약 6.2, SCRUM-291). 한도는 호출마다 따로 잰다.
  *    참고 사례 검색(/v1/references/search)만 전체 8초 = aml.ai.reference-search-timeout-seconds (규약 6.2, SCRUM-309).
  *    승인 STR 색인(/v1/references/str)만 전체 30초 = aml.ai.str-index-timeout-seconds (SCRUM-357).
+ *    ML+DL 조사 순위(GET /v1/dl-rankings/{scan_date})만 전체 10초 = aml.ai.dl-ranking-timeout-seconds (규약 6.2, SCRUM-376).
  *  - 재시도 1회, 남은 시간 안에서만. 판별은 HTTP 5xx 가 아니라 코드/원인으로:
  *      재시도 O: LLM_UNAVAILABLE·MODEL_UNAVAILABLE·DB_UNAVAILABLE, 또는 연결 단계 실패(CONNECT_STAGE_FAILURES — 연결 거부·이름 조회 실패·경로 없음)
  *      재시도 X: 그 밖의 5xx·4xx·409, 연결 타임아웃(ConnectTimeoutException)·응답 타임아웃, 보낸 뒤 끊김(CLOSED_AFTER_SEND)
@@ -106,8 +112,12 @@ public class WebClientAiClient implements AiClient {
     private final Duration askBudget;
     private final SelfBudgetedCall searchCall;
     private final SelfBudgetedCall indexCall;
+    private final SelfBudgetedCall rankingCall;
     private static final String SEARCH_PATH = "/v1/references/search";
     private static final String STR_INDEX_PATH = "/v1/references/str";
+    /** 순위 경로 — 날짜는 URI 변수로만 넣는다(문자열 이어붙이기 없음). 기록 경로는 날짜를 뺀 {@link #DL_RANKING_LOG_ENDPOINT}. */
+    private static final String DL_RANKING_PATH = "/v1/dl-rankings/{scanDate}";
+    private static final String DL_RANKING_LOG_ENDPOINT = "/v1/dl-rankings";
 
     public WebClientAiClient(WebClient aiWebClient, AmlProperties props, ObjectMapper om, AiCallLogWriter writer) {
         this.http = aiWebClient;
@@ -117,10 +127,15 @@ public class WebClientAiClient implements AiClient {
         this.maxBatch = props.ai().maxBatch();
         this.budget = Duration.ofSeconds(props.ai().timeoutSeconds());
         this.askBudget = Duration.ofSeconds(props.ai().askTimeoutSeconds());
-        this.searchCall = new SelfBudgetedCall(SEARCH_PATH,
-                Duration.ofSeconds(props.ai().referenceSearchTimeoutSeconds()), SEARCH_ERROR_MESSAGES, "참고 사례 검색");
-        this.indexCall = new SelfBudgetedCall(STR_INDEX_PATH,
-                Duration.ofSeconds(props.ai().strIndexTimeoutSeconds()), STR_INDEX_ERROR_MESSAGES, "승인 STR 색인");
+        this.searchCall = new SelfBudgetedCall(HttpMethod.POST, SEARCH_PATH, SEARCH_PATH,
+                Duration.ofSeconds(props.ai().referenceSearchTimeoutSeconds()), SEARCH_ERROR_MESSAGES, "참고 사례 검색",
+                "DRAFT", "retrieval_version", Map.of(), false);
+        this.indexCall = new SelfBudgetedCall(HttpMethod.POST, STR_INDEX_PATH, STR_INDEX_PATH,
+                Duration.ofSeconds(props.ai().strIndexTimeoutSeconds()), STR_INDEX_ERROR_MESSAGES, "승인 STR 색인",
+                "DRAFT", "retrieval_version", Map.of(), false);
+        this.rankingCall = new SelfBudgetedCall(HttpMethod.GET, DL_RANKING_PATH, DL_RANKING_LOG_ENDPOINT,
+                Duration.ofSeconds(props.ai().dlRankingTimeoutSeconds()), DL_RANKING_ERROR_MESSAGES, "ML+DL 조사 순위",
+                null, null, DL_RANKING_ERROR_STATUSES, true);
     }
 
     @Override
@@ -507,10 +522,15 @@ public class WebClientAiClient implements AiClient {
     }
 
     /**
-     * 자기 호출·재시도 루프를 쓰는 호출 하나의 설정 — 경로 · 전체 예산 · 그 입구가 낼 수 있는 AI 오류 코드와 코드별 고정 문구 ·
-     * 오류 문구에 쓰는 이름(예: "참고 사례 검색"). 참고 사례 검색(SCRUM-309)·승인 STR 색인(SCRUM-357) 둘.
+     * 자기 호출·재시도 루프를 쓰는 호출 하나의 설정 — HTTP 메서드 · 경로(URI 변수 자리 포함) · 기록·로그에 쓰는 고정 경로 ·
+     * 전체 예산 · 그 입구가 낼 수 있는 AI 오류 코드와 코드별 고정 문구 · 오류 문구에 쓰는 이름(예: "참고 사례 검색") ·
+     * 기록 대상 종류(null 가능) · 기록 버전으로 옮길 응답 칸 하나(null 이면 버전 늘 null) · 코드별로 허용하는 HTTP 상태(빈 표면
+     * 상태는 안 봄) · 오류 본문도 2xx 와 같이 엄격하게 읽을지(중복 키·뒤에 붙은 값 → 코드 없음 → AI_BAD_RESPONSE). 참고 사례 검색(SCRUM-309)·승인 STR 색인(SCRUM-357)·ML+DL 조사 순위(SCRUM-376, GET·본문 없음) 셋.
      */
-    private record SelfBudgetedCall(String path, Duration budget, Map<String, String> errorMessages, String label) {}
+    private record SelfBudgetedCall(HttpMethod method, String path, String logEndpoint, Duration budget,
+                                    Map<String, String> errorMessages, String label, String targetType,
+                                    String versionField, Map<String, Integer> errorStatuses,
+                                    boolean strictErrorBody) {}
 
     /**
      * 자기 예산 호출 — 다른 다섯 호출과 달리 자기 호출·재시도 루프를 쓴다(309 추가 검토 1·2). 재시도 횟수·남은 시간·대상 판정은
@@ -521,16 +541,27 @@ public class WebClientAiClient implements AiClient {
      *  - AI 오류 본문은 그 입구가 낼 수 있는 코드만 그대로, 나머지는 AI_BAD_RESPONSE. 메시지는 코드별 고정 문구(AI 문장 안 씀)
      * 기록은 다섯 호출과 같이 호출 스레드에서 시도마다 저장한다 — 예산은 AI 호출(재시도 포함) 기준, 감사 DB 저장 시간은 빠짐:
      * 재시도 전 저장에 쓴 시간만큼 다음 시도 마감을 뒤로 민다(309 추가 검토 3). 그래서 전체 걸린 시간은 예산 + 저장 시간까지 늘 수 있다.
-     * 기록 행은 `DRAFT` 대상, `generation_id` 는 늘 null(계약에 없는 칸), 버전은 `retrieval_version` 만 넘긴다.
+     * 기록 행의 대상 종류·기록 경로·버전 칸은 호출 설정 값(검색·색인은 `DRAFT`·`retrieval_version`, 순위는 null·`ml_model`),
+     * `generation_id` 는 늘 null(계약에 없는 칸).
      * 2xx 응답은 {@code check} 로 확인한 뒤 읽는다 — 틀리면 재시도 없는 실패 행.
      */
     private <T> T callSelfBudgeted(SelfBudgetedCall call, Object request, String draftId, Consumer<JsonNode> check,
                                    String requiredField, Class<T> type) {
-        byte[] body;
-        try {
-            body = om.writeValueAsBytes(request);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new AiClientException("AI_BAD_RESPONSE", "AI " + call.label() + " 요청 만들기 실패", Map.of(), 502);
+        return callSelfBudgeted(call, request, new Object[0], draftId, check, requiredField, type);
+    }
+
+    /**
+     * 위와 같고 경로 URI 변수(`uriVars`)와 본문 없음(`request` null — GET)을 받는 모양(SCRUM-376). `targetId` 는 기록에만.
+     */
+    private <T> T callSelfBudgeted(SelfBudgetedCall call, Object request, Object[] uriVars, String targetId,
+                                   Consumer<JsonNode> check, String requiredField, Class<T> type) {
+        byte[] body = null;
+        if (request != null) {
+            try {
+                body = om.writeValueAsBytes(request);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new AiClientException("AI_BAD_RESPONSE", "AI " + call.label() + " 요청 만들기 실패", Map.of(), 502);
+            }
         }
         String requestId = MDC.get("request_id");
         if (requestId == null || requestId.isBlank()) requestId = UUID.randomUUID().toString();
@@ -542,15 +573,15 @@ public class WebClientAiClient implements AiClient {
             long start = System.nanoTime();
             Response response;
             try {
-                response = selfBudgetedExchange(call, body, requestId, deadline, remaining);
+                response = selfBudgetedExchange(call, body, uriVars, requestId, deadline, remaining);
             } catch (RuntimeException e) {
                 long ended = System.nanoTime();
                 long leftNanos = deadline - ended;                // 시도가 끝난 순간 남은 AI 예산을 확정
                 last = classify(e);
                 Integer status = e instanceof ClassifiedResponse cr ? cr.aiStatus : null;
-                recordSelfBudgetedAttempt(call, requestId, tries, status, last.ex().code(), start, null, draftId);
+                recordSelfBudgetedAttempt(call, requestId, tries, status, last.ex().code(), start, null, targetId);
                 log.warn("ai call failed path={} request_id={} code={} http={} retryable={} cause={} ms={} try={}",
-                        call.path(), requestId, last.ex().code(), last.ex().httpStatus(), last.retryable(), last.cause(),
+                        call.logEndpoint(), requestId, last.ex().code(), last.ex().httpStatus(), last.retryable(), last.cause(),
                         (ended - start) / 1_000_000, tries);
                 if (!last.retryable()) break;
                 deadline = System.nanoTime() + leftNanos;         // 감사 저장 시간은 빼고 다음 시도 마감을 다시 잡음
@@ -564,13 +595,13 @@ public class WebClientAiClient implements AiClient {
                 Classified rejected = classify(e);
                 AiClientException bad = rejected.ex();
                 recordSelfBudgetedAttempt(call, requestId, tries, response.status(), bad.code(), start, response.body(),
-                        draftId);
+                        targetId);
                 log.warn("ai response rejected path={} request_id={} code={} http={} cause={} ms={} try={}",
-                        call.path(), requestId, bad.code(), response.status(), rejected.cause(), msSince(start), tries);
+                        call.logEndpoint(), requestId, bad.code(), response.status(), rejected.cause(), msSince(start), tries);
                 throw bad;
             }
-            recordSelfBudgetedAttempt(call, requestId, tries, response.status(), null, start, response.body(), draftId);
-            log.info("ai call ok path={} request_id={} ms={} try={}", call.path(), requestId, msSince(start), tries);
+            recordSelfBudgetedAttempt(call, requestId, tries, response.status(), null, start, response.body(), targetId);
+            log.info("ai call ok path={} request_id={} ms={} try={}", call.logEndpoint(), requestId, msSince(start), tries);
             return value;
         }
         throw last != null ? last.ex() : new AiClientException("AI_TIMEOUT", "AI 서버 응답 시간 초과", Map.of(), 502);
@@ -581,15 +612,16 @@ public class WebClientAiClient implements AiClient {
      * 연결을 잡은 뒤 요청을 쓰기 직전에 부르는 자리라, 풀 대기·연결 수립에 쓴 시간이 빠진 값이 나간다({@link #searchBudgetMs}).
      * 응답 처리는 {@link #exchange} 와 같고, 오류 본문만 {@link #selfBudgetedErrorBody} 로 걸러 넘긴다.
      */
-    private Response selfBudgetedExchange(SelfBudgetedCall call, byte[] body, String requestId, long deadline,
-                                          Duration remaining) {
-        return http.post().uri(call.path()).contentType(MediaType.APPLICATION_JSON)
+    private Response selfBudgetedExchange(SelfBudgetedCall call, byte[] body, Object[] uriVars, String requestId,
+                                          long deadline, Duration remaining) {
+        WebClient.RequestBodySpec spec = http.method(call.method()).uri(call.path(), uriVars)
                 .header(HEADER_INTERNAL_KEY, internalKey)
                 .header(HEADER_REQUEST_ID, requestId)
                 .httpRequest(req -> req.getHeaders().set(HEADER_BUDGET_MS,
-                        String.valueOf(searchBudgetMs(deadline, System.nanoTime()))))
-                .bodyValue(body)
-                .exchangeToMono(resp -> {
+                        String.valueOf(searchBudgetMs(deadline, System.nanoTime()))));
+        WebClient.RequestHeadersSpec<?> ready = body == null ? spec   // GET — 본문·Content-Type 없음
+                : spec.contentType(MediaType.APPLICATION_JSON).bodyValue(body);
+        return ready.exchangeToMono(resp -> {
                     int status = resp.statusCode().value();
                     if (resp.statusCode().is2xxSuccessful()) {
                         return resp.bodyToMono(byte[].class)
@@ -598,9 +630,9 @@ public class WebClientAiClient implements AiClient {
                                 .onErrorMap(e -> withStatus(status, e));
                     }
                     return resp.bodyToMono(byte[].class)
-                            .map(this::readSelfBudgetedErrorJson)
+                            .map(bytes -> readSelfBudgetedErrorJson(call, bytes))
                             .defaultIfEmpty(om.createObjectNode())
-                            .map(err -> selfBudgetedErrorBody(call, err))
+                            .map(err -> selfBudgetedErrorBody(call, status, err))
                             .<Response>flatMap(err -> Mono.error(toClassified(status, err)))
                             .onErrorMap(e -> withStatus(status, e));
                 }).timeout(remaining).block();
@@ -623,9 +655,12 @@ public class WebClientAiClient implements AiClient {
     }
 
     /** 오류 본문 — JSON 이 아니면 빈 객체(코드 없음 → AI_BAD_RESPONSE, {@link #exchange} 의 디코딩 실패와 같은 결과). */
-    private JsonNode readSelfBudgetedErrorJson(byte[] bytes) {
+    private JsonNode readSelfBudgetedErrorJson(SelfBudgetedCall call, byte[] bytes) {
         try {
-            JsonNode node = om.readTree(bytes);
+            JsonNode node = call.strictErrorBody()   // 순위만 — 중복 키·뒤에 붙은 값이면 빈 객체(검토 2). 검색·색인은 그대로
+                    ? om.reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS,
+                            DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY).readTree(bytes)
+                    : om.readTree(bytes);
             return node != null && node.isObject() ? node : om.createObjectNode();
         } catch (java.io.IOException e) {
             return om.createObjectNode();
@@ -647,11 +682,15 @@ public class WebClientAiClient implements AiClient {
             "INTERNAL", "AI 서버 오류");
     private static final String SELF_BUDGETED_UNKNOWN_ERROR_MESSAGE = "AI 응답 처리 실패";
 
-    /** 오류 본문 → `code`·`message` 두 칸만 다시 만든다. 아는 코드면 그대로 + 고정 문구, 모르면 AI_BAD_RESPONSE. */
-    private JsonNode selfBudgetedErrorBody(SelfBudgetedCall call, JsonNode err) {
+    /**
+     * 오류 본문 → `code`·`message` 두 칸만 다시 만든다. 아는 코드면 그대로 + 고정 문구, 모르면 AI_BAD_RESPONSE. 호출 설정에
+     * 코드별 HTTP 상태가 있으면(순위) 그 상태로 왔을 때만 아는 코드 — 예: 500 + `UNAUTHENTICATED` 는 AI_BAD_RESPONSE(검토 1).
+     */
+    private JsonNode selfBudgetedErrorBody(SelfBudgetedCall call, int status, JsonNode err) {
         JsonNode code = err.get("code");
         Map<String, String> messages = call.errorMessages();
         String known = code != null && code.isTextual() && messages.containsKey(code.textValue())
+                && (call.errorStatuses().isEmpty() || Integer.valueOf(status).equals(call.errorStatuses().get(code.textValue())))
                 ? code.textValue() : null;
         return om.createObjectNode()
                 .put("code", known != null ? known : "AI_BAD_RESPONSE")
@@ -670,17 +709,19 @@ public class WebClientAiClient implements AiClient {
 
     /**
      * 자기 예산 호출 시도 한 행 — 다섯 호출과 같이 호출 스레드에서 {@link #recordAttempt} 로 바로 저장. 기록 본문은
-     * `retrieval_version` 하나만 넘겨 `generation_id` 는 늘 null(응답에 계약 밖 칸이 와도), 걸린 시간은 HTTP 시도 시간.
+     * 버전 칸({@code call.versionField()}, null 이면 아무것도) 하나만 넘겨 `generation_id` 는 늘 null(응답에 계약 밖 칸이 와도), 걸린 시간은 HTTP 시도
+     * 시간. 경로는 고정 기록 경로(순위는 날짜를 뺀 값), 대상 종류는 호출 설정 값(순위는 null).
      */
     private void recordSelfBudgetedAttempt(SelfBudgetedCall call, String requestId, int attempt, Integer status,
-                                           String errorCode, long start, JsonNode body, String draftId) {
+                                           String errorCode, long start, JsonNode body, String targetId) {
         JsonNode logBody = null;
-        if (body != null) {
+        if (body != null && call.versionField() != null) {   // 순위는 버전 칸 없음 → 버전 늘 null(검토 1)
             ObjectNode only = om.createObjectNode();
-            if (body.has("retrieval_version")) only.set("retrieval_version", body.get("retrieval_version"));
+            if (body.has(call.versionField())) only.set(call.versionField(), body.get(call.versionField()));
             logBody = only;
         }
-        recordAttempt(call.path(), requestId, attempt, status, errorCode, start, logBody, "DRAFT", draftId);
+        recordAttempt(call.logEndpoint(), requestId, attempt, status, errorCode, start, logBody, call.targetType(),
+                targetId);
     }
     /** AI `ReferenceResult.score`(cosine) 범위. */
     private static final double REFERENCE_SCORE_MIN = -1.0;
@@ -877,6 +918,216 @@ public class WebClientAiClient implements AiClient {
 
     private static AiClientException badStrIndex(String field) {
         return new AiClientException("AI_BAD_RESPONSE", "AI 승인 STR 색인 응답 확인 실패: " + field, Map.of(), 502);
+    }
+
+    /**
+     * ML+DL 조사 순위 — 이 호출만 rankingCall 예산(10초). GET·본문 없음, 날짜는 ISO 로 URI 변수에만(이어붙이기 없음).
+     * 같은 날짜 문자열을 `ai_call_logs.target_id` 에 쓴다. 호출·재시도 루프는 {@link #callSelfBudgeted} — 응답 확인만
+     * {@link #requireDlRankingResponse}. SCRUM-376.
+     */
+    @Override
+    public DlRankingResponse getDlRankings(LocalDate scanDate) {
+        Objects.requireNonNull(scanDate, "scanDate");
+        String date = scanDate.format(DateTimeFormatter.ISO_LOCAL_DATE);
+        return callSelfBudgeted(rankingCall, null, new Object[]{date}, date, r -> requireDlRankingResponse(scanDate, r),
+                "scan_date", DlRankingResponse.class);
+    }
+
+    /**
+     * 순위가 낼 수 있는 AI 오류 코드와 고정 문구 — 규약 6.3 의 셋, (HTTP 상태, 코드) 쌍으로만 인정. `DL_RANKING_UNAVAILABLE` 은 재시도 대상 코드가 아니라 0회,
+     * 코드 그대로 502(다른 AI 코드와 같은 규칙). 401·400 은 공통 바꿈(`AI_` 붙임). 여기 없는 코드는 AI_BAD_RESPONSE —
+     * 다른 호출에서 재시도 대상인 `MODEL_UNAVAILABLE`·`DB_UNAVAILABLE` 도 이 입구에선 낼 일이 없어 같이 거른다(재시도 0).
+     */
+    private static final Map<String, String> DL_RANKING_ERROR_MESSAGES = Map.of(
+            "DL_RANKING_UNAVAILABLE", "ML+DL 조사 순위를 지금 쓸 수 없음",
+            "INVALID_REQUEST", "AI ML+DL 조사 순위 요청이 거부됨",
+            "UNAUTHENTICATED", "AI 서버 인증 실패");
+    /** 위 코드가 와야 하는 HTTP 상태 — 쌍이 맞을 때만 아는 오류, 그 밖은 AI_BAD_RESPONSE·재시도 0(검토 1). */
+    private static final Map<String, Integer> DL_RANKING_ERROR_STATUSES = Map.of(
+            "DL_RANKING_UNAVAILABLE", 503, "UNAUTHENTICATED", 401, "INVALID_REQUEST", 400);
+
+    private static final List<String> DL_RANKING_FIELDS = List.of("scan_date", "snapshot_sha256", "ml_model", "dl_model",
+            "evidence_transactions", "scored_transactions", "linked_alerts", "ml_only_alerts", "unscored_alerts", "alerts");
+    /** 경보 번호 뒤 숫자 — `DisplayNumber.alertNo` 는 6자리 채움, 시퀀스가 커지면 늘어남(bigint 최대 19자리 전까지). */
+    private static final Pattern DL_RANKING_ALERT_SEQ = Pattern.compile("[0-9]{6,18}");
+
+    /**
+     * ML+DL 조사 순위 응답 확인 (규약 6절 = AI `dl_ranking.py` 규칙 + 보낸 날짜 대조, SCRUM-376). DB 는 안 본다.
+     * 틀리면 AI_BAD_RESPONSE 502, 메시지엔 칸 이름만(경보 번호·점수 없음).
+     *  - 맨 위 열 칸 필수·null 아님. `scan_date` = 보낸 날짜, sha 소문자 16진 64자, 모델 이름 빈 값 아님, 건수 0 이상 정수,
+     *    `scored_transactions` ≤ `evidence_transactions`, `alerts` 1건 이상
+     *  - 경보: 번호 `ALT-{보낸 날짜}-` + 숫자 6~18자리·중복 없음, 룰 빈 값 아님, 1 ≤ 근거 ≤ `evidence_transactions`,
+     *    0 ≤ 연결 ≤ min(근거, `scored_transactions`), 점수 null 또는 유한 0~1
+     *  - ML: 점수 null ⇔ `ML_UNSCORED` ⇔ 두 순위 null. 점수 있으면 실패 코드 null, 없으면 빈 값 아닌 문자열
+     *  - DL: ML 있는 경보는 이유 null ⇔ `dl_score` 있음 ⇔ 근거 다 연결. `ML_UNSCORED` 는 `dl_score` 있음 ⇔ 근거 다 연결
+     *    (AI 는 ML 없는 경보에도 DL 점수를 채운다 — ★A ④-1)
+     *  - 순위: ML 있는 k건의 `ml_rank`·`fused_rank` 가 각각 1…k. `ml_rank` 는 ML 점수 내림차순·번호 오름차순으로 다시 계산해
+     *    대조. `INCOMPLETE_DL_EVIDENCE` 는 두 순위 같음(자리 유지). 결합 규칙(`fused_rank` 값)은 다시 계산하지 않음 — 정본은 AI
+     *  - 배열: 앞 k건이 `fused_rank` 1…k 순서, 뒤는 `ML_UNSCORED` 를 번호 오름차순(AI 와 같은 문자열 순서)
+     *  - 건수 셋 = 이유별 수(모든 경보가 셋 중 하나라 합 = 길이는 따라옴)
+     * AI 보다 엄격: 번호 뒤 숫자 모양, 근거 ≥ 1. 느슨: 실패 코드 값 종류, 모르는 칸(받아 둠).
+     */
+    static void requireDlRankingResponse(LocalDate sent, JsonNode r) {
+        if (r == null || !r.isObject()) throw badRanking("body");
+        for (String field : DL_RANKING_FIELDS) {
+            if (!r.hasNonNull(field)) throw badRanking(field);
+        }
+        JsonNode date = r.get("scan_date");
+        if (!date.isTextual() || !date.textValue().equals(sent.format(DateTimeFormatter.ISO_LOCAL_DATE))) {
+            throw badRanking("scan_date");
+        }
+        JsonNode sha = r.get("snapshot_sha256");
+        if (!sha.isTextual() || !SHA256_HEX.matcher(sha.textValue()).matches()) throw badRanking("snapshot_sha256");
+        requireRankingText(r.get("ml_model"), "ml_model");
+        requireRankingText(r.get("dl_model"), "dl_model");
+        int evidenceTransactions = rankingCount(r.get("evidence_transactions"), "evidence_transactions");
+        int scoredTransactions = rankingCount(r.get("scored_transactions"), "scored_transactions");
+        int linkedAlerts = rankingCount(r.get("linked_alerts"), "linked_alerts");
+        int mlOnlyAlerts = rankingCount(r.get("ml_only_alerts"), "ml_only_alerts");
+        int unscoredAlerts = rankingCount(r.get("unscored_alerts"), "unscored_alerts");
+        if (scoredTransactions > evidenceTransactions) throw badRanking("scored_transactions");
+        JsonNode alerts = r.get("alerts");
+        if (!alerts.isArray() || alerts.isEmpty()) throw badRanking("alerts");
+
+        String prefix = "ALT-" + sent.format(DateTimeFormatter.BASIC_ISO_DATE) + "-";
+        Set<String> ids = new HashSet<>();
+        List<Integer> mlRanks = new ArrayList<>();
+        List<Integer> fusedRanks = new ArrayList<>();
+        List<RankedMl> scored = new ArrayList<>();
+        int linked = 0;
+        int mlOnly = 0;
+        int unscored = 0;
+        for (JsonNode a : alerts) {
+            if (!a.isObject()) throw badRanking("alerts");
+            JsonNode id = a.get("alert_id");
+            if (id == null || !id.isTextual() || !id.textValue().startsWith(prefix)
+                    || !DL_RANKING_ALERT_SEQ.matcher(id.textValue().substring(prefix.length())).matches()
+                    || !ids.add(id.textValue())) {
+                throw badRanking("alert_id");
+            }
+            JsonNode rule = a.get("rule_id");
+            if (rule == null || !rule.isTextual() || rule.textValue().isBlank()) throw badRanking("rule_id");
+            int evidence = rankingCount(a.get("evidence_count"), "evidence_count");
+            if (evidence < 1 || evidence > evidenceTransactions) throw badRanking("evidence_count");
+            int dlLinked = rankingCount(a.get("dl_linked"), "dl_linked");
+            if (dlLinked > evidence || dlLinked > scoredTransactions) throw badRanking("dl_linked");
+            Double ml = rankingScore(a, "ml_score");
+            Double dl = rankingScore(a, "dl_score");
+            DlFallbackReason reason = rankingReason(a);
+            if ((ml == null) != (reason == DlFallbackReason.ML_UNSCORED)) throw badRanking("fallback_reason");
+            JsonNode failure = a.get("ml_failure_code");
+            if (failure == null || (ml != null ? !failure.isNull()
+                    : !failure.isTextual() || failure.textValue().isBlank())) {
+                throw badRanking("ml_failure_code");
+            }
+            if (!a.has("ml_rank")) throw badRanking("ml_rank");
+            if (!a.has("fused_rank")) throw badRanking("fused_rank");
+            boolean full = dlLinked == evidence;
+            if (reason == DlFallbackReason.ML_UNSCORED) {
+                if (!a.get("ml_rank").isNull()) throw badRanking("ml_rank");
+                if (!a.get("fused_rank").isNull()) throw badRanking("fused_rank");
+                if ((dl != null) != full) throw badRanking("dl_linked");
+                unscored++;
+                continue;
+            }
+            int mlRank = rankingRank(a.get("ml_rank"), "ml_rank");
+            int fusedRank = rankingRank(a.get("fused_rank"), "fused_rank");
+            if (reason == null) {
+                if (dl == null) throw badRanking("dl_score");
+                if (!full) throw badRanking("dl_linked");
+                linked++;
+            } else {                                              // INCOMPLETE_DL_EVIDENCE
+                if (dl != null) throw badRanking("dl_score");
+                if (full) throw badRanking("dl_linked");
+                if (mlRank != fusedRank) throw badRanking("fused_rank");   // ML 순위 자리 유지
+                mlOnly++;
+            }
+            mlRanks.add(mlRank);
+            fusedRanks.add(fusedRank);
+            scored.add(new RankedMl(id.textValue(), ml, mlRank));
+        }
+        requireOneToK(mlRanks, "ml_rank");
+        requireOneToK(fusedRanks, "fused_rank");
+        // ml_rank 는 응답 ml_score 로 다시 계산해 대조 — ML 점수 내림차순, 같으면 경보 번호 오름차순(AI baseline, 검토 1).
+        // < · > 로 비교해 -0.0 과 0.0 은 같은 점수(파이썬과 같음). fused_rank 결합 규칙은 다시 계산하지 않는다(정본은 AI).
+        scored.sort((x, y) -> x.ml() > y.ml() ? -1 : x.ml() < y.ml() ? 1 : x.id().compareTo(y.id()));
+        for (int i = 0; i < scored.size(); i++) {
+            if (scored.get(i).mlRank() != i + 1) throw badRanking("ml_rank");
+        }
+        int k = mlRanks.size();
+        String previous = null;
+        for (int i = 0; i < alerts.size(); i++) {
+            JsonNode a = alerts.get(i);
+            if (i < k) {
+                JsonNode fused = a.get("fused_rank");
+                if (fused.isNull() || fused.intValue() != i + 1) throw badRanking("alerts");
+            } else {
+                String id = a.get("alert_id").textValue();
+                if (!a.get("ml_rank").isNull() || (previous != null && previous.compareTo(id) >= 0)) {
+                    throw badRanking("alerts");
+                }
+                previous = id;
+            }
+        }
+        if (linkedAlerts != linked) throw badRanking("linked_alerts");
+        if (mlOnlyAlerts != mlOnly) throw badRanking("ml_only_alerts");
+        if (unscoredAlerts != unscored) throw badRanking("unscored_alerts");
+    }
+
+    /** ml_rank 다시 계산용 — 경보 번호 · ML 점수 · 응답 ml_rank. */
+    private record RankedMl(String id, double ml, int mlRank) {}
+
+    private static void requireRankingText(JsonNode v, String field) {
+        if (!v.isTextual() || v.textValue().isBlank()) throw badRanking(field);
+    }
+
+    /** 0 이상 정수(int 범위). 없거나 null·실수·문자열이면 실패. */
+    private static int rankingCount(JsonNode v, String field) {
+        if (v == null || !v.isIntegralNumber() || !v.canConvertToInt() || v.intValue() < 0) throw badRanking(field);
+        return v.intValue();
+    }
+
+    /** 1 이상 정수 순위. */
+    private static int rankingRank(JsonNode v, String field) {
+        if (!v.isIntegralNumber() || !v.canConvertToInt() || v.intValue() < 1) throw badRanking(field);
+        return v.intValue();
+    }
+
+    /** 칸은 있어야 하고 값은 null 이거나 유한한 0~1 숫자. */
+    private static Double rankingScore(JsonNode a, String field) {
+        JsonNode v = a.get(field);
+        if (v == null) throw badRanking(field);
+        if (v.isNull()) return null;
+        if (!v.isNumber() || !Double.isFinite(v.doubleValue()) || v.doubleValue() < 0 || v.doubleValue() > 1) {
+            throw badRanking(field);
+        }
+        return v.doubleValue();
+    }
+
+    /** 칸은 있어야 하고 값은 null 또는 아는 이유. */
+    private static DlFallbackReason rankingReason(JsonNode a) {
+        JsonNode v = a.get("fallback_reason");
+        if (v == null) throw badRanking("fallback_reason");
+        if (v.isNull()) return null;
+        if (v.isTextual()) {
+            for (DlFallbackReason reason : DlFallbackReason.values()) {
+                if (reason.name().equals(v.textValue())) return reason;
+            }
+        }
+        throw badRanking("fallback_reason");
+    }
+
+    /** 값들이 1…k 를 빠짐·겹침 없이 한 번씩. */
+    private static void requireOneToK(List<Integer> ranks, String field) {
+        boolean[] seen = new boolean[ranks.size() + 1];
+        for (int rank : ranks) {
+            if (rank > ranks.size() || seen[rank]) throw badRanking(field);
+            seen[rank] = true;
+        }
+    }
+
+    private static AiClientException badRanking(String field) {
+        return new AiClientException("AI_BAD_RESPONSE", "AI ML+DL 조사 순위 응답 확인 실패: " + field, Map.of(), 502);
     }
 
     @Override
