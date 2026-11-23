@@ -39,7 +39,9 @@ dependencies {
     implementation("io.github.openhtmltopdf:openhtmltopdf-pdfbox:1.1.31")
     implementation("net.logstash.logback:logstash-logback-encoder:8.0")
     // STR PDF 저장소 — MinIO 및 AWS S3의 S3 호환 API (MinIO → AWS S3 이전 시 구현 재사용)
-    implementation("software.amazon.awssdk:s3:2.29.26")
+    implementation("software.amazon.awssdk:s3:2.29.26") {
+        exclude(group = "software.amazon.awssdk", module = "netty-nio-client")
+    }
     implementation("org.postgresql:postgresql")   // 적재 COPY에 CopyManager 사용
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")

@@ -33,6 +33,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import com.team.aml.str.domain.ReportPdfStorageUnavailableException;
 
 import java.sql.SQLException;
 import java.util.Collections;
@@ -212,6 +213,13 @@ public class GlobalExceptionHandler {
         }
         return counted(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ErrorResponse.of("INTERNAL_ERROR", "알 수 없는 오류")));
+    }
+
+    @ExceptionHandler(ReportPdfStorageUnavailableException.class)
+    public ResponseEntity<ErrorResponse> pdfStorageUnavailable(ReportPdfStorageUnavailableException e) {
+        log.warn("str pdf storage unavailable: {}", e.getMessage());
+        return counted(ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ErrorResponse.of("STORAGE_UNAVAILABLE", "보관소 연결이 일시적으로 불안정합니다. 잠시 뒤 다시 시도하세요")));
     }
 
     private static String databaseErrorSummary(DataAccessException e) {

@@ -1,6 +1,7 @@
 package com.team.aml.str.infrastructure;
 
 import com.team.aml.str.domain.ReportPdfStorage;
+import com.team.aml.str.domain.ReportPdfStorageUnavailableException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -16,6 +17,9 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+
+import software.amazon.awssdk.core.exception.SdkClientException;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 
 /** MinIO의 S3 호환 API에 STR 확정본 PDF를 보관한다. */
 @Component
@@ -71,6 +75,13 @@ public class MinioReportPdfStorage implements ReportPdfStorage {
                 }
             }
             throw e;
+        } catch (S3Exception e) {
+            if (e.statusCode() >= 500) {
+                throw new ReportPdfStorageUnavailableException("확정본 PDF 저장소 일시 오류: " + key, e);
+            }
+            throw e;
+        } catch (SdkClientException e) {
+            throw new ReportPdfStorageUnavailableException("확정본 PDF 저장소 연결 실패: " + key, e);
         }
     }
 }
