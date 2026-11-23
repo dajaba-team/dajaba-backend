@@ -48,6 +48,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Testcontainers
 @SpringBootTest(properties = {
         "aml.str.pdf.generate-after-report=false",
+        "aml.str.pdf.storage=filesystem",
         "aml.str.pdf.storage-dir=build/str-reports-test/regenerate"})
 @ActiveProfiles("test")
 class RegenerateStrReportPdfDbTest {
