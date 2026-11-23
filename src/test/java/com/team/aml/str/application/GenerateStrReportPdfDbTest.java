@@ -56,6 +56,7 @@ import static org.mockito.Mockito.doThrow;
 @Testcontainers
 @SpringBootTest(properties = {
         "aml.str.pdf.generate-after-report=false",
+        "aml.str.pdf.storage=filesystem",
         "aml.str.pdf.storage-dir=build/str-reports-test/generate"})
 @ActiveProfiles("test")
 class GenerateStrReportPdfDbTest {
@@ -83,6 +84,7 @@ class GenerateStrReportPdfDbTest {
     }
 
     @Autowired GenerateStrReportPdf generate;
+    @Autowired RegenerateStrReportPdf regenerate;
     @Autowired JobPublisher publisher;
     @Autowired ReportStrDraft reportDraft;
     @Autowired ApproveStrDraft approveDraft;
@@ -159,6 +161,28 @@ class GenerateStrReportPdfDbTest {
         assertThat(generate.execute(draftId)).contains(ReportPdfStatus.FAILED);
 
         assertThat(pdfRow(draftId)).containsEntry("pdf_status", "FAILED").containsEntry("pdf_failure_code", "STORAGE_FAILED");
+    }
+
+    @Test
+    void 실패_MinIO가_응답하지_않으면_FAILED가_남고_복구_뒤_PDF_다시_만들기로_READY가_된다() {
+        long draftId = reportedDraft();
+        // MinIO 연결 거부/타임아웃을 S3 SDK 런타임 예외로 모사한다. 첫 보관만 실패시키고 이후에는 실제 filesystem spy 동작을 사용한다.
+        doThrow(software.amazon.awssdk.core.exception.SdkClientException.create("MinIO unavailable"))
+                .doCallRealMethod().when(storage).put(anyString(), any());
+
+        assertThat(generate.execute(draftId)).contains(ReportPdfStatus.FAILED);
+        assertThat(pdfRow(draftId)).containsEntry("pdf_status", "FAILED")
+                .containsEntry("pdf_failure_code", "STORAGE_FAILED");
+        assertThat(caseStatusOf(draftId)).isEqualTo("REPORTED");
+
+        login(approver, "APPROVER");
+        assertThat(regenerate.execute(DisplayNumber.draftNo(draftId)).pdfStatus()).isEqualTo(ReportPdfStatus.PENDING);
+        SecurityContextHolder.clearContext();
+
+        assertThat(generate.execute(draftId)).contains(ReportPdfStatus.READY);
+        assertThat(pdfRow(draftId)).containsEntry("pdf_status", "READY")
+                .containsEntry("pdf_attempts", 2).containsEntry("pdf_failure_code", null);
+        assertThat((String) pdfRow(draftId).get("pdf_storage_key")).endsWith("-2.pdf");
     }
 
     // 4

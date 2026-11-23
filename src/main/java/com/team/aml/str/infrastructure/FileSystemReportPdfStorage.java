@@ -2,6 +2,7 @@ package com.team.aml.str.infrastructure;
 
 import com.team.aml.str.domain.ReportPdfStorage;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -21,6 +22,7 @@ import java.nio.file.StandardCopyOption;
  * </ul>
  */
 @Component
+@ConditionalOnProperty(prefix = "aml.str.pdf", name = "storage", havingValue = "filesystem", matchIfMissing = true)
 public class FileSystemReportPdfStorage implements ReportPdfStorage {
 
     private final Path root;

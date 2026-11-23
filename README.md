@@ -48,6 +48,7 @@ swagger에서 **`POST /api/v1/auth/login`** 본문 `{"login_id": "inv01", "passw
 | `AML_RABBITMQ_ENABLED` | RabbitMQ 작업 큐 켜기(`true`)·끄기(`false`). 끄면 케이스 생성 등은 앱 안 실행기로 — 지금과 같아요 (SCRUM-276) | — | — | `false` |
 | `RABBITMQ_HOST` · `RABBITMQ_PORT` | RabbitMQ 주소 | — | — | compose 앱 `rabbitmq`(고정) · IDE `localhost`·`5672` |
 | `AML_SESSION_REDIS_ENABLED` | 로그인 세션을 Redis(db 0)에(`true`)·앱 메모리에(`false`). **`true`/`false`만** — 다른 값(오타 `ture` 등)이면 두 설정이 다 안 걸려 `SessionRegistry` 빈이 없다는 기동 실패가 나요. 끄면 지금과 같아요 — 앱을 다시 띄우면 모두 로그아웃 (SCRUM-273) | — | — | `false` |
+| `AML_STR_PDF_STORAGE` | STR 확정본 PDF 저장소. `filesystem` 또는 `minio`. `minio`로 쓰려면 `.env`에 `AML_STR_PDF_STORAGE=minio`를 넣고 `ops` 프로필로 MinIO를 실행해야 해요 | — | — | `filesystem` |
 | `REDIS_HOST` · `REDIS_PORT` | Redis 주소(세션을 켰을 때만 씀) | — | — | compose 앱 `redis`(고정) · IDE `localhost`·`6379` |
 | 참고: `SPRING_PROFILES_ACTIVE` | 프로파일 | — | — | compose 앱은 `local` 고정 · IDE는 실행 설정에 `local` |
 
@@ -132,6 +133,13 @@ docker compose up -d --build app                 # 앱이 붙으면서 aml.jobs 
 ```
 
 관리 UI(`compose.override.yml`로 15672를 열었을 때) `http://localhost:15672` → vhost `aml` → Queues에 `case.open-cases`·`case.open-cases.dlq`·`str.pdf.generate`·`str.pdf.generate.dlq`가 보이면 붙은 거예요. 브로커가 죽어 있거나 꺼져 있으면 앱은 그냥 지금처럼(앱 안 실행기) 돌아요.
+
+**STR PDF를 MinIO에 보관하기** — `.env`에 `AML_STR_PDF_STORAGE=minio` 한 줄을 추가하고 ops 프로필로 MinIO를 띄워요. 앱은 MinIO에 `depends_on` 하지 않으므로, MinIO가 꺼져 있으면 앱은 계속 뜨고 PDF 생성만 `FAILED`가 됩니다. MinIO를 다시 띄운 뒤 STR 화면의 [PDF 다시 만들기]로 재시도할 수 있어요.
+
+```bash
+docker compose --profile ops up -d minio minio-init
+docker compose up -d --build app
+```
 
 **Redis 세션 켜고 띄우기** (SCRUM-273) — `.env`에 `AML_SESSION_REDIS_ENABLED=true`를 넣고 Redis까지 띄워요.
 
