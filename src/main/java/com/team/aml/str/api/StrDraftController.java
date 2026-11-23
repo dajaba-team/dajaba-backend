@@ -7,6 +7,7 @@ import com.team.aml.str.application.ListStrRevisions;
 import com.team.aml.str.application.PreviewStrReportPdf;
 import com.team.aml.str.application.RequestStrDraft;
 import com.team.aml.str.application.ReviseStrDraft;
+import com.team.aml.str.application.SearchReferences;
 import com.team.aml.str.application.SubmitStrDraft;
 import com.team.aml.str.application.VerifyStrDraft;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -34,12 +35,13 @@ public class StrDraftController {
     private final CloseCaseWithStrDraft closeCaseWithStrDraft;
     private final PreviewStrReportPdf previewStrReportPdf;
     private final DownloadStrReportPdf downloadStrReportPdf;
+    private final SearchReferences searchReferences;
 
     public StrDraftController(RequestStrDraft requestStrDraft, GetStrDraft getStrDraft,
                               ReviseStrDraft reviseStrDraft, ListStrRevisions listStrRevisions,
                               VerifyStrDraft verifyStrDraft, SubmitStrDraft submitStrDraft,
                               CloseCaseWithStrDraft closeCaseWithStrDraft, PreviewStrReportPdf previewStrReportPdf,
-                              DownloadStrReportPdf downloadStrReportPdf) {
+                              DownloadStrReportPdf downloadStrReportPdf, SearchReferences searchReferences) {
         this.requestStrDraft = requestStrDraft;
         this.getStrDraft = getStrDraft;
         this.reviseStrDraft = reviseStrDraft;
@@ -49,6 +51,7 @@ public class StrDraftController {
         this.closeCaseWithStrDraft = closeCaseWithStrDraft;
         this.previewStrReportPdf = previewStrReportPdf;
         this.downloadStrReportPdf = downloadStrReportPdf;
+        this.searchReferences = searchReferences;
     }
 
     @Operation(summary = "STR 초안 생성·재생성 (최대 90초)",
@@ -109,6 +112,17 @@ public class StrDraftController {
     @PostMapping("/str-drafts/{draftNo}/verify")
     public JsonNode verify(@PathVariable String draftNo) {
         return verifyStrDraft.execute(draftNo);
+    }
+
+    @Operation(summary = "참고 사례 찾기 (최대 8초)",
+            description = "유형 1~3개(필수)·검색어 0~200자(선택)로 공개 참고 자료를 찾는다. 결과는 문서명·발행처·연도·PDF 쪽·유사도·유형만(본문 없음), 0건도 200. "
+                    + "담당 조사역·승인자만(403 NOT_ASSIGNEE), 기능이 꺼져 있으면 403 FORBIDDEN, 입력 오류 400(details.typologies·query), "
+                    + "AI 실패 502. 저장하지 않는다")
+    @PostMapping("/str-drafts/{draftNo}/references/search")
+    public SearchReferencesResponse searchReferences(@PathVariable String draftNo,
+                                                     @RequestBody SearchReferencesRequest request) {
+        return SearchReferencesResponse.from(
+                searchReferences.execute(draftNo, request.typologies(), request.query()));
     }
 
     @Operation(summary = "STR 승인 요청",
