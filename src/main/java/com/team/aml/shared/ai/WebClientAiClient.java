@@ -498,11 +498,11 @@ public class WebClientAiClient implements AiClient {
 
     /**
      * 참고 사례 검색 — 이 호출만 searchCall 예산(8초). `draftId` 는 기록에만(본문 없음). SCRUM-309.
-     * 호출·재시도 루프는 {@link #selfBudgetedPost} — 응답 확인만 {@link #requireReferenceSearchResponse}.
+     * 호출·재시도 루프는 {@link #callSelfBudgeted} — 응답 확인만 {@link #requireReferenceSearchResponse}.
      */
     @Override
     public ReferenceSearchResponse searchReferences(String draftId, ReferenceSearchRequest request) {
-        return selfBudgetedPost(searchCall, request, draftId, r -> requireReferenceSearchResponse(request, r),
+        return callSelfBudgeted(searchCall, request, draftId, r -> requireReferenceSearchResponse(request, r),
                 "status", ReferenceSearchResponse.class);
     }
 
@@ -524,7 +524,7 @@ public class WebClientAiClient implements AiClient {
      * 기록 행은 `DRAFT` 대상, `generation_id` 는 늘 null(계약에 없는 칸), 버전은 `retrieval_version` 만 넘긴다.
      * 2xx 응답은 {@code check} 로 확인한 뒤 읽는다 — 틀리면 재시도 없는 실패 행.
      */
-    private <T> T selfBudgetedPost(SelfBudgetedCall call, Object request, String draftId, Consumer<JsonNode> check,
+    private <T> T callSelfBudgeted(SelfBudgetedCall call, Object request, String draftId, Consumer<JsonNode> check,
                                    String requiredField, Class<T> type) {
         byte[] body;
         try {
@@ -786,12 +786,12 @@ public class WebClientAiClient implements AiClient {
 
     /**
      * 승인 STR 색인 — 이 호출만 indexCall 예산(30초). 초안 번호는 요청 `draft_id` 그대로 기록(`DRAFT`)에 쓴다. SCRUM-357.
-     * 호출·재시도 루프는 검색과 같은 {@link #selfBudgetedPost} — 응답 확인만 {@link #requireStrIndexResponse}.
+     * 호출·재시도 루프는 검색과 같은 {@link #callSelfBudgeted} — 응답 확인만 {@link #requireStrIndexResponse}.
      * 승인 뒤 뒤 스레드에서 불리지만 예산·재시도·기록·로그 규칙은 검색과 같다(섹션 글은 로그·기록에 안 남음).
      */
     @Override
     public StrIndexResponse indexApprovedStr(StrIndexRequest request) {
-        return selfBudgetedPost(indexCall, request, request.draftId(), r -> requireStrIndexResponse(request, r),
+        return callSelfBudgeted(indexCall, request, request.draftId(), r -> requireStrIndexResponse(request, r),
                 "status", StrIndexResponse.class);
     }
 
