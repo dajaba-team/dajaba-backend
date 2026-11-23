@@ -88,7 +88,7 @@ public class CaseController {
     }
 
     @Operation(summary = "근거 거래",
-            description = "scope=EVIDENCE(기본, 경보에 묶인 거래 전체)|CONTEXT(경보 밖 참고 거래 — 아직 저장소가 없어 빈 목록). "
+            description = "scope=EVIDENCE(기본, 경보에 묶인 거래 전체)|CONTEXT(경보 밖 참고 거래 — MVP 는 빈 목록, SCRUM-244). "
                     + "direction 은 케이스 계좌 기준 INBOUND·OUTBOUND·INDIRECT(경유). sort=ts|transaction_id,asc|desc "
                     + "(기본 ts,asc), size ≤ 100. 계좌는 가린 값과 account_ref 만")
     @GetMapping("/{caseNo}/transactions")

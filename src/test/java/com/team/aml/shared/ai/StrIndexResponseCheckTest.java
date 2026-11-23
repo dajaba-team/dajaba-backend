@@ -24,6 +24,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * SCRUM-357 — 승인 STR 색인 응답 확인 `requireStrIndexResponse` (AI `str_index.py` 규칙 + 보낸 값 대조).
+ * SCRUM-361 — INDEXED 청크 수 상한 = 공백만이 아닌 섹션마다 ⌊글자 수(코드 포인트) ÷ 600⌋ + 1 의 합.
  * 계약 예시(INDEXED·SKIPPED)를 기준으로 칸 하나씩 바꿔 본다. 위반은 모두 502 `AI_BAD_RESPONSE`, 메시지엔 칸 이름만.
  */
 class StrIndexResponseCheckTest {
@@ -105,12 +106,85 @@ class StrIndexResponseCheckTest {
     }
 
     @Test
-    void 경계_INDEXED_chunk_count_는_1과_보낸_섹션_수까지_통과한다() {
+    void 경계_INDEXED_chunk_count_는_1과_상한까지_통과한다() {
+        // 예시 섹션 4개는 모두 600자 미만 → 섹션마다 몫 1 → 상한 4 (옛 모양: 청크 수 = 섹션 수)
         ObjectNode b = body("indexed");
         b.put("chunk_count", 1);
         assertThatCode(() -> check(sent(), b)).doesNotThrowAnyException();
         b.put("chunk_count", sent().sections().size());
         assertThatCode(() -> check(sent(), b)).doesNotThrowAnyException();
+    }
+
+    // --- 청크 수 상한: 공백만이 아닌 섹션마다 ⌊글자 수 ÷ 600⌋ + 1 의 합 (SCRUM-361) ---
+
+    private static final List<String> SEVEN = List.of("SUBJECT", "DATE", "PLACE", "PARTIES", "METHOD", "GROUNDS", "OTHER");
+
+    /** 섹션 이름은 순서대로 붙인다(값 검사는 AI 몫이라 이름은 상관없음). null 은 글 null. */
+    private static StrIndexRequest sending(String... texts) {
+        java.util.ArrayList<StrIndexSection> sections = new java.util.ArrayList<>();
+        for (int i = 0; i < texts.length; i++) sections.add(new StrIndexSection(SEVEN.get(i), texts[i]));
+        return new StrIndexRequest("STR-2026-000012", "DRF-000312", "2026-11-24T01:00:00Z", List.of(), sections);
+    }
+
+    private static ObjectNode indexedWith(int chunks) {
+        ObjectNode b = body("indexed");
+        b.put("chunk_count", chunks);
+        return b;
+    }
+
+    private static void assertBound(StrIndexRequest req, int bound) {
+        assertThatCode(() -> check(req, indexedWith(bound))).doesNotThrowAnyException();
+        assertBad(catchThrowable(() -> check(req, indexedWith(bound + 1))), "chunk_count");
+    }
+
+    @ParameterizedTest(name = "{0}자 → 상한 {1}")
+    @org.junit.jupiter.params.provider.CsvSource({"1,1", "599,1", "600,2", "1199,2", "1200,3", "5000,9"})
+    void 경계_단락_하나의_상한은_글자_수_나누기_600_내림_더하기_1(int length, int bound) {
+        assertBound(sending("가".repeat(length)), bound);
+    }
+
+    @Test
+    void 정상_섹션_수보다_큰_청크_수도_상한_안이면_통과한다() {
+        // 2500자(몫 5) + 1300자(몫 3) → 상한 8, 섹션은 둘
+        StrIndexRequest req = sending("나".repeat(2500), "다".repeat(1300));
+        assertThatCode(() -> check(req, indexedWith(5))).doesNotThrowAnyException();
+        assertBound(req, 8);
+    }
+
+    @Test
+    void 정상_옛_모양_청크_수_공백_아닌_섹션_수는_긴_단락이_섞여도_통과한다() {
+        StrIndexRequest req = sending("라".repeat(5000), "짧은 단락", " \n ", "마".repeat(1200));
+        assertThatCode(() -> check(req, indexedWith(3))).doesNotThrowAnyException();
+    }
+
+    @Test
+    void 경계_일곱_섹션_5000자씩이면_상한_63() {
+        assertBound(sending(java.util.Collections.nCopies(7, "바".repeat(5000)).toArray(String[]::new)), 63);
+    }
+
+    @Test
+    void 경계_글자_수는_코드_포인트로_센다_이모지_600개는_600자() {
+        // UTF-16 으로 세면 1200 → 상한 3 이 되지만 AI(Python len)는 600 → 상한 2
+        assertBound(sending("😀".repeat(600)), 2);
+        assertBound(sending("😀".repeat(599)), 1);
+    }
+
+    @Test
+    void 경계_공백만인_섹션과_null_글은_0으로_센다() {
+        // 파이썬 공백(전각 공백·NEL 포함)만인 섹션은 AI 가 청크를 안 만든다 — 1200자(몫 3)만 셈
+        assertBound(sending("사".repeat(1200), " \t\n", "　\u0085", null), 3);
+    }
+
+    @Test
+    void 경계_앞뒤_공백도_글자_수에_넣는다() {
+        // 원문 그대로 셈: 글 599자 + 앞뒤 공백 1자씩 = 601자 → 상한 2
+        assertBound(sending(" " + "아".repeat(599) + " "), 2);
+    }
+
+    @Test
+    void 실패_섹션_목록이_null_이면_상한_0이라_INDEXED_는_AI_BAD_RESPONSE() {
+        StrIndexRequest none = new StrIndexRequest("STR-2026-000012", "DRF-000312", "2026-11-24T01:00:00Z", List.of(), null);
+        assertBad(catchThrowable(() -> check(none, indexedWith(1))), "chunk_count");
     }
 
     @Test
@@ -126,7 +200,7 @@ class StrIndexResponseCheckTest {
         return Stream.of(
                 Arguments.of("INDEXED + 이유", "skip_reason", (Consumer<ObjectNode>) b -> b.put("skip_reason", "TOO_SHORT"), "indexed"),
                 Arguments.of("INDEXED 0건", "chunk_count", (Consumer<ObjectNode>) b -> b.put("chunk_count", 0), "indexed"),
-                Arguments.of("INDEXED 섹션 수 초과", "chunk_count", (Consumer<ObjectNode>) b -> b.put("chunk_count", 5), "indexed"),
+                Arguments.of("INDEXED 상한 초과", "chunk_count", (Consumer<ObjectNode>) b -> b.put("chunk_count", 5), "indexed"),
                 Arguments.of("INDEXED 음수", "chunk_count", (Consumer<ObjectNode>) b -> b.put("chunk_count", -1), "indexed"),
                 Arguments.of("INDEXED 버전 null", "retrieval_version", (Consumer<ObjectNode>) b -> b.putNull("retrieval_version"), "indexed"),
                 Arguments.of("INDEXED 버전 빈 값", "retrieval_version", (Consumer<ObjectNode>) b -> b.put("retrieval_version", ""), "indexed"),
@@ -167,8 +241,8 @@ class StrIndexResponseCheckTest {
     }
 
     @Test
-    void 실패_섹션_하나를_보냈는데_청크_2개면_AI_BAD_RESPONSE() {
-        // AI 는 섹션 하나 = 청크 하나(공백만인 섹션은 뺌) → chunk_count 는 보낸 섹션 수를 넘을 수 없다
+    void 실패_짧은_섹션_하나를_보냈는데_청크_2개면_AI_BAD_RESPONSE() {
+        // 600자 미만 섹션 하나 → 상한 1 (AI 는 1200자 안쪽이면 나누지 않음)
         StrIndexRequest one = new StrIndexRequest("STR-2026-000012", "DRF-000312", "2026-11-24T01:00:00Z", List.of(),
                 List.of(new StrIndexSection("SUBJECT", "보고 대상자 설명")));
         ObjectNode b = body("indexed");
