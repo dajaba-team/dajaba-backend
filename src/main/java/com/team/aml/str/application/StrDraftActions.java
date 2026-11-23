@@ -43,6 +43,8 @@ final class StrDraftActions {
     static final String PREVIEW_PDF = "PREVIEW_PDF";
     static final String DOWNLOAD_PDF = "DOWNLOAD_PDF";
     static final String REGENERATE_PDF = "REGENERATE_PDF";
+    /** 참고 사례 찾기(S9) — 이 목록 계산 밖에서 GetStrDraft 가 설정·본문 열람으로 붙인다(상태와 무관). */
+    static final String SEARCH_REFERENCES = "SEARCH_REFERENCES";
 
     private StrDraftActions() {}
 

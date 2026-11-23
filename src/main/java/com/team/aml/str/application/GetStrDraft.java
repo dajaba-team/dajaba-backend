@@ -10,6 +10,7 @@ import com.team.aml.cases.domain.CaseStatus;
 import com.team.aml.cases.domain.CaseNotFoundException;
 import com.team.aml.cases.domain.CaseRepository;
 import com.team.aml.shared.audit.AccessLogWriter;
+import com.team.aml.shared.config.AmlProperties;
 import com.team.aml.shared.domain.DisplayNumber;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.shared.security.CurrentUser;
@@ -61,12 +62,13 @@ public class GetStrDraft {
     private final WasCaseAssignee wasCaseAssignee;
     private final StrReportRepository reports;
     private final Duration staleAfter;
+    private final AmlProperties properties;
 
     public GetStrDraft(StrDraftRepository drafts, CaseRepository cases, LatestVerificationRepository verifications,
                        CurrentUser currentUser, AccessLogWriter accessLog, CurrentNarrative currentNarrative,
                        ApprovalRepository approvals, UserRepository users, WasCaseAssignee wasCaseAssignee,
                        StrReportRepository reports,
-                       @Value(StrReportPdfAccess.STALE_PENDING_AFTER) Duration staleAfter) {
+                       @Value(StrReportPdfAccess.STALE_PENDING_AFTER) Duration staleAfter, AmlProperties properties) {
         this.drafts = drafts;
         this.cases = cases;
         this.verifications = verifications;
@@ -78,6 +80,7 @@ public class GetStrDraft {
         this.wasCaseAssignee = wasCaseAssignee;
         this.reports = reports;
         this.staleAfter = staleAfter;
+        this.properties = properties;
     }
 
     /** readOnly 아님 — accessLog.strView 가 MANDATORY·쓰기 트랜잭션을 요구한다. */
@@ -107,9 +110,13 @@ public class GetStrDraft {
                 && report.map(r -> r.isApprovedBy(me.userId())).orElse(false);
         boolean canRegenerate = c.getStatus() == CaseStatus.REPORTED && report
                 .map(r -> StrReportPdfAccess.canRegenerate(role, r, me.userId(), Instant.now(), staleAfter)).orElse(false);
-        List<String> actions = StrDraftActions.of(draftId, draft.getStatus(), c, me.userId(), role, wasAssignee,
-                approvedByMe, canRegenerate);
-        return Result.full(draft, c, verification, currentNarrative.of(draft), lastRejection, actions);
+        List<String> actions = new ArrayList<>(StrDraftActions.of(draftId, draft.getStatus(), c, me.userId(), role,
+                wasAssignee, approvedByMe, canRegenerate));
+        // 참고 사례 찾기(S9) — 초안 상태와 상관없이, 본문을 볼 수 있고(여기까지 오면 FULL) 설정이 켜져 있으면 (설계 문서 A 7.1)
+        if (properties.ai().referenceSearchEnabled()) {
+            actions.add(StrDraftActions.SEARCH_REFERENCES);
+        }
+        return Result.full(draft, c, verification, currentNarrative.of(draft), lastRejection, List.copyOf(actions));
     }
 
     /**
@@ -162,8 +169,8 @@ public class GetStrDraft {
         return List.copyOf(out);
     }
 
-    /** 본문은 승인자 또는 담당 조사역만. */
-    private static boolean canReadBody(Role role, Case c, long userId) {
+    /** 본문은 승인자 또는 담당 조사역만 — 참고 사례 찾기(SearchReferences)도 같은 판단. */
+    static boolean canReadBody(Role role, Case c, long userId) {
         return role == Role.APPROVER || (role == Role.INVESTIGATOR && Objects.equals(c.getAssigneeId(), userId));
     }
 
