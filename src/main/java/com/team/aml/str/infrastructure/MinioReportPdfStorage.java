@@ -21,6 +21,8 @@ import java.nio.file.Path;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
+import org.springframework.beans.factory.annotation.Autowired;
+
 /** MinIO의 S3 호환 API에 STR 확정본 PDF를 보관한다. */
 @Component
 @ConditionalOnProperty(prefix = "aml.str.pdf", name = "storage", havingValue = "minio")
@@ -30,6 +32,7 @@ public class MinioReportPdfStorage implements ReportPdfStorage {
     private final String bucket;
     private final Path fallbackRoot;
 
+    @Autowired
     public MinioReportPdfStorage(
             S3Client s3,
             @Value("${aml.str.pdf.bucket:str-reports}") String bucket) {
