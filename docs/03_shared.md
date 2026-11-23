@@ -144,7 +144,7 @@ AI 쪽 코드 메모 [규약 v0.2 §6.3]: `LLM_TIMEOUT`은 v0.2에서 없어지�
 | `ask(request)` | `POST /v1/cases/ask` — 조사역 질문 답변(규약 5.4). 아래 "질문 답변" [SCRUM-291] | cases 질문 답변 유스케이스(지윤 님 이슈) |
 | `searchReferences(draftId, request)` | `POST /v1/references/search` — 참고 사례 검색(규약 5.5). `draftId` 는 `ai_call_logs` 에만 쓰고 요청 본문엔 안 넣음. 아래 "참고 사례 검색" [SCRUM-309] | str 참고 사례 검색 유스케이스(채영 님 이슈) |
 | `indexApprovedStr(request)` | `POST /v1/references/str` — 승인 STR 색인. 초안 번호는 요청 본문 `draft_id` 그대로(따로 안 받음). 아래 "승인 STR 색인" [SCRUM-357] | str 승인 뒤 트리거(채영 님 SCRUM-314) |
-| `getDlRankings(scanDate)` | `GET /v1/dl-rankings/{scan_date}` — ML+DL 조사 순위(규약 6절, 본문 없음). 스캔 하루치 경보 전부의 `ml_rank`·`fused_rank`. 아래 "ML+DL 조사 순위" [SCRUM-376] | 없음 — 뒤 PR(detection `GetDlRanking`) |
+| `getDlRankings(scanDate)` | `GET /v1/dl-rankings/{scan_date}` — ML+DL 조사 순위(규약 6절, 본문 없음). 스캔 하루치 경보 전부의 `ml_rank`·`fused_rank`. 아래 "ML+DL 조사 순위" [SCRUM-376] | detection `GetDlRanking` — 그 날짜 경보·점수와 대조(`06_features/source_detection.md`) |
 | `health()` | `GET /v1/health` — 기동 시 1회, 실패해도 기동은 함. 응답 `status·db·llm·server_version·model_version·feature_version·retrieval_version` 을 info 한 줄로 찍고, `status`·`db`·`llm` 중 하나라도 `ok` 가 아니면(null 포함) warn 한 줄 더 (SCRUM-22) | `AiHealthCheck` |
 
 **공통 동작**
