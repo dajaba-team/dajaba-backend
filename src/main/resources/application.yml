@@ -105,6 +105,7 @@ aml:
     reference-search-enabled: ${AML_AI_REFERENCE_SEARCH_ENABLED:false} # 참고 사례 검색 켜기. 읽는 쪽은 str — SCRUM-309
     str-index-timeout-seconds: 30            # 승인 STR 색인만 전체 30초(재시도 포함, 승인 뒤 뒤 스레드) — SCRUM-357
     str-index-enabled: ${AML_AI_STR_INDEX_ENABLED:false} # 승인 STR 색인 켜기. 읽는 쪽은 str 승인 뒤 트리거 — SCRUM-357
+    dl-ranking-timeout-seconds: 10           # ML+DL 조사 순위만 전체 10초(재시도 포함, 규약 6.2 — AI 실측 전 가정값) — SCRUM-376
     max-batch: 500
   dataset-dir: ${AML_DATASET_DIR:./data}
   # 로그인 세션 저장소 — Redis(true)·서버 메모리(false, 기본). 끄면 지금처럼 재시작하면 모두 로그아웃 (SCRUM-273)

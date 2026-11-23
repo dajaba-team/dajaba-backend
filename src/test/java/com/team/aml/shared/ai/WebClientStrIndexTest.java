@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * SCRUM-357 — `WebClientAiClient.indexApprovedStr` (`POST /v1/references/str`). 호출·재시도 루프는 참고 사례 검색과 같은
- * {@code selfBudgetedPost} — 여기서는 색인 쪽 경로·예산(30초 기본)·기록 칸·오류 문구·응답 확인·로그에 섹션 글이 없는지를 본다.
+ * {@code callSelfBudgeted} — 여기서는 색인 쪽 경로·예산(30초 기본)·기록 칸·오류 문구·응답 확인·로그에 섹션 글이 없는지를 본다.
  */
 class WebClientStrIndexTest {
 
