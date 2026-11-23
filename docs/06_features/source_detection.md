@@ -150,7 +150,7 @@
 | `GetAlertForDraft(alertId)` (명세 이름 GetAlertPayload) | str 초안 요청 (`RequestStrDraft`) | `AlertPayload`(규약 §2, `created_at` 포함) + `reasons`(점수 payload 그대로, 없으면 `[]`) + `prior_alert_count`(같은 법인·앞선 경보 수) [SCRUM-155] | 읽기 |
 | ~~`RecordScoreBand`~~ | — | 안 만듦. 등급·정책 버전은 cases가 케이스 생성 때 자기 행에 저장(계약서 Q2, SCRUM-152) | — |
 
-**관리자 API** 〔초안 — SD 명세〕 룰 스캔 `POST /admin/batches/rule-scan?date=`(202), 점수 `POST /admin/batches/score?date=`(202, SCRUM-349), 룰 `GET /admin/rules`·`PUT /admin/rules/{rule_id}/params`(새 버전 행 추가 + 이전 행 비활성을 한 트랜잭션, `(rule_id, version)` unique로 409).
+**관리자 API** 〔SD 명세 v0.3, 11/23〕 룰 스캔 `POST /admin/batches/rule-scan?date=`(202), 점수 `POST /admin/batches/score?date=`(202, SCRUM-349), 경보 위험 등급 통계 `GET /admin/alerts/stats?date=`(코드는 cases — `cases.md` 「관리자 경보 위험 등급 집계」, SCRUM-360). 룰 `GET /admin/rules`·`PUT /admin/rules/{rule_id}/params`는 **미구현**(컨트롤러 없음) — 설계는 새 버전 행 추가 + 이전 행 비활성을 한 트랜잭션, `(rule_id, version)` unique로 409. 지금 기준값은 Flyway 시드로만 바꿔요.
 
 **경보 점검** (계약서 5.7 R1~R3 — 목록·상세·거래 조회) `AdminAlertController` → `AlertReview`. ADMIN만.
 - 목록 `GET /admin/alerts` — 필터 `date`·`rule_id`·`score_status`·`score_failure_code`·`case_opened`(전부 AND), 정렬 `alert_no`·`score`·`created_at`(기본 `score,desc`, 점수 없는 경보는 오름·내림 모두 맨 뒤), 공통 목록. 한 줄 = 경보 칸 + `transaction_count` + `retryable`(FAILED이고 코드 NULL·`COMPUTE_ERROR`) + `latest_score{score, threshold, data_quality_status, model_version}`(점수 없으면 `null`). 열람 기록 없음.

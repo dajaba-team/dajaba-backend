@@ -1,5 +1,7 @@
 package com.team.aml.detection.domain;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -15,4 +17,7 @@ public interface AlertReviewRepository {
 
     /** 화면 번호 → DB id. 없으면 empty. */
     Optional<Long> findId(String alertNo);
+
+    /** 경보 점수 집계(SCRUM-360). date null 이면 전체. 경계값 둘 다 null 이면 high·medium·low 는 null. */
+    AlertScoreStats scoreStats(LocalDate date, BigDecimal lowToMedium, BigDecimal mediumToHigh);
 }
