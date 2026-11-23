@@ -150,7 +150,7 @@ class SearchReferencesDbTest {
     // ── 경계 ──────────────────────────────────────────────────
 
     @Test
-    void 경계_공백뿐인_검색어는_null로_보내고_NFD로_쓴_한글_200자는_통과한다() {
+    void 경계_공백뿐인_검색어는_null로_보내고_NFD로_쓴_한글_200자는_NFC로_바꿔_보낸다() {
         String draftNo = draftNo();
         when(aiClient.searchReferences(anyString(), any())).thenReturn(empty());
         login(investigator, "INVESTIGATOR");
@@ -162,7 +162,22 @@ class SearchReferencesDbTest {
         ArgumentCaptor<ReferenceSearchRequest> sent = ArgumentCaptor.forClass(ReferenceSearchRequest.class);
         verify(aiClient, org.mockito.Mockito.times(2)).searchReferences(eq(draftNo), sent.capture());
         assertThat(sent.getAllValues().get(0).query()).isNull();
-        assertThat(sent.getAllValues().get(1).query()).isEqualTo(nfd200);
+        assertThat(sent.getAllValues().get(1).query()).isEqualTo("가".repeat(200));   // NFC 로 보냄(#178 리뷰)
+    }
+
+    @Test
+    void 경계_NBSP만_있는_검색어는_null로_보내고_앞뒤_NBSP는_지운다() {   // AI str.strip 과 같은 공백 판단(#178 리뷰)
+        String draftNo = draftNo();
+        when(aiClient.searchReferences(anyString(), any())).thenReturn(empty());
+        login(investigator, "INVESTIGATOR");
+
+        search.execute(draftNo, List.of("FAN_IN"), "\u00A0");
+        search.execute(draftNo, List.of("FAN_IN"), "\u00A0 해외 경유\u202F");
+
+        ArgumentCaptor<ReferenceSearchRequest> sent = ArgumentCaptor.forClass(ReferenceSearchRequest.class);
+        verify(aiClient, org.mockito.Mockito.times(2)).searchReferences(eq(draftNo), sent.capture());
+        assertThat(sent.getAllValues().get(0).query()).isNull();
+        assertThat(sent.getAllValues().get(1).query()).isEqualTo("해외 경유");
     }
 
     // ── 실패 ──────────────────────────────────────────────────

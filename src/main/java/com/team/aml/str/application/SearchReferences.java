@@ -111,18 +111,35 @@ public class SearchReferences {
         return List.copyOf(in);
     }
 
-    /** 앞뒤 공백을 지우고 빈 값이면 null(유형만으로 찾음). 글자 수는 NFC 뒤 UTF-16 — AI·화면과 같은 기준. */
+    /**
+     * 앞뒤 공백을 지우고 빈 값이면 null(유형만으로 찾음, 설계 A 9-3). 공백은 Java 공백 + 유니코드 공백 문자(NBSP 등) —
+     * AI(파이썬 str.strip)가 공백으로 보는 것을 백엔드가 통과시키면 AI 422 → 화면 502 라서(#178 리뷰).
+     * 글자 수는 NFC 뒤 UTF-16 이고, 센 그 NFC 문자열을 보낸다 — 두 쪽이 같은 글자를 보게(#178 리뷰).
+     */
     static String query(String in) {
         if (in == null) {
             return null;
         }
-        String q = in.strip();
+        String q = Normalizer.normalize(stripSpaces(in), Normalizer.Form.NFC);
         if (q.isEmpty()) {
             return null;
         }
-        if (Normalizer.normalize(q, Normalizer.Form.NFC).length() > QUERY_MAX) {
+        if (q.length() > QUERY_MAX) {
             throw new InvalidRequestException("query", "검색어는 200자 이하여야 합니다");
         }
         return q;
+    }
+
+    /** 앞뒤의 공백을 지운다 — Character.isWhitespace 또는 isSpaceChar(NBSP·U+2007·U+202F 포함). */
+    private static String stripSpaces(String s) {
+        int start = 0;
+        int end = s.length();
+        while (start < end && isSpace(s.codePointAt(start))) start += Character.charCount(s.codePointAt(start));
+        while (end > start && isSpace(s.codePointBefore(end))) end -= Character.charCount(s.codePointBefore(end));
+        return s.substring(start, end);
+    }
+
+    private static boolean isSpace(int codePoint) {
+        return Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint);
     }
 }
