@@ -8,9 +8,11 @@ import com.team.aml.detection.domain.AlertReviewFilter;
 import com.team.aml.detection.domain.AlertReviewItem;
 import com.team.aml.detection.domain.AlertReviewOrder;
 import com.team.aml.detection.domain.AlertReviewRepository;
+import com.team.aml.detection.domain.AlertScoreStats;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -84,6 +86,34 @@ public class AlertReviewJdbcRepository implements AlertReviewRepository {
     public Optional<Long> findId(String alertNo) {
         return jdbc.queryForList("select id from ops.alerts where alert_no = ?", Long.class, alertNo)
                 .stream().findFirst();
+    }
+
+    /**
+     * 경보 점수 집계(SCRUM-360) — 등급은 CasePolicy.classify 와 같은 규칙(score ≥ medium_to_high → HIGH,
+     * ≥ low_to_medium → MEDIUM, 그 외 LOW). 경계값이 없으면 등급 칸은 세되 버리고 null 로 돌려준다.
+     */
+    @Override
+    public AlertScoreStats scoreStats(LocalDate date, BigDecimal lowToMedium, BigDecimal mediumToHigh) {
+        boolean banded = lowToMedium != null && mediumToHigh != null;
+        BigDecimal low = banded ? lowToMedium : BigDecimal.ZERO;
+        BigDecimal high = banded ? mediumToHigh : BigDecimal.ONE;
+        return jdbc.queryForObject("""
+                select count(*) as total,
+                       count(s.alert_id) as scored,
+                       count(*) filter (where s.score >= ?) as high,
+                       count(*) filter (where s.score >= ? and s.score < ?) as medium,
+                       count(*) filter (where s.score < ?) as low,
+                       count(*) filter (where a.score_status = 'PENDING') as unscored,
+                       count(*) filter (where a.score_status = 'FAILED') as failed,
+                       count(*) filter (where a.case_opened) as case_opened
+                from ops.alerts a
+                left join ops.alert_scores s on s.alert_id = a.id
+                where (cast(? as date) is null or a.batch_date = ?)""",
+                (rs, n) -> new AlertScoreStats(rs.getLong("total"), rs.getLong("scored"),
+                        banded ? rs.getLong("high") : null, banded ? rs.getLong("medium") : null,
+                        banded ? rs.getLong("low") : null, rs.getLong("unscored"), rs.getLong("failed"),
+                        rs.getLong("case_opened")),
+                high, low, high, low, date, date);
     }
 
     /** 값은 전부 ? 로 — 사용자 입력을 SQL 에 이어 붙이지 않는다. */

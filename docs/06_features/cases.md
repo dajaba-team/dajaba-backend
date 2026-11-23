@@ -207,6 +207,14 @@
 - 검사 순서: 케이스 잠금 404 → version 409 → 담당자 403 `NOT_ASSIGNEE` → 현재 초안(다른 초안 409 `DRAFT_SUPERSEDED`, 초안 없음 409 `INVALID_CASE_TRANSITION` — 그건 화면용 `close`로) → 상태 409(DRAFTED, REJECTED+NOT_REPORTABLE만) → 사유(`COMMENT_REQUIRED`, 형식 400은 str DTO).
 - CLOSED·`close_reason`·`CLOSE` 이력(`reason_code`=종결 사유), 반려 코드 지움. `current_draft_id`는 남겨요(V006 — CLOSED는 둘 다 허용).
 
+**관리자 경보 위험 등급 집계 — `GET /api/v1/admin/alerts/stats?date=` (SCRUM-360)** `AlertStatsController` → `GetAlertRiskStats` → detection `CountAlertScores`. 관리자 대시보드용, ADMIN 만(`/api/v1/admin/**`).
+- **왜** — 케이스는 HIGH 경보만 만들어져서 케이스 기준 대시보드는 위험 등급 분포가 늘 HIGH 100%예요. 관리자 화면은 경보 기준으로 보여 줘요.
+- **응답 200** `{date, total, scored, bands{high, medium, low}, unscored, failed, case_opened, policy_version}`. `date` 없으면 전체 기간(`date: null`). 건수만 — 계좌·금액 없음.
+- **등급** — 케이스를 만들 때와 같은 운영 정책(`CasePolicy`, `aml.case-policy.*`)으로 나눠요: `score ≥ medium_to_high` HIGH, `≥ low_to_medium` MEDIUM, 그 외 LOW. 점수 있는 경보(`alert_scores` 행)만 나눠서 `high + medium + low = scored`. 그래서 HIGH 수 ≈ 케이스 전환 수(그 사이 경계값을 바꾸지 않았다면).
+- **정책이 없으면** — 오류가 아니라 `bands`·`policy_version` 이 `null`, 나머지 건수는 그대로(평가 전이라 경계값이 비어 있을 수 있음, 미결 23).
+- `unscored` = 점수 대기(`PENDING`), `failed` = 점수 실패(`FAILED`, 다시 보낼 것·다시 보내도 같은 것 모두), `case_opened` = 케이스로 전환된 경보.
+- 모듈 — 경계값은 cases, 경보 집계는 detection(`AlertReviewRepository.scoreStats`, 경계값을 숫자로만 받음). api 는 detection 타입을 모르게 `GetAlertRiskStats.Result` 에 숫자로 풀어 둬요(ArchitectureTest).
+
 **업무 알림 조회 — `GET /api/v1/notifications` (SCRUM-355)** `NotificationController` → `ListMyNotifications`. 근거: 노션 「비동기 작업 알림 설계 문서」 6.5·9절 #29~#43·12절. 이미 쌓이는 `case_history`를 **읽기만** 해요 — 알림 테이블·마이그레이션 없음, 배정·승인 같은 전이 코드는 그대로. 읽기 전용 트랜잭션, 열람 기록(`access_logs`) 안 남김(본문 없는 목록).
 - **요청** — `since`: 이 시각 **뒤**부터 응답 `server_time`까지(`since < created_at <= server_time`). `Z`로 끝나는 ISO 시각만(`2026-11-24T02:10:00Z`, 초 아래 허용 — DB가 마이크로초라 그 아래는 잘라서 비교). 없으면 7일 전, 30일보다 오래되면 30일 전으로 맞춰요. 오프셋(`+09:00`)·날짜만·그 밖 형식은 400 `INVALID_REQUEST`(`details.since`). `size`: 1~50, 기본 20(밖이면 400). 받는 사람은 세션의 사용자·역할뿐 — 남의 알림을 지정하는 인자가 없어서 403도 없어요.
 - **응답 200** `{items: [{type, case_no, draft_no, reason_code, actor{login_id, display_name}, at}], total, server_time}`. 최신순(`created_at DESC, id DESC`). `total` = 같은 조건의 `since` 뒤 전체 건수(`size`와 무관), **99에서 멈춤**(화면은 99를 "99+"로). `server_time` = **지금(초 아래 버림) − 5초**(`ListMyNotifications.COMMIT_LAG`, `Z`)이자 읽는 구간의 끝 — 화면이 다음 `since`로 주면 경계 초의 알림이 두 번 나오지 않고, 조회 직후에 커밋된 이력도 다음 조회에 들어와요(`created_at`은 커밋 전에 찍혀서). 그래서 방금 생긴 알림은 다음 조회에 보여요(화면 30초 + 5초). 서버 시계가 뒤로 가도 `server_time`은 받은 `since`보다 작아지지 않아요(`max`) — 작아지면 이미 받은 알림을 다시 읽어요(추가 검토 2). 목록과 `total`은 한 스냅샷(읽기 전용 `REPEATABLE_READ`, 승인함 P1과 같음)에서 읽어 서로 어긋나지 않아요. `draft_no`는 `APPROVAL_REQUESTED`와 STR 3종에만, 케이스의 **현재** 초안 번호(`DisplayNumber.draftNo`)라 재생성 뒤엔 옛 알림에도 새 번호. 없으면 null. `reason_code`는 반려일 때만. **넣지 않는 것**: 반려 코멘트·메모·계좌·금액·DB 숫자 id(쿼리가 `comment`를 읽지 않아요).
