@@ -20,6 +20,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
@@ -78,6 +79,9 @@ public class RequestStrDraft {
         this.currentUser = currentUser;
         this.om = om;
         this.tx = new TransactionTemplate(transactionManager);
+        // 늘 새 트랜잭션 — submit 은 "반환되면 요청 기록이 커밋돼 있다"를 믿고 작업을 넘긴다. 누가 @Transactional 안에서 부르면
+        // 기본(REQUIRED)은 바깥에 합류해 뒤쪽 작업이 커밋 전 행을 못 보고 건너뛰고, 요청이 REQUESTED 로 남는다(#183 리뷰)
+        this.tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         Duration syncStale = Duration.ofSeconds(props.ai().timeoutSeconds()).plus(STALE_MARGIN);
         // 비동기면 큐에서 기다리는 시간까지 — 정상으로 기다리는 요청을 다음 요청이 EXPIRED 로 닫지 않게
         this.staleAfter = async && asyncStaleAfter.compareTo(syncStale) > 0 ? asyncStaleAfter : syncStale;
@@ -96,7 +100,7 @@ public class RequestStrDraft {
      */
     public Accepted submit(String caseNo, long expectedCaseVersion) {
         long actorId = currentUser.require().userId();
-        Started started = start(caseNo, expectedCaseVersion, actorId);      // TransactionTemplate — 여기서 이미 커밋됨
+        Started started = start(caseNo, expectedCaseVersion, actorId);      // REQUIRES_NEW — 부르는 쪽과 상관없이 여기서 커밋됨
         trigger.submit(started.draftId());
         return new Accepted(caseNo, DisplayNumber.draftNo(started.draftId()), "REQUESTED");
     }

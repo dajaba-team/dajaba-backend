@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * 초안 생성 작업을 뒤로 넘긴다 (S1 비동기). 요청 기록(REQUESTED)이 <b>커밋된 뒤에</b> 부른다 — RequestStrDraft.submit 의
- * 요청 트랜잭션은 TransactionTemplate 이라 반환되면 이미 커밋돼 있다. 모양은 확정본 PDF(StrReportPdfTrigger)와 같다.
+ * 요청 트랜잭션은 REQUIRES_NEW 템플릿이라 반환되면 이미 커밋돼 있다. 모양은 확정본 PDF(StrReportPdfTrigger)와 같다.
  *
  * <ul>
  *   <li>요청 스레드는 브로커 확인을 기다리지 않는다 — 먼저 applicationTaskExecutor 에 넘긴다</li>

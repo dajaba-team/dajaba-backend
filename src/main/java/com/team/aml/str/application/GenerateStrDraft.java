@@ -39,8 +39,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *       기다리는 사이 담당이 바뀌었으면 403 NOT_ASSIGNEE 로 실패(맞는 동작)</li>
  *   <li>케이스 버전은 요청 때 값이 아니라 저장 직전 값 — 기다리는 사이 메모 저장 등으로 버전이 올라도 저장한다.
  *       종료·상신 취소처럼 초안을 붙일 수 없는 상태면 AttachDraftToCase 가 지금처럼 거절한다</li>
- *   <li>실패하면 요청 FAILED (케이스 그대로). AI 가 같은 draft_id 를 아직 만드는 중(DRAFT_IN_PROGRESS)이면 실패로 남기지 않고
- *       예외를 올린다 — 큐는 재시도, 앱 안 경로는 로그만</li>
+ *   <li>실패하면 요청 FAILED (케이스 그대로). AI 가 같은 draft_id 를 아직 만드는 중(DRAFT_IN_PROGRESS)이면 여기서는 실패로
+ *       남기지 않고 예외를 올린다. 다만 이 응답이 오는 건 앱이 AI 호출 도중 죽어 큐가 메시지를 다시 줬을 때뿐이고, 공통 재시도
+ *       (1s → 2s, 3번)는 AI 예산(최대 90초)보다 짧아서 보통 재시도를 다 쓰고 QUEUE_GIVE_UP 으로 FAILED 가 된다 — 조사역이 다시
+ *       요청하면 된다. 큐 지연 재시도(TTL+DLX)는 이 드문 경우만을 위해 두지 않았다(#183 리뷰). 앱 안 경로는 다시 주는 일이 없어
+ *       이 응답을 받을 일이 없다</li>
  * </ol>
  * 같은 앱 안에서 같은 draft_id 가 겹치면 한 번만 돈다(확정본 PDF 와 같은 모양). 로그에는 초안 번호·예외 종류만(NFR-COM-04).
  */
@@ -109,7 +112,7 @@ public class GenerateStrDraft {
         } catch (AiClientException e) {
             if (AI_DRAFT_IN_PROGRESS.equals(e.code())) {
                 log.info("AI 가 같은 초안을 아직 만드는 중 draft_no={}", DisplayNumber.draftNo(draftId));
-                throw e;                                     // 실패로 남기지 않는다 — 큐는 잠시 뒤 다시
+                throw e;                                     // 실패로 남기지 않는다 — 큐 재시도에 맡김(다 쓰면 QUEUE_GIVE_UP)
             }
             fail(draftId, e);
             throw e;
