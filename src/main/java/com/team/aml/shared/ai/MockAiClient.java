@@ -382,6 +382,7 @@ public class MockAiClient implements AiClient {
      * ML+DL 조사 순위 (SCRUM-376) — 보낸 날짜로 `ALT-{yyyyMMdd}-000001~3` 세 건: 연결 · `INCOMPLETE_DL_EVIDENCE` · `ML_UNSCORED`.
      * `requireDlRankingResponse` 를 통과하는 모양, `ml_model` 은 목업 채점 모델과 같은 `mock-0.0.1`. 2022-09-01 이면 AI 503 과
      * 같은 예외. 목업 DB 경보와 번호가 안 맞으니 부르는 쪽 대조에선 대부분 Unavailable 이 난다(대조를 건너뛰지 않음).
+     * 기준 시각은 보낸 날짜의 자정이고, 근거 digest 는 경보마다 다른 고정값이다.
      */
     @Override
     public DlRankingResponse getDlRankings(LocalDate scanDate) {
@@ -389,12 +390,14 @@ public class MockAiClient implements AiClient {
             throw new AiClientException("DL_RANKING_UNAVAILABLE", "ML+DL 조사 순위를 지금 쓸 수 없음", Map.of(), 502);
         }
         String prefix = "ALT-" + scanDate.format(DateTimeFormatter.BASIC_ISO_DATE) + "-";
+        String referenceTs = scanDate.format(DateTimeFormatter.ISO_LOCAL_DATE) + "T00:00:00";
         List<DlRankedAlert> alerts = List.of(
-                new DlRankedAlert(prefix + "000001", "R02_FAN_IN", 0.92, null, 0.81, 3, 3, null, 1, 1),
+                new DlRankedAlert(prefix + "000001", "R02_FAN_IN", 0.92, null, 0.81, 3, 3, null, 1, 1,
+                        referenceTs, "a".repeat(64)),
                 new DlRankedAlert(prefix + "000002", "R01_FAN_OUT", 0.74, null, null, 2, 1,
-                        DlFallbackReason.INCOMPLETE_DL_EVIDENCE, 2, 2),
+                        DlFallbackReason.INCOMPLETE_DL_EVIDENCE, 2, 2, referenceTs, "b".repeat(64)),
                 new DlRankedAlert(prefix + "000003", "R02_FAN_IN", null, "TRANSACTION_NOT_FOUND", null, 1, 0,
-                        DlFallbackReason.ML_UNSCORED, null, null));
+                        DlFallbackReason.ML_UNSCORED, null, null, referenceTs, "c".repeat(64)));
         return new DlRankingResponse(scanDate, "0".repeat(64), "mock-0.0.1", "mock-dl-0.0.1", 6, 4, 1, 1, 1, alerts);
     }
 

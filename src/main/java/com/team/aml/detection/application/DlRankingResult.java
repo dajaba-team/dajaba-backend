@@ -25,7 +25,11 @@ public sealed interface DlRankingResult {
         /** DB 점수가 있는 경보의 `model_version` ≠ 응답 `ml_model`. */
         MODEL_MISMATCH,
         /** 점수 차 > 1e-6, 또는 DB 점수·응답 `ml_score` 중 한쪽만 있음. */
-        SCORE_MISMATCH
+        SCORE_MISMATCH,
+        /** 경보별 DB `reference_ts`(`yyyy-MM-dd'T'HH:mm:ss`, 초 아래 버림) ≠ 응답 `reference_ts`. SCRUM-415. */
+        REFERENCE_MISMATCH,
+        /** 경보별 DB 근거 원본 행으로 계산한 digest ≠ 응답 `evidence_digest`. SCRUM-415. */
+        EVIDENCE_MISMATCH
     }
 
     /**

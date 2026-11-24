@@ -21,6 +21,7 @@ import java.time.format.DateTimeFormatter;
  * </pre>
  * 완전 연결 {1,3,6} 의 내부 순위(오름차순) — ML: 6→1, 3→2, 1→3 / DL: 1→1, 3→2, 6→3. max: 1→3, 6→3, 3→2 →
  * 결합값 내림차순·번호 오름차순으로 1, 6, 3 을 그 자리(1·3·4번째)에 둔다. 배열은 fused 순서 다음 ML 없는 경보 번호 순.
+ * 근거 신원 칸(SCRUM-415): `reference_ts` = 그날 `10:24:{번호 2자리}`, `evidence_digest` = 번호를 64자 16진으로 — 모양만 맞춘 값.
  */
 public final class DlRankingExamples {
 
@@ -69,7 +70,19 @@ public final class DlRankingExamples {
         a.put("fallback_reason", reason);
         a.put("ml_rank", mlRank);
         a.put("fused_rank", fusedRank);
+        a.put("reference_ts", referenceTs(date, seq));
+        a.put("evidence_digest", evidenceDigest(seq));
         return a;
+    }
+
+    /** 예시 경보 기준 시각 — `YYYY-MM-DDTHH:MM:SS`. */
+    public static String referenceTs(LocalDate date, int seq) {
+        return String.format("%sT10:24:%02d", date, seq);
+    }
+
+    /** 예시 경보 근거 digest — 소문자 16진 64자. */
+    public static String evidenceDigest(int seq) {
+        return String.format("%064x", seq);
     }
 
     /** 배열 {@code i} 번째 경보(0부터). */

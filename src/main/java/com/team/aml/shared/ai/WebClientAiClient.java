@@ -30,8 +30,10 @@ import java.text.Normalizer;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.time.format.ResolverStyle;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -950,6 +952,10 @@ public class WebClientAiClient implements AiClient {
             "evidence_transactions", "scored_transactions", "linked_alerts", "ml_only_alerts", "unscored_alerts", "alerts");
     /** 경보 번호 뒤 숫자 — `DisplayNumber.alertNo` 는 6자리 채움, 시퀀스가 커지면 늘어남(bigint 최대 19자리 전까지). */
     private static final Pattern DL_RANKING_ALERT_SEQ = Pattern.compile("[0-9]{6,18}");
+    private static final Pattern REFERENCE_TS_PATTERN =
+            Pattern.compile("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$");
+    private static final DateTimeFormatter REFERENCE_TS_FORMAT =
+            DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss").withResolverStyle(ResolverStyle.STRICT);
 
     /**
      * ML+DL 조사 순위 응답 확인 (규약 6절 = AI `dl_ranking.py` 규칙 + 보낸 날짜 대조, SCRUM-376). DB 는 안 본다.
@@ -958,6 +964,7 @@ public class WebClientAiClient implements AiClient {
      *    `scored_transactions` ≤ `evidence_transactions`, `alerts` 1건 이상
      *  - 경보: 번호 `ALT-{보낸 날짜}-` + 숫자 6~18자리·중복 없음, 룰 빈 값 아님, 1 ≤ 근거 ≤ `evidence_transactions`,
      *    0 ≤ 연결 ≤ min(근거, `scored_transactions`), 점수 null 또는 유한 0~1
+     *  - `reference_ts` 는 초까지 있는 실제 날짜·시각, `evidence_digest` 는 소문자 16진 64자
      *  - ML: 점수 null ⇔ `ML_UNSCORED` ⇔ 두 순위 null. 점수 있으면 실패 코드 null, 없으면 빈 값 아닌 문자열
      *  - DL: ML 있는 경보는 이유 null ⇔ `dl_score` 있음 ⇔ 근거 다 연결. `ML_UNSCORED` 는 `dl_score` 있음 ⇔ 근거 다 연결
      *    (AI 는 ML 없는 경보에도 DL 점수를 채운다 — ★A ④-1)
@@ -1007,6 +1014,19 @@ public class WebClientAiClient implements AiClient {
             }
             JsonNode rule = a.get("rule_id");
             if (rule == null || !rule.isTextual() || rule.textValue().isBlank()) throw badRanking("rule_id");
+            JsonNode reference = a.path("reference_ts");
+            if (!reference.isTextual() || !REFERENCE_TS_PATTERN.matcher(reference.textValue()).matches()) {
+                throw badRanking("reference_ts");
+            }
+            try {
+                LocalDateTime.parse(reference.textValue(), REFERENCE_TS_FORMAT);
+            } catch (DateTimeParseException e) {
+                throw badRanking("reference_ts");
+            }
+            JsonNode digest = a.path("evidence_digest");
+            if (!digest.isTextual() || !SHA256_HEX.matcher(digest.textValue()).matches()) {
+                throw badRanking("evidence_digest");
+            }
             int evidence = rankingCount(a.get("evidence_count"), "evidence_count");
             if (evidence < 1 || evidence > evidenceTransactions) throw badRanking("evidence_count");
             int dlLinked = rankingCount(a.get("dl_linked"), "dl_linked");

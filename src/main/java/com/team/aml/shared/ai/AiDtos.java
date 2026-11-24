@@ -257,7 +257,7 @@ public final class AiDtos {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record DlRankedAlert(String alertId, String ruleId, Double mlScore, String mlFailureCode, Double dlScore,
                                 int evidenceCount, int dlLinked, DlFallbackReason fallbackReason, Integer mlRank,
-                                Integer fusedRank) {}
+                                Integer fusedRank, String referenceTs, String evidenceDigest) {}
 
     /**
      * GET /v1/dl-rankings/{scan_date} 응답 (규약 6절 v0.4, AI `ReviewRanking`, SCRUM-376). 스캔 하루치 경보 전부,

@@ -6,6 +6,7 @@ import com.team.aml.detection.application.DlRankingResult.Reason;
 import com.team.aml.detection.application.DlRankingResult.Unavailable;
 import com.team.aml.detection.domain.DlRankingAlertRow;
 import com.team.aml.detection.domain.DlRankingRepository;
+import com.team.aml.detection.domain.EvidenceDigest;
 import com.team.aml.shared.ai.AiClient;
 import com.team.aml.shared.ai.AiClientException;
 import com.team.aml.shared.ai.AiDtos.DlRankedAlert;
@@ -18,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,7 +35,7 @@ import java.util.Objects;
  *       DB 읽기는 쿼리 하나(한 문장 = 한 스냅샷)</li>
  *   <li>예외 안 나감은 AI 호출·대조 쪽 범위. AI 가 던진 예외는 전부 {@link Reason#AI_UNAVAILABLE}.
  *       <b>DB 예외는 그대로 던진다</b> — 순위가 없는 것과 DB 가 죽은 것을 같은 "조회 불가"로 숨기지 않게</li>
- *   <li>이유는 집합 → 룰 → 모델 → 점수 순으로 보고 처음 하나. `alert_no` 는 전역 시퀀스라 처음 스캔이 아니면
+ *   <li>이유는 집합 → 룰 → 모델 → 점수 → 기준 시각 → 근거 순으로 보고 처음 하나. `alert_no` 는 전역 시퀀스라 처음 스캔이 아니면
  *       같은 건수여도 번호가 밀린다 — 그래서 집합을 먼저 본다</li>
  *   <li>저장·캐시 없음. 채점·CasePolicy·케이스 생성에서 부르지 않는다. 로그는 날짜·건수·이유·시간만</li>
  * </ul>
@@ -42,6 +44,7 @@ import java.util.Objects;
 public class GetDlRanking {
 
     private static final Logger log = LoggerFactory.getLogger(GetDlRanking.class);
+    private static final DateTimeFormatter REFERENCE_TS_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
     /** DB `score`(numeric) 와 응답 `ml_score` 허용 차 — 십진수로 비교(정확히 1e-6 은 통과). */
     static final BigDecimal SCORE_TOLERANCE = new BigDecimal("0.000001");
@@ -83,7 +86,7 @@ public class GetDlRanking {
         return new Available(scanDate, response.snapshotSha256(), response.mlModel(), response.dlModel(), ranks);
     }
 
-    /** 집합 → 룰 → 모델 → 점수. 단계마다 경보 전부를 본 뒤 다음 단계로. 다 맞으면 null. */
+    /** 단계마다 경보 전부를 본 뒤 다음 단계로. 다 맞으면 null. */
     private static Reason firstMismatch(DlRankingResponse response, List<DlRankingAlertRow> rows) {
         Map<String, DlRankingAlertRow> byNo = new HashMap<>();
         for (DlRankingAlertRow row : rows) {
@@ -111,6 +114,14 @@ public class GetDlRanking {
                     && row.score().subtract(BigDecimal.valueOf(a.mlScore())).abs().compareTo(SCORE_TOLERANCE) > 0) {
                 return Reason.SCORE_MISMATCH;
             }
+        }
+        for (DlRankedAlert a : alerts) {
+            DlRankingAlertRow row = byNo.get(a.alertId());
+            if (!row.referenceTs().format(REFERENCE_TS_FORMAT).equals(a.referenceTs())) return Reason.REFERENCE_MISMATCH;
+        }
+        for (DlRankedAlert a : alerts) {
+            DlRankingAlertRow row = byNo.get(a.alertId());
+            if (!EvidenceDigest.of(row.evidence()).equals(a.evidenceDigest())) return Reason.EVIDENCE_MISMATCH;
         }
         return null;
     }

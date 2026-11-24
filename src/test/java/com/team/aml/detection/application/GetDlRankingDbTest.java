@@ -27,12 +27,18 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.MountableFile;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -44,6 +50,8 @@ import static org.mockito.Mockito.when;
 /**
  * ML+DL 조사 순위 대조 조회 (SCRUM-376) — 실제 PostgreSQL. AI 는 @MockBean 으로 테스트마다 응답을 정한다.
  * 경보는 지울 수 없어 테스트마다 날짜를 새로 쓴다(경보 번호 `ALT-{날짜}-…` 도 날짜별로 따로).
+ * 기준 시각·근거(SCRUM-415): `Day.alert` 가 근거 거래를 같이 넣고 그 경보의 기준 시각·digest 를 {@link #IDENT} 에 적어 두면,
+ * 응답 헬퍼(`linked`·`incomplete`·`unscored`)가 같은 값을 채운다. 기대 digest 는 EvidenceDigest 를 쓰지 않고 여기서 따로 계산.
  */
 @Testcontainers
 @SpringBootTest
@@ -54,6 +62,16 @@ class GetDlRankingDbTest {
     private static final AtomicInteger DAY = new AtomicInteger();
     private static final String MODEL = "xgb-hi-medium-r04-event-c2-31-v1";
     private static final String SHA = "a".repeat(64);
+    private static final String FILE = "HI-Test_Trans.csv";
+    private static final DateTimeFormatter REF_TEXT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+
+    /** 경보 번호 → DB 에 넣은 기준 시각·근거의 응답 값. DB 에 없는 번호는 {@link #NOT_IN_DB}. */
+    private static final Map<String, Ident> IDENT = new ConcurrentHashMap<>();
+    private static final Ident NOT_IN_DB = new Ident("2000-01-01T00:00:00", "f".repeat(64));
+
+    private record Ident(String referenceTs, String evidenceDigest) {}
+
+    private record Src(String file, long row) {}
 
     @Container
     @ServiceConnection
@@ -292,6 +310,123 @@ class GetDlRankingDbTest {
         assertUnavailable(d, Reason.RULE_MISMATCH);
     }
 
+    // ---- 기준 시각·근거 (SCRUM-415) ----
+
+    @Test
+    void 기준_시각만_1초_다르면_REFERENCE_MISMATCH() {
+        Day d = newDay();
+        String r = d.rule("R02_FAN_IN");
+        d.score(d.alert(1, r, d.date.atTime(0, 29), List.of(new Src(FILE, 11))), "0.5", MODEL);
+        DlRankedAlert a = linked(d.no(1), r, 0.5, 0.5, 1, 1);
+        respond(d, List.of(withIdent(a, d.date + "T00:29:01", a.evidenceDigest())));
+
+        assertUnavailable(d, Reason.REFERENCE_MISMATCH);
+    }
+
+    @Test
+    void 같은_룰_같은_점수인_두_경보의_근거를_서로_바꾸면_EVIDENCE_MISMATCH() {
+        Day d = newDay();
+        String r = d.rule("R01_FAN_OUT");
+        d.score(d.alert(1, r, d.date.atStartOfDay(), List.of(new Src(FILE, 101), new Src(FILE, 102))), "0.5", MODEL);
+        d.score(d.alert(2, r, d.date.atStartOfDay(), List.of(new Src(FILE, 201), new Src(FILE, 202))), "0.5", MODEL);
+        DlRankedAlert a1 = linked(d.no(1), r, 0.5, 0.5, 1, 1);
+        DlRankedAlert a2 = linked(d.no(2), r, 0.5, 0.5, 2, 2);
+        respond(d, List.of(withIdent(a1, a1.referenceTs(), a2.evidenceDigest()),
+                withIdent(a2, a2.referenceTs(), a1.evidenceDigest())));
+
+        assertUnavailable(d, Reason.EVIDENCE_MISMATCH);
+    }
+
+    @Test
+    void 근거_한_행만_다르면_EVIDENCE_MISMATCH() {
+        Day d = newDay();
+        String r = d.rule("R02_FAN_IN");
+        d.score(d.alert(1, r, d.date.atStartOfDay(), List.of(new Src(FILE, 11), new Src(FILE, 12), new Src(FILE, 13))),
+                "0.5", MODEL);
+        DlRankedAlert a = linked(d.no(1), r, 0.5, 0.5, 1, 1);
+        respond(d, List.of(withIdent(a, a.referenceTs(), sha256(FILE + ":11\n" + FILE + ":12\n" + FILE + ":14"))));
+
+        assertUnavailable(d, Reason.EVIDENCE_MISMATCH);
+    }
+
+    @Test
+    void 정상_9_7_점검_001157_근거_18행이_DB_쿼리를_거쳐도_AI_와_같은_digest() {
+        // 행번호 정수 정렬과 문자열 정렬이 갈리는 경보(318130 < 1639618). 기대값은 AI 예시 그대로
+        long[] rows = {318130L, 1639618L, 1639619L, 1892453L, 1892455L, 1984627L, 1984628L, 1984629L, 2012558L,
+                2012559L, 2073417L, 2073418L, 2073420L, 2196201L, 2196203L, 2821099L, 3123487L, 3469218L};
+        List<Src> evidence = new ArrayList<>();
+        for (int i = rows.length - 1; i >= 0; i--) {
+            evidence.add(new Src("HI-Small_Trans.csv", rows[i]));   // 넣는 순서도 거꾸로
+        }
+        Day d = newDay();
+        String r = d.rule("R04_CYCLE");
+        d.score(d.alert(1157, r, d.date.atTime(10, 24), evidence), "0.9227272272109985", MODEL);
+        respond(d, List.of(new DlRankedAlert(d.no(1157), r, 0.9227272272109985, null, 0.5, 18, 18, null, 1, 1,
+                d.date + "T10:24:00", "099b951a700949628505e7f269b064b514727218dc37004b73df2196da6516e8")));
+
+        assertThat(getDlRanking.execute(d.date)).isInstanceOf(Available.class);
+    }
+
+    @Test
+    void 정상_근거_파일_둘_행번호_자릿수_다름_거래_공유도_경보당_한_줄로_Available() {
+        Day d = newDay();
+        String r = d.rule("R02_FAN_IN");
+        long a1 = d.alert(1, r, d.date.atTime(3, 0), List.of(new Src("B.csv", 2), new Src("A.csv", 10), new Src("A.csv", 9)));
+        long a2 = d.alert(2, r, d.date.atTime(4, 0), List.of(new Src("A.csv", 10)));   // A.csv:10 은 두 경보가 같이 씀
+        d.score(a1, "0.9", MODEL);
+        d.score(a2, "0.8", MODEL);
+        DlRankedAlert x1 = linked(d.no(1), r, 0.9, 0.5, 1, 1);
+        assertThat(x1.evidenceDigest()).isEqualTo(sha256("A.csv:9\nA.csv:10\nB.csv:2"));   // fixture 가 기대 규칙대로인지
+        respond(d, List.of(x1, linked(d.no(2), r, 0.8, 0.5, 2, 2)));
+
+        assertThat(repository.findByBatchDate(d.date)).hasSize(2)
+                .satisfiesExactly(row -> assertThat(row.evidence()).hasSize(3), row -> assertThat(row.evidence()).hasSize(1));
+        assertThat(getDlRanking.execute(d.date)).isInstanceOf(Available.class);
+    }
+
+    @Test
+    void 경계_DB_기준_시각의_초_아래_값은_버리고_비교해_Available() {
+        Day d = newDay();
+        String r = d.rule("R02_FAN_IN");
+        d.score(d.alert(1, r, d.date.atTime(0, 29, 0, 500_000_000), List.of(new Src(FILE, 11))), "0.5", MODEL);
+        DlRankedAlert a = linked(d.no(1), r, 0.5, 0.5, 1, 1);
+        assertThat(a.referenceTs()).isEqualTo(d.date + "T00:29:00");
+        respond(d, List.of(a));
+
+        assertThat(getDlRanking.execute(d.date)).isInstanceOf(Available.class);
+    }
+
+    @Test
+    void 경계_DB_경보에_근거가_없으면_EVIDENCE_MISMATCH() {
+        Day d = newDay();
+        String r = d.rule("R02_FAN_IN");
+        d.score(d.alert(1, r, d.date.atStartOfDay(), List.of()), "0.5", MODEL);
+        DlRankedAlert a = linked(d.no(1), r, 0.5, 0.5, 1, 1);
+        respond(d, List.of(withIdent(a, a.referenceTs(), sha256(FILE + ":1"))));
+
+        assertUnavailable(d, Reason.EVIDENCE_MISMATCH);
+    }
+
+    @Test
+    void 여러_이유가_겹치면_점수가_기준_시각보다_기준_시각이_근거보다_먼저() {
+        Day d = newDay();
+        String r = d.rule("R02_FAN_IN");
+        d.score(d.alert(1, r), "0.1", MODEL);
+        DlRankedAlert a = linked(d.no(1), r, 0.5, 0.5, 1, 1);
+        respond(d, List.of(withIdent(a, d.date + "T00:00:01", "0".repeat(64))));
+        assertUnavailable(d, Reason.SCORE_MISMATCH);
+
+        Day e = newDay();
+        String r2 = e.rule("R02_FAN_IN");
+        e.score(e.alert(1, r2), "0.5", MODEL);
+        e.score(e.alert(2, r2), "0.5", MODEL);
+        DlRankedAlert b1 = linked(e.no(1), r2, 0.5, 0.5, 1, 1);
+        DlRankedAlert b2 = linked(e.no(2), r2, 0.5, 0.5, 2, 2);
+        respond(e, List.of(withIdent(b1, b1.referenceTs(), "0".repeat(64)),     // 앞 경보 근거 틀림
+                withIdent(b2, e.date + "T00:00:01", b2.evidenceDigest())));       // 뒤 경보 기준 시각 틀림
+        assertUnavailable(e, Reason.REFERENCE_MISMATCH);
+    }
+
     // ---- AI ----
 
     @Test
@@ -350,16 +485,48 @@ class GetDlRankingDbTest {
     }
 
     private static DlRankedAlert linked(String no, String rule, double ml, double dl, int mlRank, int fusedRank) {
-        return new DlRankedAlert(no, rule, ml, null, dl, 1, 1, null, mlRank, fusedRank);
+        Ident id = ident(no);
+        return new DlRankedAlert(no, rule, ml, null, dl, 1, 1, null, mlRank, fusedRank, id.referenceTs(),
+                id.evidenceDigest());
     }
 
     private static DlRankedAlert incomplete(String no, String rule, double ml, int rank) {
-        return new DlRankedAlert(no, rule, ml, null, null, 2, 1, DlFallbackReason.INCOMPLETE_DL_EVIDENCE, rank, rank);
+        Ident id = ident(no);
+        return new DlRankedAlert(no, rule, ml, null, null, 2, 1, DlFallbackReason.INCOMPLETE_DL_EVIDENCE, rank, rank,
+                id.referenceTs(), id.evidenceDigest());
     }
 
     private static DlRankedAlert unscored(String no, String rule, Double dl) {
+        Ident id = ident(no);
         return new DlRankedAlert(no, rule, null, "TRANSACTION_NOT_FOUND", dl, 1, dl == null ? 0 : 1,
-                DlFallbackReason.ML_UNSCORED, null, null);
+                DlFallbackReason.ML_UNSCORED, null, null, id.referenceTs(), id.evidenceDigest());
+    }
+
+    private static Ident ident(String no) {
+        return IDENT.getOrDefault(no, NOT_IN_DB);
+    }
+
+    /** 같은 경보에 기준 시각·digest 만 바꾼 응답 한 건. */
+    private static DlRankedAlert withIdent(DlRankedAlert a, String referenceTs, String evidenceDigest) {
+        return new DlRankedAlert(a.alertId(), a.ruleId(), a.mlScore(), a.mlFailureCode(), a.dlScore(), a.evidenceCount(),
+                a.dlLinked(), a.fallbackReason(), a.mlRank(), a.fusedRank(), referenceTs, evidenceDigest);
+    }
+
+    /** 기대 digest — (파일명 문자열, 행번호 정수) 오름차순 `파일:행` 을 `\n` 으로 잇고 SHA-256. EvidenceDigest 와 따로. */
+    private static String expectedDigest(List<Src> evidence) {
+        List<String> lines = evidence.stream()
+                .sorted(Comparator.comparing(Src::file).thenComparingLong(Src::row))
+                .map(e -> e.file() + ":" + e.row())
+                .toList();
+        return sha256(String.join("\n", lines));
+    }
+
+    private static String sha256(String s) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private Day newDay() {
@@ -371,6 +538,8 @@ class GetDlRankingDbTest {
         final LocalDate date;
         final List<Long> batchRuns = new ArrayList<>();
         final Map<String, Long> ruleRefs = new HashMap<>();
+        final Map<String, Long> files = new HashMap<>();
+        final Map<Src, Long> transactions = new HashMap<>();
 
         Day(LocalDate date) {
             this.date = date;
@@ -390,7 +559,13 @@ class GetDlRankingDbTest {
             return ruleId;
         }
 
+        /** 기본 경보 — 기준 시각 그날 00:00:00, 근거 거래 1건(새 행번호). */
         long alert(int n, String ruleId) {
+            return alert(n, ruleId, date.atStartOfDay(), List.of(new Src(FILE, SEQUENCE.incrementAndGet())));
+        }
+
+        /** 근거 거래를 같이 넣는다. 같은 날 같은 (파일, 행)은 같은 거래 하나를 같이 쓴다. 응답 값은 {@link #IDENT} 에. */
+        long alert(int n, String ruleId, LocalDateTime reference, List<Src> evidence) {
             Long ruleRefId = ruleRefs.get(ruleId);
             if (batchRuns.isEmpty()) {
                 batchRuns.add(jdbc.queryForObject("""
@@ -398,12 +573,33 @@ class GetDlRankingDbTest {
                         values ('RULE_SCAN', ?, 'RUNNING', 1) returning id""", Long.class, date));
             }
             long seq = SEQUENCE.incrementAndGet();
-            return jdbc.queryForObject("""
+            long alertId = jdbc.queryForObject("""
                     insert into ops.alerts(alert_no, batch_run_id, rule_ref_id, account_key, entity_id, window_start,
                                            window_end, reference_ts, rule_facts, batch_date)
                     values (?, ?, ?, ?, null, ?, ?, ?, '{}'::jsonb, ?) returning id""", Long.class,
-                    no(n), batchRuns.get(0), ruleRefId, "10_DL" + seq, date.atStartOfDay().minusDays(1),
-                    date.atStartOfDay(), date.atStartOfDay(), date);
+                    no(n), batchRuns.get(0), ruleRefId, "10_DL" + seq, reference.minusDays(1),
+                    reference, reference, date);
+            for (Src e : evidence) {
+                jdbc.update("insert into ops.alert_transactions(alert_id, transaction_id) values (?, ?)",
+                        alertId, transaction(e, reference));
+            }
+            IDENT.put(no(n), new Ident(reference.format(REF_TEXT), expectedDigest(evidence)));
+            return alertId;
+        }
+
+        private long transaction(Src e, LocalDateTime reference) {
+            Long fileId = files.computeIfAbsent(e.file(), name -> jdbc.queryForObject(
+                    "insert into ops.source_files(file_name, file_hash) values (?, ?) returning id", Long.class,
+                    name, sha256(name + "|" + date + "|" + SEQUENCE.incrementAndGet())));
+            return transactions.computeIfAbsent(e, k -> jdbc.queryForObject("""
+                    insert into ops.transactions(
+                        ts, from_bank_id, from_bank_id_raw, from_account_no, from_account_key,
+                        to_bank_id, to_bank_id_raw, to_account_no, to_account_key,
+                        amount_received, currency_received, amount_paid, currency_paid,
+                        payment_format, is_laundering, is_self_transfer, source_file_id, source_row_number)
+                    values (?, '10', '010', 'A1', '10_A1', '20', '020', 'B1', '20_B1',
+                            100.00, 'US Dollar', 100.00, 'US Dollar', 'ACH', false, false, ?, ?)
+                    returning transaction_id""", Long.class, reference.minusHours(1), fileId, k.row()));
         }
 
         void failed(long alertId, String code) {

@@ -153,6 +153,8 @@ class WebClientDlRankingTest {
         assertThat(moved.fusedRank()).isEqualTo(3);
         assertThat(moved.evidenceCount()).isEqualTo(1);
         assertThat(moved.dlLinked()).isEqualTo(1);
+        assertThat(moved.referenceTs()).isEqualTo("2022-09-07T10:24:06");   // SCRUM-415 — 문자열 그대로
+        assertThat(moved.evidenceDigest()).isEqualTo(DlRankingExamples.evidenceDigest(6));
 
         assertThat(writer.rows).hasSize(1);
         AiCallLog row = writer.rows.get(0);
