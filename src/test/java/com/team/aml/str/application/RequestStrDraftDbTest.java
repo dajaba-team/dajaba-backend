@@ -52,7 +52,7 @@ import static org.mockito.Mockito.when;
  * 경보·거래·점수는 detection GetAlertForDraft 가 읽는 그대로 만든다(RefreshCaseSummaryDbTest 와 같은 도우미).
  */
 @Testcontainers
-@SpringBootTest
+@SpringBootTest(properties = "aml.str.draft.generate-after-request=false")   // 비동기 뒤쪽은 GenerateStrDraft 를 직접 불러 본다
 @ActiveProfiles("test")
 class RequestStrDraftDbTest {
 
@@ -80,6 +80,7 @@ class RequestStrDraftDbTest {
 
     @MockBean AiClient aiClient;
     @Autowired RequestStrDraft requestDraft;
+    @Autowired GenerateStrDraft generateDraft;
     @Autowired StrDraftRequestRepository requests;
     @Autowired CaseRepository cases;
     @Autowired CaseHistoryRepository histories;
@@ -242,6 +243,142 @@ class RequestStrDraftDbTest {
         assertThat(jdbc.queryForObject("select status from ops.str_draft_requests where draft_id = ?", String.class,
                 draftId(created.draftNo()))).isEqualTo("SUCCEEDED");
         assertThat(cases.findById(f.c.getId()).orElseThrow().getStatus()).isEqualTo(CaseStatus.DRAFTED);
+    }
+
+    // ── 비동기 (S1 202 + str.draft.generate) ─────────────────
+
+    // 8
+    @Test
+    void 비동기_submit은_요청_기록만_남기고_AI를_부르지_않는다() {
+        Fixture f = escalatedCase(true);
+        loginAs(inv);
+
+        RequestStrDraft.Accepted accepted = requestDraft.submit(f.c.getCaseNo(), f.c.getVersion());
+
+        assertThat(accepted.caseNo()).isEqualTo(f.c.getCaseNo());
+        assertThat(accepted.draftNo()).matches("DRF-\\d{6,}");
+        assertThat(accepted.requestStatus()).isEqualTo("REQUESTED");
+        assertThat(requestStatus(draftId(accepted.draftNo()))).isEqualTo("REQUESTED");
+        verify(aiClient, never()).createDraft(any());
+        assertThat(cases.findById(f.c.getId()).orElseThrow().getStatus()).isEqualTo(CaseStatus.ESCALATED);
+    }
+
+    // 9
+    @Test
+    void 비동기_뒤에서_로그인_없이_만들어도_요청한_조사역으로_저장된다() {   // 큐 받는 쪽·실행기 스레드엔 세션이 없다
+        Fixture f = escalatedCase(true);
+        ArgumentCaptor<StrDraftRequest> sent = ArgumentCaptor.forClass(StrDraftRequest.class);
+        when(aiClient.createDraft(sent.capture())).thenAnswer(i -> ok(i.getArgument(0)));
+        loginAs(inv);
+        long draftId = draftId(requestDraft.submit(f.c.getCaseNo(), f.c.getVersion()).draftNo());
+        SecurityContextHolder.clearContext();
+
+        assertThat(generateDraft.execute(draftId)).isTrue();
+
+        assertThat(sent.getValue().draftId()).isEqualTo("DRF-" + String.format("%06d", draftId));   // 저장한 본문 그대로
+        assertThat(sent.getValue().evidenceTransactionIds()).containsExactly(f.tx1, f.tx2);
+        assertThat(requestStatus(draftId)).isEqualTo("SUCCEEDED");
+        assertThat(cases.findById(f.c.getId()).orElseThrow().getStatus()).isEqualTo(CaseStatus.DRAFTED);
+        assertThat(jdbc.queryForObject("select created_by from ops.case_history where case_id = ? and action = 'ATTACH_DRAFT' "
+                + "order by id desc limit 1", Long.class, f.c.getId())).isEqualTo(inv);
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();      // 끝나면 원래대로
+    }
+
+    // 10
+    @Test
+    void 비동기_기다리는_사이_케이스_버전이_올라도_저장한다() {   // 메모 저장 등 — 요청 때 버전과 비교하지 않는다
+        Fixture f = escalatedCase(true);
+        when(aiClient.createDraft(any())).thenAnswer(i -> ok(i.getArgument(0)));
+        loginAs(inv);
+        long draftId = draftId(requestDraft.submit(f.c.getCaseNo(), f.c.getVersion()).draftNo());
+        jdbc.update("update ops.cases set version = version + 1 where id = ?", f.c.getId());
+        SecurityContextHolder.clearContext();
+
+        assertThat(generateDraft.execute(draftId)).isTrue();
+
+        assertThat(requestStatus(draftId)).isEqualTo("SUCCEEDED");
+        assertThat(dbVersion(f.c.getId())).isGreaterThan(f.c.getVersion() + 1);
+    }
+
+    // 11
+    @Test
+    void 비동기_AI_오류면_FAILED이고_케이스는_그대로() {
+        Fixture f = escalatedCase(true);
+        when(aiClient.createDraft(any())).thenThrow(new AiClientException("AI_TIMEOUT", "AI 응답 시간 초과"));
+        loginAs(inv);
+        long draftId = draftId(requestDraft.submit(f.c.getCaseNo(), f.c.getVersion()).draftNo());
+        SecurityContextHolder.clearContext();
+
+        assertThatThrownBy(() -> generateDraft.execute(draftId)).isInstanceOf(AiClientException.class);
+
+        assertThat(requestStatus(draftId)).isEqualTo("FAILED");
+        assertThat(draftCount(f.c.getId())).isZero();
+        assertThat(cases.findById(f.c.getId()).orElseThrow().getStatus()).isEqualTo(CaseStatus.ESCALATED);
+    }
+
+    // 12
+    @Test
+    void 비동기_REQUESTED가_아니면_건너뛴다_같은_메시지가_두_번_와도_초안_하나() {
+        Fixture f = escalatedCase(true);
+        when(aiClient.createDraft(any())).thenAnswer(i -> ok(i.getArgument(0)));
+        loginAs(inv);
+        long draftId = draftId(requestDraft.submit(f.c.getCaseNo(), f.c.getVersion()).draftNo());
+        SecurityContextHolder.clearContext();
+        generateDraft.execute(draftId);
+
+        assertThat(generateDraft.execute(draftId)).isFalse();
+
+        verify(aiClient).createDraft(any());                                           // 한 번만
+        assertThat(draftCount(f.c.getId())).isEqualTo(1);
+    }
+
+    // 13
+    @Test
+    void 비동기_AI가_같은_초안을_아직_만드는_중이면_실패로_남기지_않는다() {   // 큐가 잠시 뒤 다시 (미결 21)
+        Fixture f = escalatedCase(true);
+        when(aiClient.createDraft(any())).thenThrow(new AiClientException("DRAFT_IN_PROGRESS", "생성 중", java.util.Map.of(), 409));
+        loginAs(inv);
+        long draftId = draftId(requestDraft.submit(f.c.getCaseNo(), f.c.getVersion()).draftNo());
+        SecurityContextHolder.clearContext();
+
+        assertThatThrownBy(() -> generateDraft.execute(draftId)).isInstanceOf(AiClientException.class);
+
+        assertThat(requestStatus(draftId)).isEqualTo("REQUESTED");
+    }
+
+    // 14
+    @Test
+    void 비동기_기다리는_사이_담당이_바뀌면_FAILED이고_초안은_없다() {
+        Fixture f = escalatedCase(true);
+        when(aiClient.createDraft(any())).thenAnswer(i -> ok(i.getArgument(0)));
+        loginAs(inv);
+        long draftId = draftId(requestDraft.submit(f.c.getCaseNo(), f.c.getVersion()).draftNo());
+        jdbc.update("update ops.cases set assignee_id = ? where id = ?", inv2, f.c.getId());
+        SecurityContextHolder.clearContext();
+
+        assertThatThrownBy(() -> generateDraft.execute(draftId)).isInstanceOf(NotAssigneeException.class);
+
+        assertThat(requestStatus(draftId)).isEqualTo("FAILED");
+        assertThat(draftCount(f.c.getId())).isZero();
+    }
+
+    // 15
+    @Test
+    void 비동기_재시도를_다_쓰거나_시작을_못_하면_FAILED로_닫아_다음_요청을_막지_않는다() {
+        Fixture f = escalatedCase(true);
+        loginAs(inv);
+        long draftId = draftId(requestDraft.submit(f.c.getCaseNo(), f.c.getVersion()).draftNo());
+
+        assertThat(generateDraft.fail(draftId, "QUEUE_GIVE_UP")).isTrue();
+        assertThat(generateDraft.fail(draftId, "QUEUE_GIVE_UP")).isFalse();             // 이미 끝난 요청은 그대로
+
+        assertThat(requestStatus(draftId)).isEqualTo("FAILED");
+        RequestStrDraft.Accepted again = requestDraft.submit(f.c.getCaseNo(), f.c.getVersion());   // 409 아님
+        assertThat(requestStatus(draftId(again.draftNo()))).isEqualTo("REQUESTED");
+    }
+
+    private String requestStatus(long draftId) {
+        return jdbc.queryForObject("select status from ops.str_draft_requests where draft_id = ?", String.class, draftId);
     }
 
     // ── 도우미 ────────────────────────────────────────────────

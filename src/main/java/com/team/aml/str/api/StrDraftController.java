@@ -54,14 +54,21 @@ public class StrDraftController {
         this.searchReferences = searchReferences;
     }
 
-    @Operation(summary = "STR 초안 생성·재생성 (최대 90초)",
+    @Operation(summary = "STR 초안 생성·재생성",
             description = "담당만(403 NOT_ASSIGNEE), ESCALATED·DRAFTED·보완 요청 반려에서만(409 INVALID_CASE_TRANSITION). "
-                    + "만드는 중이면 409 DRAFT_IN_PROGRESS, version 다르면 409 CONCURRENT_UPDATE, AI 실패는 502")
+                    + "만드는 중이면 409 DRAFT_IN_PROGRESS, version 다르면 409 CONCURRENT_UPDATE. "
+                    + "aml.str.draft.async=false(기본): AI 를 최대 90초 기다려 201 {case_no, case_status, case_version, draft_no}, AI 실패는 502. "
+                    + "true: 요청 기록만 남기고 바로 202 {case_no, draft_no, request_status: REQUESTED} — AI 호출·저장은 "
+                    + "str.draft.generate 큐(꺼지면 앱 안 실행기)에서")
     @PostMapping("/cases/{caseNo}/str-drafts")
-    @ResponseStatus(HttpStatus.CREATED)
-    public StrDraftCreatedResponse create(@PathVariable String caseNo,
-                                          @Valid @RequestBody CreateStrDraftRequest request) {
-        return StrDraftCreatedResponse.from(requestStrDraft.execute(caseNo, request.caseVersion()));
+    public ResponseEntity<?> create(@PathVariable String caseNo,
+                                    @Valid @RequestBody CreateStrDraftRequest request) {
+        if (requestStrDraft.isAsync()) {
+            return ResponseEntity.status(HttpStatus.ACCEPTED)
+                    .body(StrDraftAcceptedResponse.from(requestStrDraft.submit(caseNo, request.caseVersion())));
+        }
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(StrDraftCreatedResponse.from(requestStrDraft.execute(caseNo, request.caseVersion())));
     }
 
     @Operation(

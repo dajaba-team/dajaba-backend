@@ -62,11 +62,15 @@ class MessagingConfigTest {
             String strJson = new String(converter.toMessage(new StrReportPdfMessage(73), new MessageProperties()).getBody(),
                     StandardCharsets.UTF_8);
             assertThat(strJson).isEqualTo("{\"draft_id\":73}");
+            String draftJson = new String(converter.toMessage(new StrDraftMessage(45), new MessageProperties()).getBody(),
+                    StandardCharsets.UTF_8);
+            assertThat(draftJson).isEqualTo("{\"draft_id\":45}");
         });
     }
 
     @Test
     void 정상_큐_이름은_규칙을_따른다() {
-        assertThat(JobQueues.ALL).allMatch(q -> q.startsWith("batch.") || q.startsWith("case.") || q.startsWith("str.pdf."));
+        assertThat(JobQueues.ALL).allMatch(q -> q.startsWith("batch.") || q.startsWith("case.") || q.startsWith("str.pdf.")
+                || q.startsWith("str.draft."));
     }
 }
