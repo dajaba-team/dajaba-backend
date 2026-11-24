@@ -134,6 +134,11 @@ aml:
       storage-dir: ${AML_STR_PDF_DIR:./data/str-reports}
       generate-after-report: true          # 모의 제출(P4)·다시 만들기(P5) 커밋 뒤 뒤에서 만들기. false 는 상태를 그대로 보는 테스트용
       stale-pending-after: 10m             # PENDING 이 이만큼 그대로면 만드는 도중 죽은 것으로 보고 P5 다시 만들기를 받는다(보통 1~2초)
+    # STR 초안 생성(S1) 비동기 — 켜면 202 + str.draft.generate 큐(AML_RABBITMQ_ENABLED 꺼지면 앱 안 실행기). 화면이 202 를 받을 준비가 되면 켠다
+    draft:
+      async: ${AML_STR_DRAFT_ASYNC:false}
+      stale-after: 5m                      # 비동기일 때 REQUESTED 가 이보다 오래되면 다음 요청이 EXPIRED 로 닫는다(큐 대기 포함)
+      generate-after-request: true         # false 는 요청 기록(REQUESTED)을 그대로 보는 DB 테스트용
 
 springdoc:
   api-docs:

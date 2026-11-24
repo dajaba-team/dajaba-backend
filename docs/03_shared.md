@@ -522,6 +522,7 @@ try {
 | `batch.score` | `BatchRunMessage`(성공한 RULE_SCAN `batch_run_id`) | `RunRuleScan` → `ScoreChainListener` → `ScoreAfterRuleScan`. 못 보내면 `InAppJob` → `ScoreChainInApp`(앱 실행기) | 준혁(SCRUM-349) |
 | `batch.open-cases` | `BatchRunMessage`(SUCCEEDED SCORE_REQUEST `batch_run_id`) | `RequestScores` → `OpenCasesChainListener`(cases) → `OpenCasesAfterScore` → `RequestOpenCases`. 못 보내면 `InAppJob` → `OpenCasesChainInApp` | 준혁(SCRUM-349) |
 | `str.pdf.generate` | `StrReportPdfMessage`(`draft_id`, PDF `PENDING` 커밋 뒤) | `StrReportPdfTrigger` → `StrReportPdfMessageListener` → `GenerateStrReportPdf` | 채영 |
+| `str.draft.generate` | `StrDraftMessage`(`draft_id`, 초안 요청 `REQUESTED` 커밋 뒤 — `aml.str.draft.async=true`일 때만) | `RequestStrDraft.submit` → `StrDraftTrigger` → `StrDraftMessageListener` → `GenerateStrDraft` | 채영 |
 
 **ACK·재시도·DLQ 기본값** (`spring.rabbitmq.listener.simple`)
 
@@ -539,7 +540,7 @@ try {
 
 **자기 큐 붙이는 법** (케이스 생성 `case.open-cases`가 예시)
 
-1. `JobQueues`에 상수 + `ALL`에 한 줄. 이름 규칙 `batch.*`·`case.*`·`str.pdf.*` (`MessagingConfigTest`가 확인).
+1. `JobQueues`에 상수 + `ALL`에 한 줄. 이름 규칙 `batch.*`·`case.*`·`str.pdf.*`·`str.draft.*` (`MessagingConfigTest`가 확인).
 2. 보내는 쪽(application): 작업 행(`batch_runs` 등)을 **먼저 커밋**하고 ID만 보내요. `false`면 기존 동기 경로로.
    ```java
    if (!publisher.publish(JobQueues.CASE_OPEN_CASES, new BatchRunMessage(batchRunId))) {

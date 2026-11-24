@@ -17,8 +17,10 @@ import jakarta.persistence.OptimisticLockException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
@@ -37,6 +39,10 @@ import java.util.List;
  *   <li>SaveStrDraft(한 트랜잭션): 케이스 잠금 → 응답 확인 → 초안·수정본 1번 저장 → 케이스 DRAFTED → 요청 SUCCEEDED.</li>
  *   <li>2·3에서 실패하면 요청 기록을 별도 트랜잭션으로 FAILED — 케이스는 그대로(ESCALATED 등). 원래 예외를 그대로 올린다.</li>
  * </ol>
+ *
+ * <p><b>비동기({@link #submit}, aml.str.draft.async=true)</b> — 1번만 하고 202. 2·3은 커밋 뒤 {@link StrDraftTrigger} 가
+ * {@code str.draft.generate} 큐(꺼지면 앱 안 실행기)로 넘기고 {@link GenerateStrDraft} 가 한다(노션 운영 도구 붙이기 2절, §14).
+ * 오래된 요청 기준은 큐에서 기다리는 시간까지 감안해 aml.str.draft.stale-after(기본 5분)와 동기 기준 중 긴 쪽.
  */
 @Service
 public class RequestStrDraft {
@@ -57,10 +63,14 @@ public class RequestStrDraft {
     private final TransactionTemplate tx;
     /** 이보다 오래된 REQUESTED 는 살아 있는 요청이 아니다 — 서버가 AI 를 기다리다 꺼진 흔적 (#77 리뷰). */
     private final Duration staleAfter;
+    private final StrDraftTrigger trigger;
+    private final boolean async;
 
     public RequestStrDraft(CaseRepository cases, GetAlertForDraft alertForDraft, StrDraftRequestRepository requests,
                            AiClient aiClient, SaveStrDraft saveStrDraft, CurrentUser currentUser, ObjectMapper om,
-                           PlatformTransactionManager transactionManager, AmlProperties props){
+                           PlatformTransactionManager transactionManager, AmlProperties props, StrDraftTrigger trigger,
+                           @Value("${aml.str.draft.async:false}") boolean async,
+                           @Value("${aml.str.draft.stale-after:5m}") Duration asyncStaleAfter){
         this.cases = cases;
         this.alertForDraft = alertForDraft;
         this.requests = requests;
@@ -69,7 +79,30 @@ public class RequestStrDraft {
         this.currentUser = currentUser;
         this.om = om;
         this.tx = new TransactionTemplate(transactionManager);
-        this.staleAfter = Duration.ofSeconds(props.ai().timeoutSeconds()).plus(STALE_MARGIN);
+        // 늘 새 트랜잭션 — submit 은 "반환되면 요청 기록이 커밋돼 있다"를 믿고 작업을 넘긴다. 누가 @Transactional 안에서 부르면
+        // 기본(REQUIRED)은 바깥에 합류해 뒤쪽 작업이 커밋 전 행을 못 보고 건너뛰고, 요청이 REQUESTED 로 남는다(#183 리뷰)
+        this.tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        Duration syncStale = Duration.ofSeconds(props.ai().timeoutSeconds()).plus(STALE_MARGIN);
+        // 비동기면 큐에서 기다리는 시간까지 — 정상으로 기다리는 요청을 다음 요청이 EXPIRED 로 닫지 않게
+        this.staleAfter = async && asyncStaleAfter.compareTo(syncStale) > 0 ? asyncStaleAfter : syncStale;
+        this.trigger = trigger;
+        this.async = async;
+    }
+
+    /** S1 을 202(비동기)로 받을지 — 컨트롤러가 본다. 화면(작업 추적기)이 202 를 받을 준비가 되면 켠다. */
+    public boolean isAsync() {
+        return async;
+    }
+
+    /**
+     * S1 비동기 — 검사·요청 기록(1번)까지만 하고 돌아온다. 검사 실패(404·409·403·409 DRAFT_IN_PROGRESS)는 지금처럼 바로 응답.
+     * 요청 트랜잭션이 커밋된 뒤 작업을 넘긴다. 결과는 요청 기록(str_draft_requests)이 원본이다.
+     */
+    public Accepted submit(String caseNo, long expectedCaseVersion) {
+        long actorId = currentUser.require().userId();
+        Started started = start(caseNo, expectedCaseVersion, actorId);      // REQUIRES_NEW — 부르는 쪽과 상관없이 여기서 커밋됨
+        trigger.submit(started.draftId());
+        return new Accepted(caseNo, DisplayNumber.draftNo(started.draftId()), "REQUESTED");
     }
 
     /**
@@ -174,6 +207,9 @@ public class RequestStrDraft {
      * @param draftNo     DRF-%06d
      */
     public record Created(String caseNo, String caseStatus, long caseVersion, String draftNo) {}
+
+    /** 202 응답 (S1 비동기). requestStatus 는 늘 REQUESTED. */
+    public record Accepted(String caseNo, String draftNo, String requestStatus) {}
 
     private record Started(long caseId, long draftId, AiDtos.StrDraftRequest body) {}
 }

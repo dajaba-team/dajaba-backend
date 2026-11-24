@@ -5,7 +5,7 @@ import java.util.List;
 /**
  * 작업 큐 이름 한곳 (SCRUM-276). 새 큐는 상수 하나 + {@link #ALL}에 한 줄 — {@link RabbitMessagingConfig}가
  * 큐·DLQ({@code <큐>.dlq})·바인딩을 선언한다. 라우팅 키 = 큐 이름.
- * 이름 규칙(README 운영 도구 표): 배치 잇기 {@code batch.*} · 케이스 {@code case.*} · 확정본 PDF {@code str.pdf.*}.
+ * 이름 규칙(README 운영 도구 표): 배치 잇기 {@code batch.*} · 케이스 {@code case.*} · 확정본 PDF {@code str.pdf.*} · STR 초안 {@code str.draft.*}.
  */
 public final class JobQueues {
 
@@ -27,8 +27,12 @@ public final class JobQueues {
     /** STR 확정본 PDF 생성 — 메시지 {@link StrReportPdfMessage}(draft_id). */
     public static final String STR_PDF_GENERATE = "str.pdf.generate";
 
+    /** STR 초안 생성(S1 비동기) — 메시지 {@link StrDraftMessage}(draft_id). 원본은 str_draft_requests. 담당: 채영 */
+    public static final String STR_DRAFT_GENERATE = "str.draft.generate";
+
     /** 선언할 큐 전부. 큐를 추가하면 여기에도. */
-    public static final List<String> ALL = List.of(CASE_OPEN_CASES, BATCH_SCORE, BATCH_OPEN_CASES, STR_PDF_GENERATE);
+    public static final List<String> ALL = List.of(CASE_OPEN_CASES, BATCH_SCORE, BATCH_OPEN_CASES, STR_PDF_GENERATE,
+            STR_DRAFT_GENERATE);
 
     private JobQueues() {
     }
