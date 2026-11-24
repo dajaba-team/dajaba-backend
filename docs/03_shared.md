@@ -68,6 +68,8 @@
 
 `/api/**` 밖은 `denyAll`이라 없는 경로여도 로그인 403 `FORBIDDEN`·비로그인 401 `UNAUTHENTICATED`예요. `/api/**` 안에서도 비로그인이면 404보다 401이 먼저예요(없는 주소인지 알려 주지 않음). [SCRUM-157]
 
+에러 본문은 요청 `Accept`와 상관없이 **항상 `application/json`**이에요(`GlobalExceptionHandler.counted`가 Content-Type을 못박음). PDF(S7·S8)를 `Accept: application/pdf` 하나만 붙여 불러도 409·404·403이 원래 코드 그대로 와요. 안전장치로 컨테이너가 오류를 `/error`로 다시 보내는 요청(ERROR 디스패치)은 보안 규칙을 통과시켜요 — 주소창으로 `/error`를 직접 부르면 그대로 `denyAll`. [QnA BH-BE-01, SCRUM-xxx]
+
 - **업무 규칙 중 권한 문제(역할·담당자)는 `ForbiddenException`을 상속 → 403**, 코드는 클래스 이름 규칙 그대로(`NotApproverException` → `NOT_APPROVER`). **상태·버전 충돌은 `DomainException` → 409**(`SELF_APPROVAL`도 409 그대로). URL·역할 단위로 Spring Security가 막는 403은 따로(`FORBIDDEN`). [SCRUM-67, 백엔드 #22 리뷰 11/1]
 
 - 상태 전이 에러 이름은 **`INVALID_CASE_TRANSITION`으로 통일**(10/28). 옛 표기 `INVALID_TRANSITION`은 쓰지 않아요. [STR 문서 미결, CASES 명세 §4]

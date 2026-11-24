@@ -3,6 +3,7 @@ package com.team.aml.shared.security;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.team.aml.shared.audit.LoginAccessLogWriter;
 import com.team.aml.shared.config.AmlProperties;
+import jakarta.servlet.DispatcherType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -105,6 +106,9 @@ public class SecurityConfig {
                 .ignoringRequestMatchers(JsonLoginConfigurer.LOGIN_URL))   // 로그인 전에는 토큰이 없다
             .cors(c -> c.configurationSource(corsSource()))
             .authorizeHttpRequests(a -> a
+                // 컨테이너가 오류를 /error 로 다시 보내는 요청(ERROR 디스패치)은 통과 — 원래 요청은 이미 아래 규칙을 거쳤다.
+                // 막으면 원래 오류(409·404·500)가 denyAll 403 으로 바뀐다(QnA BH-BE-01 안전장치). 주소창으로 /error 를 직접 부르는 건 그대로 막힘
+                .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers(separateManagementPort
                         ? EndpointRequest.to(HealthEndpoint.class, PrometheusScrapeEndpoint.class)
                         : request -> false).permitAll()
