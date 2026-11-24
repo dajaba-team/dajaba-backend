@@ -311,6 +311,9 @@ class MockAiClientTest {
                 .containsExactly("ALT-20220907-000001", "ALT-20220907-000002", "ALT-20220907-000003");
         assertThat(res.alerts()).extracting(DlRankedAlert::fallbackReason)
                 .containsExactly(null, DlFallbackReason.INCOMPLETE_DL_EVIDENCE, DlFallbackReason.ML_UNSCORED);
+        assertThat(res.alerts()).extracting(DlRankedAlert::referenceTs)   // SCRUM-415 근거 신원 칸
+                .containsOnly("2022-09-07T00:00:00");
+        assertThat(res.alerts()).allSatisfy(a -> assertThat(a.evidenceDigest()).matches("[0-9a-f]{64}"));
         WebClientAiClient.requireDlRankingResponse(date, asAiJson(res));
 
         java.time.LocalDate other = java.time.LocalDate.of(2022, 9, 2);

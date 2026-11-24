@@ -149,11 +149,17 @@
 | `FindAlertsByEntity(entityId, before, limit)` | cases 상세 (`prior_alerts`) | 같은 법인의 과거 경보 — `reference_ts < before`만, 최근 것부터 `limit`건. 조건은 `prior_alert_count`와 같은 한 줄(`PRIOR_ALERT_WHERE`). 법인 null이면 `[]`(임의 연결 안 함). 경보 번호·룰·날짜·기준 시각·계좌 키·점수 상태·점수만, 정답 칸 없음 [SCRUM-239] | 읽기 |
 | `GetAlertForDraft(alertId)` (명세 이름 GetAlertPayload) | str 초안 요청 (`RequestStrDraft`) | `AlertPayload`(규약 §2, `created_at` 포함) + `reasons`(점수 payload 그대로, 없으면 `[]`) + `prior_alert_count`(같은 법인·앞선 경보 수) [SCRUM-155] | 읽기 |
 | ~~`RecordScoreBand`~~ | — | 안 만듦. 등급·정책 버전은 cases가 케이스 생성 때 자기 행에 저장(계약서 Q2, SCRUM-152) | — |
-| `GetDlRanking(scanDate)` | 없음 — 케이스 목록·상세(다음 이슈) | AI ML+DL 조사 순위를 그 날짜 경보·점수와 맞춰 보고 `Available`/`Unavailable(reason)`. 아래 "ML+DL 조사 순위 대조 조회" [SCRUM-376] | AI 호출은 트랜잭션 밖, 그 뒤 읽기 |
+| `GetDlRanking(scanDate)` | 없음 — 케이스 목록·상세(다음 이슈) | AI ML+DL 조사 순위를 그 날짜 경보·점수·기준 시각·근거와 맞춰 보고 `Available`/`Unavailable(reason)`. 아래 "ML+DL 조사 순위 대조 조회" [SCRUM-376·415] | AI 호출은 트랜잭션 밖, 그 뒤 읽기 |
 
-**ML+DL 조사 순위 대조 조회 — 구현됨 (SCRUM-376)** `GetDlRanking.execute(LocalDate scanDate)` → `DlRankingResult`. AI `getDlRankings`(`03_shared.md` 「ML+DL 조사 순위」 — 응답 모양 확인까지 거기서)를 **트랜잭션 밖에서** 부르고, 그 뒤 그날 경보 번호·룰·점수·모델을 쿼리 하나로 읽어 맞춰 봐요. 오래된 점수와 새 순위가 섞이지 않게 **하나라도 어긋나면 순위 전체를 버려요**(경보 몇 건만 빼고 쓰지 않음).
+**ML+DL 조사 순위 대조 조회 — 구현됨 (SCRUM-376)** `GetDlRanking.execute(LocalDate scanDate)` → `DlRankingResult`. AI `getDlRankings`(`03_shared.md` 「ML+DL 조사 순위」 — 응답 모양 확인까지 거기서)를 **트랜잭션 밖에서** 부르고, 그 뒤 그날 경보 번호·룰·점수·모델·기준 시각·근거 원본 행을 쿼리 하나로 읽어 맞춰 봐요. 오래된 점수와 새 순위가 섞이지 않게 **하나라도 어긋나면 순위 전체를 버려요**(경보 몇 건만 빼고 쓰지 않음).
 - `Available(scanDate, snapshotSha256, mlModel, dlModel, ranks)` — `ranks` = 경보 번호 → `{ml_rank, fused_rank, fallback_reason, dl_score}`(그날 경보 전부, 순위 null 가능)
-- `Unavailable(reason)` — 이유 5종, 앞 단계부터 보고 처음 어긋난 하나만: `AI_UNAVAILABLE`(AI 호출이 던진 예외 전부 — 503 `DL_RANKING_UNAVAILABLE`·연결 실패·10초 넘김·응답 확인 실패 502) → `ALERT_SET_MISMATCH`(그날 `alert_no` 집합 ≠ 응답 `alert_id` 집합 — 크기·원소) → `RULE_MISMATCH`(경보별 `rule_id`) → `MODEL_MISMATCH`(DB 점수가 있는 경보의 `alert_scores.model_version` ≠ `ml_model`) → `SCORE_MISMATCH`(\|DB `score` − `ml_score`\| > 1e-6, 또는 DB 점수 있음↔응답 `ml_score` 없음이 한쪽만)
+- `Unavailable(reason)` — 이유 7종, 앞 단계부터 보고 처음 어긋난 하나만: `AI_UNAVAILABLE`(AI 호출이 던진 예외 전부 — 503 `DL_RANKING_UNAVAILABLE`·연결 실패·10초 넘김·응답 확인 실패 502) → `ALERT_SET_MISMATCH`(그날 `alert_no` 집합 ≠ 응답 `alert_id` 집합 — 크기·원소) → `RULE_MISMATCH`(경보별 `rule_id`) → `MODEL_MISMATCH`(DB 점수가 있는 경보의 `alert_scores.model_version` ≠ `ml_model`) → `SCORE_MISMATCH`(\|DB `score` − `ml_score`\| > 1e-6, 또는 DB 점수 있음↔응답 `ml_score` 없음이 한쪽만) → `REFERENCE_MISMATCH`(경보별 `reference_ts`) → `EVIDENCE_MISMATCH`(경보별 근거 원본 행 `evidence_digest`) [기준 시각·근거 두 단계는 SCRUM-415]
+- **왜 기준 시각·근거까지 보나** (SCRUM-415, 9/7 점검) — 9/7 경보 1,545건 중 905건은 (룰, ML 점수)가 다른 경보와 같아요. 번호·룰·점수만 보면 근거가 다른 스냅샷도 `Available` 이 돼요. 경보 하나가 어떤 거래로 만들어졌는지까지 맞춰야 순위가 그 경보의 것이라고 말할 수 있어요
+  - 기준 시각: DB `alerts.reference_ts` 를 `yyyy-MM-dd'T'HH:mm:ss` 로 만들어(초 아래는 버림 — AI 와 같음) 응답 문자열과 비교. `LocalDateTime.toString()` 은 초가 0 이면 초를 빼서 쓰지 않아요
+  - 근거: 경보의 **모든** 근거 거래(`alert_transactions` → `transactions.source_row_number` → `source_files.file_name`)마다 `원본파일명:원본행번호` 한 줄 → (파일명 문자열 오름차순, 행번호 **정수** 오름차순) 정렬 → `\n` 으로 이음(끝 줄바꿈 없음) → UTF-8 SHA-256 소문자 16진. 규칙 정본은 AI `docs/scoring/01` 「근거 신원 칸」. 행번호를 문자열로 정렬하면 `1639618` 이 `318130` 앞에 와 값이 달라져요(9/7 `…-001157` 등 15건)
+  - 거래 ID 가 아니라 원본 파일·행을 쓰는 이유: 거래 ID 는 DB 적재 순서에 따라 바뀔 수 있어요
+  - SQL 은 `(file_name, source_row_number)` 목록만 넘기고 정렬·해시는 Java(`EvidenceDigest`)가 해요 — SQL 문자열 정렬은 DB collation 을 타서 AI 와 갈릴 수 있어서. 파일명 비교는 Java `String.compareTo`(AI 는 코드포인트 순 — BMP 밖 글자에서만 다름, 지금 파일명은 하나)
+  - 쿼리는 여전히 경보당 한 줄(근거는 배열로 묶음), 마이그레이션 없음. 9/7 시연 DB 1,545건(근거 13,730행)에서 약 40ms(첫 실행 약 1초 — 디스크 캐시)
 - **왜 집합까지 보나** — `alert_no` 는 전역 시퀀스라 DB 를 만든 뒤 9/7 을 **처음** 스캔했을 때만 스냅샷 번호(`…-000001`~)와 맞아요. 다른 날을 먼저 스캔하면 같은 1,545건이어도 번호가 밀려 엉뚱한 경보에 순위가 붙어요 → `ALERT_SET_MISMATCH`
 - **부르는 쪽(케이스 조회)은 조회 트랜잭션을 끝낸 뒤 밖에서 불러요** — `execute` 는 `NOT_SUPPORTED` 라 바깥 트랜잭션 안에서 불러도 AI 호출은 트랜잭션 밖이지만, 멈춘 바깥 트랜잭션의 DB 커넥션은 AI 를 기다리는 동안(최대 10초) 그대로 잡혀 있어요(추가 검토 1)
 - 점수 비교는 십진수로(DB `numeric` − 응답 점수, 정확히 1e-6 은 통과)

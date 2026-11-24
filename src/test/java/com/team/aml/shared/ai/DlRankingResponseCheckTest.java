@@ -393,4 +393,54 @@ class DlRankingResponseCheckTest {
         assertBad(with(b -> b.put("scored_transactions", 1)), "dl_linked");   // 000001 연결 2
         assertThatCode(() -> check(with(b -> b.put("scored_transactions", 2)))).doesNotThrowAnyException();
     }
+
+    // --- SCRUM-415 근거 신원 칸 (AI #108 뒤 필수) ------------------------------
+
+    @Test
+    void 정상_근거_신원_두_칸이_있으면_통과하고_자정_초_0_도_통과() {
+        assertThatCode(() -> check(with(b -> at(b, 0).put("reference_ts", "2022-09-07T00:00:00"))))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> check(with(b -> at(b, 0).put("reference_ts", "2022-09-06T23:59:59"))))
+                .doesNotThrowAnyException();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"reference_ts", "evidence_digest"})
+    void 실패_근거_신원_칸이_없거나_null_이거나_문자열이_아니면(String field) {
+        assertBad(with(b -> at(b, 3).remove(field)), field);
+        assertBad(with(b -> at(b, 3).putNull(field)), field);
+        assertBad(with(b -> at(b, 3).put(field, 20220907)), field);
+        assertBad(with(b -> at(b, 3).put(field, "")), field);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"2022-09-07 00:29:00", "2022-09-07T00:29", "2022-09-07T00:29:00Z",
+            "2022-09-07T00:29:00+09:00", "2022-09-07T00:29:00.000", "2022-9-7T00:29:00", "2022-13-40T00:00:00",
+            "2022-09-07T24:00:00", "2022-02-30T00:00:00", " 2022-09-07T00:29:00", "2022-09-07T00:29:00\n",
+            "２０２２-09-07T00:29:00"})
+    void 실패_reference_ts_가_T_모양_초까지가_아니거나_없는_날짜면(String v) {
+        assertBad(with(b -> at(b, 2).put("reference_ts", v)), "reference_ts");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"upper", "63", "65", "nonhex", "space"})
+    void 실패_evidence_digest_가_소문자_16진_64자가_아니면(String kind) {
+        String good = "d277a2cdcb9bd308cd75c3cf55b4cb15f0a99e5cb894728bffe1c610960caade";
+        String v = switch (kind) {
+            case "upper" -> good.toUpperCase();
+            case "63" -> good.substring(1);
+            case "65" -> good + "0";
+            case "nonhex" -> "g" + good.substring(1);
+            default -> good.substring(1) + " ";
+        };
+        assertBad(with(b -> at(b, 1).put("evidence_digest", v)), "evidence_digest");
+    }
+
+    @Test
+    void 근거_신원_칸_실패_메시지에는_값이_없다() {
+        Throwable e = catchThrowable(() -> check(with(b -> at(b, 0).put("reference_ts", "2022-09-07 00:29:00"))));
+        assertThat(e).hasMessageNotContaining("00:29");
+        Throwable d = catchThrowable(() -> check(with(b -> at(b, 0).put("evidence_digest", "ABCDEF"))));
+        assertThat(d).hasMessageNotContaining("ABCDEF");
+    }
 }
