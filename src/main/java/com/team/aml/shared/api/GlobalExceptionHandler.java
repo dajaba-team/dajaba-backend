@@ -18,6 +18,7 @@ import org.springframework.core.MethodParameter;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
@@ -60,6 +61,7 @@ import java.util.Set;
  *  그 외                            → 500 INTERNAL_ERROR (진짜 처리 안 된 것만. 메시지 고정, 스택은 로그에만). DB 오류는 클래스·SQLState·제약 이름만 (SCRUM-272)
  *
  * 응답마다 aml.http.errors{code, status} 를 1 센다(counted, SCRUM-271). 세다 실패해도 응답은 그대로(ErrorMetrics 가 삼킴).
+ * 에러 본문은 요청 Accept 와 상관없이 항상 application/json (counted). PDF 처럼 JSON 을 안 받는 요청에서도 409·404 가 그대로 나간다(SCRUM-xxx).
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -76,13 +78,26 @@ public class GlobalExceptionHandler {
         this.metrics = metrics;
     }
 
-    /** 에러 응답 하나 = 지표 1. 본문이 없을 일은 없지만 있으면 세지 않는다. */
+    /**
+     * 에러 응답 하나 = 지표 1. 본문이 없을 일은 없지만 있으면 세지 않는다.
+     *
+     * <p>Content-Type 을 application/json 으로 못박는다 — 응답에 Content-Type 이 정해져 있으면 Spring 이 Accept 협상을 건너뛰고
+     * 그 형식으로 쓴다. 안 정하면 Accept: application/pdf 하나만 보낸 요청(S7·S8 을 curl 로 부를 때)에서 JSON 본문을 못 써서
+     * HttpMediaTypeNotAcceptableException → /error 로 넘어가 원래 409·404 대신 다른 코드가 나간다(QnA BH-BE-01).
+     * 이미 정한 핸들러가 있으면 그대로 둔다.
+     */
     private ResponseEntity<ErrorResponse> counted(ResponseEntity<ErrorResponse> res) {
         ErrorResponse body = res.getBody();
         if (body != null) {
             metrics.record(body.error().code(), res.getStatusCode().value());
         }
-        return res;
+        if (res.getHeaders().getContentType() != null) {
+            return res;
+        }
+        return ResponseEntity.status(res.getStatusCode())
+                .headers(res.getHeaders())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body);
     }
 
     /**

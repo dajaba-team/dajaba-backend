@@ -11,8 +11,8 @@ import org.springframework.http.ResponseEntity;
  * PDF 응답 (S7·S8). 브라우저 새 탭에서 바로 열리게 inline, 파일 이름은 문서번호.
  * <ul>
  *   <li>Cache-Control no-store — 본문 전체가 든 문서라 브라우저·프록시 캐시에 남기지 않는다(결정 4 열람 제한)</li>
- *   <li>매핑에 produces 를 걸지 않는다 — 걸면 에러(404·403·409 JSON)를 application/pdf 로 못 바꿔 406 이 된다.
- *       성공일 때만 여기서 Content-Type 을 정한다</li>
+ *   <li>매핑에 produces 를 걸지 않고 성공일 때만 여기서 Content-Type 을 정한다. 에러(404·403·409)는 Accept 와 상관없이
+ *       GlobalExceptionHandler 가 application/json 으로 못박는다 — Accept: application/pdf 만 보내도 원래 코드 그대로(QnA BH-BE-01)</li>
  * </ul>
  */
 final class StrPdfResponse {
