@@ -17,11 +17,17 @@ import com.team.aml.str.domain.StrDraftRepository;
 import com.team.aml.str.domain.StrReport;
 import com.team.aml.str.domain.StrReportRepository;
 import com.team.aml.str.domain.StrSection;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.core.task.TaskExecutor;
+import org.springframework.core.task.TaskRejectedException;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -51,6 +57,9 @@ class StrReferenceIndexTriggerTest {
     private final PlatformTransactionManager txManager = mock(PlatformTransactionManager.class);
     private final TransactionTemplate txTemplate = new TransactionTemplate(mock(PlatformTransactionManager.class));
     private final TaskExecutor inline = Runnable::run;
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+    /** 서버 종료 중·큐가 꽉 찬 실행기 흉내. */
+    private final TaskExecutor rejecting = task -> { throw new TaskRejectedException("queue full"); };
 
     @BeforeEach
     void setUp() {
@@ -72,9 +81,18 @@ class StrReferenceIndexTriggerTest {
     }
 
     private StrReferenceIndexTrigger newTrigger(boolean enabled) {
+        return newTrigger(enabled, inline);
+    }
+
+    private StrReferenceIndexTrigger newTrigger(boolean enabled, TaskExecutor executor) {
         return new StrReferenceIndexTrigger(
                 aiClient, drafts, reports, cases, getAlertForDraft,
-                txTemplate, inline, props(enabled));
+                txTemplate, executor, props(enabled), meters);
+    }
+
+    private double rejected() {
+        Counter c = meters.find("aml.str.index.rejected").counter();
+        return c == null ? 0 : c.count();
     }
 
     private void stubFixtures(long draftId, long caseId, long alertId, String typologyHint,
@@ -183,5 +201,65 @@ class StrReferenceIndexTriggerTest {
 
         assertThatCode(() -> trigger.afterCommit(10L)).doesNotThrowAnyException();
         verify(aiClient, times(1)).indexApprovedStr(any(StrIndexRequest.class));
+    }
+
+    // --- 11/25 전체 점검 BH-BE-04: 색인 실행기가 제출을 거절해도 승인은 200 ---
+
+    @Test
+    void 실패_커밋_뒤_실행기가_거절해도_승인_트랜잭션_호출자에게_예외가_가지_않고_지표가_1이다() {
+        // 진짜 트랜잭션 동기화(afterCommit 콜백) — 승인(@Transactional) 커밋 뒤 콜백에서 던지면 요청이 500 이 됐다
+        TransactionTemplate approveTx = new TransactionTemplate(new NoOpTransactionManager());
+        StrReferenceIndexTrigger trigger = newTrigger(true, rejecting);
+
+        assertThatCode(() -> approveTx.executeWithoutResult(s -> trigger.afterCommit(10L)))
+                .doesNotThrowAnyException();
+
+        assertThat(rejected()).isEqualTo(1.0);
+        verify(aiClient, never()).indexApprovedStr(any());
+    }
+
+    @Test
+    void 실패_트랜잭션_밖에서_바로_제출할_때_실행기가_거절해도_예외가_없고_지표가_1이다() {
+        StrReferenceIndexTrigger trigger = newTrigger(true, rejecting);
+
+        assertThatCode(() -> trigger.afterCommit(10L)).doesNotThrowAnyException();
+
+        assertThat(rejected()).isEqualTo(1.0);
+    }
+
+    @Test
+    void 경계_거절이_두_번이면_지표도_2이다() {
+        StrReferenceIndexTrigger trigger = newTrigger(true, rejecting);
+
+        trigger.afterCommit(10L);
+        trigger.afterCommit(11L);
+
+        assertThat(rejected()).isEqualTo(2.0);
+    }
+
+    @Test
+    void 정상_실행기가_받으면_색인을_부르고_거절_지표는_없다() {
+        NarrativeSection section = new NarrativeSection(
+                StrSection.SUBJECT, "본문 내용", List.of(), List.of());
+        stubFixtures(10L, 200L, 300L, null, List.of(section));
+        when(aiClient.indexApprovedStr(any()))
+                .thenReturn(new StrIndexResponse(
+                        "2026-11-24T01:01:00Z", "STR-2026-000001",
+                        StrIndexStatus.INDEXED, null, 1, "ret-v1", null));
+        TransactionTemplate approveTx = new TransactionTemplate(new NoOpTransactionManager());
+        StrReferenceIndexTrigger trigger = newTrigger(true);
+
+        approveTx.executeWithoutResult(s -> trigger.afterCommit(10L));
+
+        verify(aiClient, times(1)).indexApprovedStr(any());
+        assertThat(rejected()).isZero();
+    }
+
+    /** DB 없이 커밋 동기화(afterCommit)만 진짜로 도는 트랜잭션 관리자. */
+    static class NoOpTransactionManager extends AbstractPlatformTransactionManager {
+        @Override protected Object doGetTransaction() { return new Object(); }
+        @Override protected void doBegin(Object transaction, TransactionDefinition definition) { }
+        @Override protected void doCommit(DefaultTransactionStatus status) { }
+        @Override protected void doRollback(DefaultTransactionStatus status) { }
     }
 }
