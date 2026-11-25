@@ -13,6 +13,7 @@ import com.team.aml.str.domain.StrDraft;
 import com.team.aml.str.domain.StrDraftRepository;
 import com.team.aml.str.domain.StrReport;
 import com.team.aml.str.domain.StrReportRepository;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
@@ -30,6 +31,7 @@ import java.util.concurrent.Executor;
  * STR 승인 커밋 뒤에 승인된 STR 섹션을 AI 참고 사례 색인(/v1/references/str)으로 비동기 전송한다.
  * - 승인 트랜잭션 안에서 호출하지 않고 afterCommit 에서 executor 로 넘긴다.
  * - 색인 실패나 SKIPPED 가 발생해도 승인 결과에 영향을 주지 않는다.
+ * - 실행기가 제출을 거절해도 경고 로그 + aml.str.index.rejected 지표만 — 승인 응답은 그대로 200(11/25 전체 점검).
  */
 @Component
 public class StrReferenceIndexTrigger {
@@ -44,6 +46,7 @@ public class StrReferenceIndexTrigger {
     private final TransactionTemplate txTemplate;
     private final Executor executor;
     private final AmlProperties properties;
+    private final MeterRegistry meters;
 
     public StrReferenceIndexTrigger(AiClient aiClient,
                                     StrDraftRepository drafts,
@@ -52,7 +55,8 @@ public class StrReferenceIndexTrigger {
                                     GetAlertForDraft getAlertForDraft,
                                     TransactionTemplate txTemplate,
                                     Executor executor,
-                                    AmlProperties properties) {
+                                    AmlProperties properties,
+                                    MeterRegistry meters) {
         this.aiClient = aiClient;
         this.drafts = drafts;
         this.reports = reports;
@@ -61,6 +65,7 @@ public class StrReferenceIndexTrigger {
         this.txTemplate = txTemplate;
         this.executor = executor;
         this.properties = properties;
+        this.meters = meters;
     }
 
     /**
@@ -84,7 +89,17 @@ public class StrReferenceIndexTrigger {
     }
 
     private void dispatch(long draftId) {
-        executor.execute(() -> indexSafely(draftId));
+        try {
+            executor.execute(() -> indexSafely(draftId));
+        } catch (RuntimeException e) {
+            log.warn("승인 STR 색인 작업을 시작하지 못함 draft_no={} cause={}",
+                    DisplayNumber.draftNo(draftId), e.getClass().getSimpleName());
+            try {
+                meters.counter("aml.str.index.rejected").increment();
+            } catch (RuntimeException ignored) {
+                // 지표 기록에 실패해도 승인 응답을 유지한다.
+            }
+        }
     }
 
     @Async

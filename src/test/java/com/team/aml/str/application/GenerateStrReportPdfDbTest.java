@@ -41,13 +41,19 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * 확정본 PDF 만들기·보관(GenerateStrReportPdf) — 실제 PostgreSQL + 실제 PDF + 로컬 보관 폴더.
@@ -229,7 +235,135 @@ class GenerateStrReportPdfDbTest {
                 .containsEntry("pdf_storage_key", null);
     }
 
+    // 7 (11/25 전체 점검 BH-BE-02) — 같은 보고서의 렌더가 진행 중일 때 다시 만들기
+    @Test
+    void 실패_재현_옛_렌더가_다시_만들기_뒤에_실패해도_새_시도는_건너뛰지_않고_최종_READY() throws Exception {
+        long draftId = reportedDraft();
+        StuckFirstRender first = stuckFirstRender(true);
+
+        try {
+            CompletableFuture<Optional<ReportPdfStatus>> old = CompletableFuture.supplyAsync(() -> generate.execute(draftId));
+            assertThat(first.started.await(30, TimeUnit.SECONDS)).isTrue();
+            regenerateStalePending(draftId);                          // 시도 1 → 오래된 PENDING 다시 만들기 → 시도 2
+
+            assertThat(generate.execute(draftId)).contains(ReportPdfStatus.READY);   // 새 시도는 JVM 중복 방지에 막히지 않는다
+
+            first.release.countDown();
+            assertThat(old.get(30, TimeUnit.SECONDS)).isEmpty();      // 옛 시도의 실패는 버린다
+        } finally {
+            first.release.countDown();
+        }
+
+        Map<String, Object> row = pdfRow(draftId);
+        assertThat(row).containsEntry("pdf_status", "READY").containsEntry("pdf_failure_code", null);
+        assertThat((String) row.get("pdf_storage_key")).endsWith("-2.pdf");
+    }
+
+    // 7-2
+    @Test
+    void 경계_옛_렌더가_다시_만들기_뒤에_성공해도_옛_결과는_버리고_새_시도_결과만_남는다() throws Exception {
+        long draftId = reportedDraft();
+        StuckFirstRender first = stuckFirstRender(false);
+
+        try {
+            CompletableFuture<Optional<ReportPdfStatus>> old = CompletableFuture.supplyAsync(() -> generate.execute(draftId));
+            assertThat(first.started.await(30, TimeUnit.SECONDS)).isTrue();
+            regenerateStalePending(draftId);
+
+            assertThat(generate.execute(draftId)).contains(ReportPdfStatus.READY);
+
+            first.release.countDown();
+            assertThat(old.get(30, TimeUnit.SECONDS)).isEmpty();
+        } finally {
+            first.release.countDown();
+        }
+
+        Map<String, Object> row = pdfRow(draftId);
+        assertThat(row).containsEntry("pdf_status", "READY");
+        assertThat((String) row.get("pdf_storage_key")).endsWith("-2.pdf");
+        assertThat(row.get("pdf_sha256")).isEqualTo(StrPdfDigest.sha256(
+                Files.readAllBytes(Path.of(storageDir).resolve((String) row.get("pdf_storage_key")))));
+    }
+
+    // 7-3
+    @Test
+    void 경계_같은_시도의_중복_실행은_지금처럼_한_번만_그린다() throws Exception {
+        long draftId = reportedDraft();
+        StuckFirstRender first = stuckFirstRender(false);
+
+        CompletableFuture<Optional<ReportPdfStatus>> running;
+        try {
+            running = CompletableFuture.supplyAsync(() -> generate.execute(draftId));
+            assertThat(first.started.await(30, TimeUnit.SECONDS)).isTrue();
+
+            assertThat(generate.execute(draftId)).isEmpty();          // 큐 + 로컬로 두 번 와도 그리는 건 한 번
+
+            first.release.countDown();
+        } finally {
+            first.release.countDown();
+        }
+
+        assertThat(running.get(30, TimeUnit.SECONDS)).contains(ReportPdfStatus.READY);
+        verify(renderer, times(1)).render(any());
+        assertThat(pdfRow(draftId)).containsEntry("pdf_status", "READY").containsEntry("pdf_attempts", 1);
+    }
+
+    // 7-4
+    @Test
+    void 실패_다시_만들기_없이_렌더가_실패하면_지금처럼_FAILED_RENDER_FAILED() throws Exception {
+        long draftId = reportedDraft();
+        StuckFirstRender first = stuckFirstRender(true);
+
+        CompletableFuture<Optional<ReportPdfStatus>> running;
+        try {
+            running = CompletableFuture.supplyAsync(() -> generate.execute(draftId));
+            assertThat(first.started.await(30, TimeUnit.SECONDS)).isTrue();
+            first.release.countDown();
+        } finally {
+            first.release.countDown();
+        }
+
+        assertThat(running.get(30, TimeUnit.SECONDS)).contains(ReportPdfStatus.FAILED);
+        assertThat(pdfRow(draftId)).containsEntry("pdf_status", "FAILED").containsEntry("pdf_failure_code", "RENDER_FAILED")
+                .containsEntry("pdf_attempts", 1);
+    }
+
     // ---- 도우미 ----
+
+    /** 첫 render 호출만 release 까지 멈춘다(fail 이면 그 뒤 던짐, 아니면 진짜로 그림). 두 번째부터는 진짜. */
+    private StuckFirstRender stuckFirstRender(boolean fail) {
+        StuckFirstRender first = new StuckFirstRender();
+        AtomicInteger calls = new AtomicInteger();
+        doAnswer(inv -> {
+            if (calls.incrementAndGet() == 1) {
+                first.started.countDown();
+                if (!first.release.await(30, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("release 를 기다리다 시간 초과");
+                }
+                if (fail) {
+                    throw new IllegalStateException("옛 렌더 실패");
+                }
+            }
+            return inv.callRealMethod();
+        }).when(renderer).render(any());
+        return first;
+    }
+
+    private static final class StuckFirstRender {
+        final CountDownLatch started = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+    }
+
+    /** PENDING 을 11분 전으로 돌려 오래된 PENDING 으로 만들고, 승인자가 P5 다시 만들기. */
+    private void regenerateStalePending(long draftId) {
+        jdbc.update("update ops.str_reports set updated_at = now() - interval '11 minutes' where draft_id = ?", draftId);
+        login(approver, "APPROVER");
+        try {
+            assertThat(regenerate.execute(DisplayNumber.draftNo(draftId)).pdfStatus()).isEqualTo(ReportPdfStatus.PENDING);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
 
     /** 승인(P2) → 모의 제출(P4). 케이스 REPORTED, 확정 보고서 pdf_status PENDING (자동 생성 꺼짐). */
     private long reportedDraft() {
