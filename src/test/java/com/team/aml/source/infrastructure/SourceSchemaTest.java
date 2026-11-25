@@ -157,6 +157,26 @@ class SourceSchemaTest {
     }
 
     @Test
+    void KYC_계좌_개설_목적은_비울_수_있고_나머지_칸은_필수다() throws Exception {   // V020, SCRUM-430
+        try (Connection c = backend(); Statement statement = c.createStatement()) {
+            statement.execute("insert into ops.entities(entity_id, entity_name, entity_type) values ('KYCNULL1', 'kyc', 'INDIVIDUAL')");
+            statement.execute("""
+                    insert into ops.customer_attributes(entity_id, industry, risk_level, account_purpose, onboarded_at, country_code)
+                    values ('KYCNULL1', 'RETAIL', 'MEDIUM', null, '2020-01-01', 'US')""");
+            try (ResultSet result = statement.executeQuery(
+                    "select account_purpose from ops.customer_attributes where entity_id = 'KYCNULL1'")) {
+                result.next();
+                assertThat(result.getString(1)).isNull();
+            }
+
+            statement.execute("insert into ops.entities(entity_id, entity_name, entity_type) values ('KYCNULL2', 'kyc', 'INDIVIDUAL')");
+            assertSqlState("23502", () -> statement.execute("""
+                    insert into ops.customer_attributes(entity_id, industry, risk_level, account_purpose, onboarded_at, country_code)
+                    values ('KYCNULL2', null, 'MEDIUM', null, '2020-01-01', 'US')"""));
+        }
+    }
+
+    @Test
     void 백엔드_계정은_계좌를_COPY하고_중복은_건너뛰며_적재할_수_있다() throws Exception {
         try (Connection c = backend(); Statement statement = c.createStatement()) {
             statement.execute("truncate table ops.accounts_staging");
