@@ -211,4 +211,59 @@ class ReferenceSearchResponseCheckTest {
         assertThat(e).isInstanceOfSatisfying(AiClientException.class,
                 ae -> assertThat(ae.getMessage()).contains("results"));
     }
+
+    // --- SCRUM-426 excerpt (관련 구절) ----------------------------------------
+
+    /** BMP 밖 글자 하나 = UTF-16 코드 유닛 2. */
+    private static final String ASTRAL = "😀";
+
+    @Test
+    void 정상_excerpt_칸이_없거나_null이거나_문자열이면_통과한다() {   // 계약 예시엔 아직 칸 없음(AI SCRUM-425 전)
+        ObjectNode b = body("found");
+        result(b, 0).put("excerpt", "이 자료의 관련 구절");
+        result(b, 1).putNull("excerpt");
+        assertThatCode(() -> check(sent(), b)).doesNotThrowAnyException();
+        assertThatCode(() -> check(sent(), body("found"))).doesNotThrowAnyException();
+    }
+
+    @Test
+    void 경계_excerpt_300_코드_유닛은_통과한다_BMP_밖_글자는_2로_센다() {
+        ObjectNode b = body("found");
+        result(b, 0).put("excerpt", "a".repeat(300));
+        result(b, 1).put("excerpt", "a".repeat(298) + ASTRAL);   // 299 글자 · 300 코드 유닛
+        assertThatCode(() -> check(sent(), b)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void 경계_excerpt_빈_문자열은_길이만_보므로_통과한다() {   // AI 는 빈 값을 null 로 보내기로 했지만 백엔드는 막지 않는다
+        ObjectNode b = body("found");
+        result(b, 0).put("excerpt", "");
+        assertThatCode(() -> check(sent(), b)).doesNotThrowAnyException();
+    }
+
+    static Stream<Arguments> excerptViolations() {
+        return Stream.of(
+                Arguments.of("301 코드 유닛", (Consumer<ObjectNode>) r -> r.put("excerpt", "구".repeat(301))),
+                Arguments.of("300 글자지만 301 코드 유닛",
+                        (Consumer<ObjectNode>) r -> r.put("excerpt", "구".repeat(299) + ASTRAL)),
+                Arguments.of("숫자", (Consumer<ObjectNode>) r -> r.put("excerpt", 3)),
+                Arguments.of("배열", (Consumer<ObjectNode>) r -> r.putArray("excerpt").add("구절")),
+                Arguments.of("객체", (Consumer<ObjectNode>) r -> r.putObject("excerpt").put("text", "구절")));
+    }
+
+    @ParameterizedTest(name = "[{index}] {0}")
+    @MethodSource("excerptViolations")
+    void 실패_excerpt가_301_이상이거나_문자열이_아니면_AI_BAD_RESPONSE_502이고_메시지에_구절이_없다(String label,
+                                                                          Consumer<ObjectNode> edit) {
+        ObjectNode b = body("found");
+        edit.accept(result(b, 1));   // 둘째 결과만 틀려도 응답 전체가 실패
+
+        Throwable e = catchThrowable(() -> check(sent(), b));
+
+        assertThat(e).isInstanceOfSatisfying(AiClientException.class, ae -> {
+            assertThat(ae.code()).isEqualTo("AI_BAD_RESPONSE");
+            assertThat(ae.httpStatus()).isEqualTo(502);
+            assertThat(ae.getMessage()).contains("excerpt").doesNotContain("구구").doesNotContain("구절");
+        });
+    }
 }

@@ -728,11 +728,13 @@ public class WebClientAiClient implements AiClient {
     /** AI `ReferenceResult.score`(cosine) 범위. */
     private static final double REFERENCE_SCORE_MIN = -1.0;
     private static final double REFERENCE_SCORE_MAX = 1.0;
+    private static final int REFERENCE_EXCERPT_MAX = 300;
 
     /**
      * 참고 사례 검색 응답 확인 (규약 5.5 = AI `reference_search.py` 규칙 + 보낸 값 대조, SCRUM-309).
      * 틀리면 AI_BAD_RESPONSE 502, 메시지엔 칸 이름만(검색어·문서 제목 없음). AI 스키마보다 더 보는 곳: 결과 수 ≤ 보낸
      * `top_k`(스키마는 10), 결과 유형 ∩ 보낸 유형 ≠ ∅, `source_type` ∈ 보낸 목록, `produced_at` 은 Z 만.
+     * `excerpt` 는 생략·null 또는 최대 300 UTF-16 코드 유닛의 문자열.
      * 안 보는 곳: 결과 유형 원소가 AI 유형 이름인지, 모르는 칸(원칙 4 — 받아 둠).
      */
     static void requireReferenceSearchResponse(ReferenceSearchRequest sent, JsonNode r) {
@@ -776,6 +778,11 @@ public class WebClientAiClient implements AiClient {
             JsonNode source = item.get("source_type");
             if (source == null || !source.isTextual() || !sentSources.contains(source.textValue())) {
                 throw badReference("source_type");
+            }
+            JsonNode excerpt = item.get("excerpt");
+            if (excerpt != null && !excerpt.isNull()
+                    && (!excerpt.isTextual() || excerpt.textValue().length() > REFERENCE_EXCERPT_MAX)) {
+                throw badReference("excerpt");
             }
         }
     }

@@ -276,17 +276,20 @@ public class MockAiClient implements AiClient {
      * 3번은 AI 코퍼스에 있는 문서. 점수 내림차순. 유형·출처는 요청에서 채운다.
      */
     private record MockReference(String docId, String docTitle, String publisher, Integer year, int page,
-                                 double score, String chunkId) {}
+                                 double score, String chunkId, String excerpt) {}
 
     private static final List<MockReference> MOCK_REFERENCES = List.of(
             new MockReference("fintrac-underground-banking-2023",
                     "Updated indicators: Laundering the proceeds of crime through underground banking schemes (FINTRAC-2023-OA002)",
-                    "FINTRAC", 2023, 4, 0.52, "34be9b160cd475045c1334f957180e4947e328af50bb33bf14912c12e11dbe9d"),
+                    "FINTRAC", 2023, 4, 0.52, "34be9b160cd475045c1334f957180e4947e328af50bb33bf14912c12e11dbe9d",
+                    "In an underground banking network, a local broker may pay the recipient of an overseas remittance."),
             new MockReference("ffiec-redflags",
                     "BSA/AML Manual Appendix F: Money Laundering and Terrorist Financing Red Flags",
-                    "FFIEC", null, 6, 0.41, "d994051861cbf0626d93ddce92d3af60ec5d69797774c1200b1df9a8adbd2234"),
+                    "FFIEC", null, 6, 0.41, "d994051861cbf0626d93ddce92d3af60ec5d69797774c1200b1df9a8adbd2234",
+                    "Wire transfers that do not fit the customer's usual business activity can be a red flag."),
             new MockReference("fatf-pml-2018", "Professional Money Laundering",
-                    "FATF", 2018, 12, 0.33, "0000000000000000000000000000000000000000000000000000000000000003"));
+                    "FATF", 2018, 12, 0.33, "0000000000000000000000000000000000000000000000000000000000000003",
+                    "Professional money launderers may move criminal proceeds for several clients in exchange for a fee."));
 
     /** 이 유형이 하나라도 있으면 EMPTY — 채영 님 화면이 FOUND·EMPTY 둘 다 목업으로 보이게. */
     private static final String MOCK_EMPTY_TYPOLOGY = "SCATTER_GATHER";
@@ -312,7 +315,7 @@ public class MockAiClient implements AiClient {
 
         List<ReferenceResult> results = MOCK_REFERENCES.subList(0, count).stream()
                 .map(m -> new ReferenceResult(m.docId(), m.docTitle(), m.publisher(), m.year(), m.page(), m.score(),
-                        m.chunkId(), typologies, sourceType))
+                        m.chunkId(), typologies, sourceType, m.excerpt()))
                 .toList();
         ReferenceSearchMeta meta = new ReferenceSearchMeta(false, results.size(), 0);
         String producedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
@@ -326,7 +329,7 @@ public class MockAiClient implements AiClient {
                     .put("doc_id", r.docId()).put("doc_title", r.docTitle()).put("publisher", r.publisher())
                     .put("year", r.year()).put("page", r.page()).put("score", r.score()).put("chunk_id", r.chunkId());
             typologies.forEach(item.putArray("typologies")::add);
-            item.put("source_type", r.sourceType());
+            item.put("source_type", r.sourceType()).put("excerpt", r.excerpt());
         }
         raw.put("retrieval_version", MOCK_RETRIEVAL_VERSION);
         raw.putObject("search_meta").put("degraded", meta.degraded())
