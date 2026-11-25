@@ -1,6 +1,8 @@
 package com.team.aml.cases.api;
 
 import com.team.aml.cases.application.AssignCase;
+import com.team.aml.cases.application.CaseDlRank;
+import com.team.aml.cases.application.CaseDlRanks;
 import com.team.aml.cases.application.CaseTransactions;
 import com.team.aml.cases.application.CaseSummaryResult;
 import com.team.aml.cases.application.CloseCase;
@@ -15,6 +17,7 @@ import com.team.aml.cases.application.RefreshCaseSummary;
 import com.team.aml.cases.application.UpdateCaseNotes;
 import com.team.aml.cases.domain.CaseAction;
 import com.team.aml.shared.api.PageResponse;
+import org.springframework.data.domain.Page;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -30,11 +33,14 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Map;
+
 /**
  * 케이스 목록·상세·근거 거래·그래프·이력·배정·담당자 변경·메모·에스컬레이션·종료·AI 조사 요약
  * (CASES 명세 API-01~13·15, 계약서 C1~C8·A1·A2·A3·A4·A5·A7).
  * 조회 3역할 모두 — SecurityConfig 의 /api/** authenticated. 담당자·상태 검사는 유스케이스·엔티티가 한다.
  * 응답은 유스케이스 record 를 화면 모양으로 바꾼 것 — 원본 account_key 는 내보내지 않는다(AccountDisplay).
+ * 목록·상세의 dl_rank(ML+DL 조사 순위)는 조회 유스케이스가 끝난 뒤(트랜잭션 밖) CaseDlRanks 로 붙인다 — SCRUM-420.
  */
 @Tag(name = "cases")
 @RestController
@@ -53,12 +59,14 @@ public class CaseController {
     private final ReassignCase reassignCase;
     private final CaseTransactions caseTransactions;
     private final ListCaseHistories listCaseHistories;
+    private final CaseDlRanks caseDlRanks;
 
     public CaseController(ListCases listCases, GetCaseDetail getCaseDetail, AssignCase assignCase,
                           EscalateCase escalateCase, CloseCase closeCase, RefreshCaseSummary refreshCaseSummary,
                           GetCaseSummary getCaseSummary, UpdateCaseNotes updateCaseNotes,
                           ListCaseNoteHistories listCaseNoteHistories, ReassignCase reassignCase,
-                          CaseTransactions caseTransactions, ListCaseHistories listCaseHistories) {
+                          CaseTransactions caseTransactions, ListCaseHistories listCaseHistories,
+                          CaseDlRanks caseDlRanks) {
         this.listCases = listCases;
         this.getCaseDetail = getCaseDetail;
         this.assignCase = assignCase;
@@ -71,20 +79,29 @@ public class CaseController {
         this.reassignCase = reassignCase;
         this.caseTransactions = caseTransactions;
         this.listCaseHistories = listCaseHistories;
+        this.caseDlRanks = caseDlRanks;
     }
 
     @Operation(summary = "케이스 목록",
             description = "status 쉼표 여럿, assignee=me|login_id, from·to 케이스 생성일(한국 날짜, 양 끝 포함), "
-                    + "sort=score|created_at|status,asc|desc (기본 score,desc — 점수가 생기기 전엔 created_at DESC), size ≤ 100")
+                    + "sort=score|created_at|status,asc|desc (기본 score,desc — 점수가 생기기 전엔 created_at DESC), size ≤ 100. "
+                    + "dl_rank 는 ML+DL 조사 순위 — 페이지의 배치 날짜마다 AI 를 한 번 부른다(SCRUM-420)")
     @GetMapping
     public PageResponse<CaseListItemResponse> list(@Valid @ParameterObject @ModelAttribute CaseListQuery query) {
-        return PageResponse.from(listCases.execute(query.toQuery()).map(CaseListItemResponse::from));
+        Page<ListCases.Item> page = listCases.execute(query.toQuery());   // 조회 트랜잭션은 여기서 끝난다
+        Map<String, CaseDlRank> ranks = caseDlRanks.forAlerts(page.getContent().stream()
+                .map(i -> new CaseDlRanks.AlertRef(i.alertNo(), i.batchDate())).toList());
+        return PageResponse.from(page.map(i -> CaseListItemResponse.from(i, ranks.get(i.alertNo()))));
     }
 
-    @Operation(summary = "케이스 상세", description = "열람 기록을 남긴다. 없으면 404 CASE_NOT_FOUND. 버튼은 available_actions")
+    @Operation(summary = "케이스 상세", description = "열람 기록을 남긴다. 없으면 404 CASE_NOT_FOUND. 버튼은 available_actions. "
+            + "dl_rank 는 ML+DL 조사 순위(SCRUM-420)")
     @GetMapping("/{caseNo}")
     public CaseDetailResponse detail(@PathVariable String caseNo) {
-        return CaseDetailResponse.from(getCaseDetail.execute(caseNo));
+        GetCaseDetail.Result result = getCaseDetail.execute(caseNo);   // 조회 트랜잭션은 여기서 끝난다
+        CaseDlRank rank = result.alert() == null ? null
+                : caseDlRanks.forAlert(result.alert().alertNo(), result.alert().batchDate());
+        return CaseDetailResponse.from(result, rank);
     }
 
     @Operation(summary = "근거 거래",

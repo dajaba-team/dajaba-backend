@@ -1,6 +1,7 @@
 package com.team.aml.cases.api;
 
 import com.team.aml.cases.application.CaseAggregates;
+import com.team.aml.cases.application.CaseDlRank;
 import com.team.aml.cases.application.CaseSummaryResult;
 import com.team.aml.cases.application.GetCaseDetail;
 import com.team.aml.cases.application.UserRef;
@@ -29,6 +30,7 @@ import java.util.List;
  *   <li>current_draft — null 로 둔다(11/22 확정, SCRUM-245). 번호 current_draft_no 만 주고 초안은 화면이 S2 를 따로 부른다</li>
  *   <li>customer — null 로 둔다(11/22 MVP 확정, SCRUM-245). 출처 ops.customer_attributes 는 있으나 화면·계약 모양 전</li>
  *   <li>prior_alerts — 같은 법인의 이전 경보 최근 20건, 계좌는 가린 값만 (detection FindAlertsByEntity, SCRUM-239)</li>
+ *   <li>dl_rank — ML+DL 조사 순위 (CaseDlRank, SCRUM-420). 목록과 같은 모양, 붙이지 못했으면 UNAVAILABLE(null 아님)</li>
  * </ul>
  * 화면 응답이라 Object 칸(alert 등)은 모양이 정해지면 record 로 바꾼다.
  */
@@ -40,7 +42,7 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
                                  OpenedScoreResponse openedScore,
                                  CaseAggregates aggregates, CaseSummaryResult.Summary latestSummary, String currentDraftNo, Object currentDraft,
                                  List<PriorAlertResponse> priorAlerts, List<GetCaseDetail.History> history,
-                                 List<CaseAction> availableActions) {
+                                 List<CaseAction> availableActions, CaseDlRank dlRank) {
 
     public CaseDetailResponse {
         priorAlerts = priorAlerts == null ? List.of() : List.copyOf(priorAlerts);
@@ -76,7 +78,7 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
         }
     }
 
-    static CaseDetailResponse from(GetCaseDetail.Result r) {
+    static CaseDetailResponse from(GetCaseDetail.Result r, CaseDlRank dlRank) {
         return new CaseDetailResponse(r.caseNo(), r.status(), AccountDisplay.ref(r.accountKey()),
                 AccountDisplay.maskedNo(r.accountKey()), r.entityId(), r.assignee(), r.latestScore().score(),
                 r.latestScore().scoreBand(), r.policyVersion(),
@@ -84,6 +86,7 @@ public record CaseDetailResponse(String caseNo, CaseStatus status, String accoun
                 r.closeReason(), r.latestScore(), OpenedScoreResponse.from(r.openedScore()), r.aggregates(),
                 r.latestSummary(),
                 CaseChangeResponse.draftNo(r.currentDraftId()), null,
-                r.priorAlerts().stream().map(PriorAlertResponse::from).toList(), r.history(), r.availableActions());
+                r.priorAlerts().stream().map(PriorAlertResponse::from).toList(), r.history(), r.availableActions(),
+                CaseDlRank.orUnavailable(dlRank));
     }
 }

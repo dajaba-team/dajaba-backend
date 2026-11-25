@@ -2,6 +2,7 @@ package com.team.aml.detection.domain;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -15,6 +16,9 @@ public interface AlertRepository {
     boolean markCaseOpened(long alertId);
 
     boolean exists(long alertId);
+
+    /** 경보 id 여럿의 번호·배치 날짜. 없는 id 는 빠진다. ids 는 비우지 않고 넘긴다 (SCRUM-420). */
+    List<AlertKey> findKeys(Collection<Long> alertIds);
 
     /** 초안 요청용 경보 원문 + reasons + 같은 법인의 앞선 경보 수. 없으면 empty. */
     Optional<AlertForDraft> findForDraft(long alertId);
