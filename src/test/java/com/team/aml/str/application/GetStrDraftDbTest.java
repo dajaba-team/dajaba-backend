@@ -525,6 +525,29 @@ class GetStrDraftDbTest {
         assertThat(getDraft.execute(DisplayNumber.draftNo(draftId)).references()).isNull();   // META_ONLY 는 그대로 null
     }
 
+    // 20-2 — SCRUM-426
+    @Test
+    void 정상_참고_사례_관련_구절_excerpt는_화면_JSON_끝_칸으로_나가고_옛_초안은_null() throws Exception {
+        long caseId = escalatedCase();
+        ObjectNode withExcerpt = JSON.createObjectNode().put("chunk_id", "c-1").put("doc_id", "kofiu-2023")
+                .put("doc_title", "STR 작성 사례집").put("page", 12).put("score", 0.83).put("text", "프롬프트용 원문")
+                .put("excerpt", "이 자료의 관련 구절");
+        ObjectNode old = JSON.createObjectNode().put("chunk_id", "c-2").put("doc_id", "kofiu-2021")
+                .put("doc_title", "의심거래 유형").put("page", 3).put("score", 0.71);   // SCRUM-426 전 payload
+        long draftId = savedDraft(caseId, List.of(withExcerpt, old));
+        login(investigator, "INVESTIGATOR");
+
+        GetStrDraft.Result r = getDraft.execute(DisplayNumber.draftNo(draftId));
+
+        JsonNode body = om.readTree(om.writeValueAsString(StrDraftDetailResponse.from(r))).path("references");
+        assertThat(body.get(0).fieldNames()).toIterable()
+                .containsExactly("chunk_id", "doc_id", "doc_title", "page", "score", "excerpt");
+        assertThat(body.get(0).path("excerpt").asText()).isEqualTo("이 자료의 관련 구절");
+        assertThat(body.get(0).has("text")).isFalse();
+        assertThat(body.get(1).has("excerpt")).isTrue();
+        assertThat(body.get(1).get("excerpt").isNull()).isTrue();
+    }
+
     // 21
     @Test
     void 버튼_승인된_잠긴_초안이면_승인한_사람에게만_모의_제출_REPORT_미리보기는_담당과_승인자_모두() {   // P4 (11/17) · S7

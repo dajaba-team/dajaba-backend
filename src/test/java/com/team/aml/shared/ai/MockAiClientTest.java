@@ -229,6 +229,22 @@ class MockAiClientTest {
         assertThat(ok.results()).extracting(ReferenceResult::sourceType).containsOnly("PUBLIC");
     }
 
+    @Test
+    void searchReferences_mock_results_carry_excerpt_in_record_and_raw() {   // SCRUM-426 — 채영 님 화면 hover 목업
+        ReferenceSearchRequest request = search(5, "CYCLE");
+        ReferenceSearchResponse res = client.searchReferences("DRF-000001", request);
+
+        assertThat(res.results()).hasSize(3).allSatisfy(r -> assertThat(r.excerpt()).isNotBlank().hasSizeLessThanOrEqualTo(300));
+        for (int i = 0; i < res.results().size(); i++) {
+            JsonNode rawItem = res.raw().get("results").get(i);
+            assertThat(rawItem.path("excerpt").textValue()).isEqualTo(res.results().get(i).excerpt());
+            List<String> keys = new java.util.ArrayList<>();
+            rawItem.fieldNames().forEachRemaining(keys::add);
+            assertThat(keys).last().isEqualTo("excerpt");   // 공통 계약: 맨 끝 칸
+        }
+        WebClientAiClient.requireReferenceSearchResponse(request, res.raw());
+    }
+
     // --- SCRUM-357 승인 STR 색인 목업 ---------------------------------------------
 
     private static StrIndexRequest strIndex(List<String> typologies, String... texts) {
