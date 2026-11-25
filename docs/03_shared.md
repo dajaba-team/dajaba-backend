@@ -49,7 +49,7 @@
 
 | 예외 | HTTP | `code` |
 |---|---|---|
-| `@Valid` 실패, JSON 파싱 실패, 쿼리·경로 파라미터 오류(`details.parameter`에 틀린 파라미터 이름) | 400 | `INVALID_REQUEST` — `@Valid` 실패(본문·`@ModelAttribute` 쿼리)는 `details`에 **요청 JSON 이름(snake_case)** → 메시지, 중첩은 `items[0].transaction_id`, 한 필드에 위반이 여럿이면 하나만. 클래스 수준 검증(global error)은 지금 없어서 담지 않음. `details.parameter`는 `@RequestParam`·`@PathVariable`에 이름이 있으면 그 이름 [SCRUM-167] |
+| `@Valid` 실패, JSON 파싱 실패, 쿼리·경로 파라미터 오류(`details.parameter`에 틀린 파라미터 이름) | 400 | `INVALID_REQUEST` — `@Valid` 실패(본문·`@ModelAttribute` 쿼리)는 `details`에 **요청 JSON 이름(snake_case)** → 메시지, 중첩은 `items[0].transaction_id`, 한 필드에 위반이 여럿이면 하나만. 클래스 수준 검증(global error)은 지금 없어서 담지 않음. 형 변환 실패(없는 enum 값·날짜·숫자 형식 — `isBindingFailure`)는 메시지 대신 고정 문구 `"형식이 올바르지 않습니다"`(Spring 기본 메시지에 Java 타입·패키지가 들어가서, 11/25 전체 점검). `details.parameter`는 `@RequestParam`·`@PathVariable`에 이름이 있으면 그 이름 [SCRUM-167] |
 | `InvalidRequestException` (`shared/domain`) — `@Valid`로는 못 보고 지금 값과 비교해야 아는 입력 오류 | 400 | `INVALID_REQUEST` — `details`는 던진 쪽이 준 `{요청 JSON 이름: 메시지}` 그대로. 예: `User.changeRole`에서 조사역 ↔ 승인자가 아님(같은 역할·관리자에서 등) → `details.role`. `shared/domain`이라 엔티티도 던질 수 있음 [SCRUM-135 ②] |
 | `NotFoundException` 하위 | 404 | 하위 클래스가 정함 (`CASE_NOT_FOUND`, `DRAFT_NOT_FOUND` …) |
 | `ForbiddenException` 하위 | **403** | 클래스 이름 UPPER_SNAKE (`NOT_APPROVER`, `NOT_ASSIGNEE` …) [SCRUM-67] |

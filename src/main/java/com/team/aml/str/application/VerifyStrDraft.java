@@ -8,6 +8,7 @@ import com.team.aml.cases.domain.CaseStatus;
 import com.team.aml.cases.domain.InvalidCaseTransitionException;
 import com.team.aml.cases.domain.NotAssigneeException;
 import com.team.aml.shared.ai.AiClient;
+import com.team.aml.shared.ai.AiClientException;
 import com.team.aml.shared.ai.AiDtos;
 import com.team.aml.shared.security.CurrentUser;
 import com.team.aml.str.domain.DraftNotFoundException;
@@ -27,6 +28,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -42,7 +44,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>같은 초안 검증 중이면 409 VERIFY_IN_PROGRESS. 트랜잭션 밖에서 aiClient.verify (cites 포함, 규약 v0.4).
  *       보내는 근거는 CurrentNarrative — S2 화면과 같은 값.</li>
  *   <li>새 트랜잭션에 verification_results 한 줄. VERIFY_UNAVAILABLE(AI 200)도 저장 — 자동 재시도 없음.
- *       AI 4xx·5xx·타임아웃은 AiClientException(502) 그대로, 아무것도 저장하지 않는다.</li>
+ *       AI 4xx·5xx·타임아웃은 AiClientException(502) 그대로, 아무것도 저장하지 않는다.
+ *       PASSED 인데 해시가 다르면 저장하지 않고 502 AI_BAD_RESPONSE — 11/25 전체 점검.</li>
  * </ol>
  * 3에서 수정본 번호를 다시 읽지 않는다 — 검증 중 누가 고쳤다면 예전 본문 기준 결과로 남아야 승인 요청 게이트(해시 비교)가 막는다.
  */
@@ -112,14 +115,17 @@ public class VerifyStrDraft {
     }
 
     /**
-     * 보낸 generation_id·수정본 번호로 저장한다(검사를 맡긴 대상). 해시는 AI 가 계산한 값 — 우리 계산과 다르면 경고만 남긴다
-     * (게이트가 지금 본문 해시와 비교하므로 다르면 승인 요청이 막힌다 = 안전한 쪽).
+     * 보낸 generation_id·수정본 번호와 AI 가 계산한 해시로 저장한다.
+     * PASSED 인데 해시가 다르면 저장하지 않고 502 AI_BAD_RESPONSE — 11/25 전체 점검.
      */
     private static VerificationResult toResult(long draftId, Snapshot s, AiDtos.VerifyResponse r) {
         if (!s.narrativeSha256().equals(r.narrativeSha256())) {
             log.warn("검증 해시가 다름 draft_id={} revision_no={} (백엔드 {}…, AI {}…)", draftId, s.revisionNo(),
                     s.narrativeSha256().substring(0, 8), r.narrativeSha256() == null ? null
                             : r.narrativeSha256().substring(0, Math.min(8, r.narrativeSha256().length())));
+            if ("PASSED".equals(r.status())) {
+                throw new AiClientException("AI_BAD_RESPONSE", "AI 검증 응답 해시가 보낸 본문과 다름", Map.of(), 502);
+            }
         }
         // 칸 모양(status·produced_at·해시)과 보낸 generation_id·revision_no 대조는 AiClient 가 이미 했다 (#95 리뷰)
         return VerificationResult.record(draftId, r.verificationId(), s.generationId(), s.revisionNo(),

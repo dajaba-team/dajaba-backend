@@ -60,6 +60,8 @@ class VerifyStrDraftDbTest {
     private static final AtomicInteger SEQ = new AtomicInteger();
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String ACCOUNT_KEY = "010_8000EBD30";
+    /** 백엔드가 계산한 본문 해시와 다른 64자 hex — AI 가 다른 본문으로 검사한 척 (BH-BE-03). */
+    private static final String OTHER_HASH = "f".repeat(64);
 
     @Container
     static PostgreSQLContainer<?> db = new PostgreSQLContainer<>("postgres:16")
@@ -194,6 +196,60 @@ class VerifyStrDraftDbTest {
         assertThat(resultCount(draftId)).isZero();
     }
 
+    // 3-2 (11/25 전체 점검 BH-BE-03)
+    @Test
+    void 실패_AI가_다른_해시로_PASSED를_주면_502_AI_BAD_RESPONSE이고_저장하지_않는다() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        when(aiClient.verify(anyString(), any()))
+                .thenAnswer(i -> answer(i.getArgument(1), "PASSED", OTHER_HASH));
+        login(investigator, "INVESTIGATOR");
+
+        assertThatThrownBy(() -> verifyDraft.execute(DisplayNumber.draftNo(draftId)))
+                .isInstanceOfSatisfying(AiClientException.class, e -> {
+                    assertThat(e.code()).isEqualTo("AI_BAD_RESPONSE");   // 새 코드 없이 기존 AI 응답 오류 코드
+                    assertThat(e.httpStatus()).isEqualTo(502);
+                    assertThat(e.getMessage()).doesNotContain(OTHER_HASH);
+                });
+
+        assertThat(resultCount(draftId)).isZero();
+    }
+
+    // 3-3
+    @Test
+    void 경계_해시_불일치로_실패한_뒤_같은_초안을_다시_검증하면_VERIFY_IN_PROGRESS가_아니고_저장된다() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        when(aiClient.verify(anyString(), any()))
+                .thenAnswer(i -> answer(i.getArgument(1), "PASSED", OTHER_HASH))
+                .thenAnswer(i -> answer(i.getArgument(1), "PASSED"));
+        login(investigator, "INVESTIGATOR");
+
+        assertThatThrownBy(() -> verifyDraft.execute(DisplayNumber.draftNo(draftId)))
+                .isInstanceOf(AiClientException.class);
+        JsonNode body = verifyDraft.execute(DisplayNumber.draftNo(draftId));
+
+        assertThat(body.path("status").asText()).isEqualTo("PASSED");
+        assertThat(resultCount(draftId)).isEqualTo(1);
+    }
+
+    // 3-4
+    @Test
+    void 경계_해시가_달라도_PASSED가_아니면_지금처럼_저장한다() {
+        long caseId = escalatedCase();
+        long draftId = savedDraft(caseId);
+        when(aiClient.verify(anyString(), any()))
+                .thenAnswer(i -> answer(i.getArgument(1), "CODE_FAILED", OTHER_HASH));
+        login(investigator, "INVESTIGATOR");
+
+        JsonNode body = verifyDraft.execute(DisplayNumber.draftNo(draftId));
+
+        assertThat(body.path("status").asText()).isEqualTo("CODE_FAILED");
+        assertThat(jdbc.queryForObject("select status || ',' || passed || ',' || narrative_sha256 "
+                + "from ops.verification_results where draft_id = ?", String.class, draftId))
+                .isEqualTo("CODE_FAILED,false," + OTHER_HASH);
+    }
+
     // 4
     @Test
     void 실패_담당이_아닌_조사역은_403이고_AI를_부르지_않는다() {
@@ -272,7 +328,11 @@ class VerifyStrDraftDbTest {
 
     /** 규약 5.3 모양의 응답. 해시는 받은 본문으로 계산(AI 와 같은 규칙). */
     private static AiDtos.VerifyResponse answer(AiDtos.VerifyRequest req, String status) {
-        String hash = hashOf(req);
+        return answer(req, status, hashOf(req));
+    }
+
+    /** 해시를 지정한 응답 — 해시 불일치 흉내용. */
+    private static AiDtos.VerifyResponse answer(AiDtos.VerifyRequest req, String status, String hash) {
         String verificationId = "v-" + java.util.UUID.randomUUID();
         ObjectNode raw = JSON.createObjectNode()
                 .put("verification_id", verificationId)
