@@ -158,7 +158,7 @@ public class ListCases {
         return switch (parts[0]) {
             // 점수 순은 CaseRepository.searchByScore 가 쿼리에 직접 적는다(nulls last). 여기 값은 쓰지 않는다
             case "score" -> Sort.by(direction, "openedScore.score").and(tieBreak);
-            case "created_at" -> Sort.by(direction, "createdAt").and(Sort.by(direction, "id"));
+            case "created_at" -> Sort.by(direction, "createdAt").and(Sort.by(Sort.Direction.DESC, "id"));
             default -> Sort.by(direction, "status").and(tieBreak);
         };
     }
