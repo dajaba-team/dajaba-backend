@@ -67,6 +67,7 @@ import java.util.Set;
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private static final String BINDING_FAILURE_MESSAGE = "형식이 올바르지 않습니다";
 
     /** application.yml property-naming-strategy: SNAKE_CASE 와 같은 규칙 — 요청·응답 직렬화와 이름이 어긋나지 않게. */
     private static final PropertyNamingStrategies.NamingBase SNAKE_CASE =
@@ -104,12 +105,14 @@ public class GlobalExceptionHandler {
      * 본문·@ModelAttribute 쿼리의 @Valid 실패. details 키는 요청 JSON 이름(snake_case, 규약 0절) — 필드 경로를 조각마다
      * Jackson 과 같은 규칙으로 바꾸고 [0]·. 은 그대로(items[0].transactionId → items[0].transaction_id).
      * 한 필드에 위반이 여럿이면 첫 번째만. 클래스 수준 검증(global error)은 지금 없어서 담지 않는다 (SCRUM-167).
+     * 바인딩 실패(형 변환)는 고정 문구 — Spring 기본 메시지에 Java 타입·패키지가 들어가서(11/25 전체 점검).
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> invalid(MethodArgumentNotValidException e) {
         Map<String, Object> fields = new LinkedHashMap<>();
         for (FieldError fe : e.getBindingResult().getFieldErrors()) {
-            fields.putIfAbsent(toJsonPath(fe.getField()), fe.getDefaultMessage());
+            String message = fe.isBindingFailure() ? BINDING_FAILURE_MESSAGE : fe.getDefaultMessage();
+            fields.putIfAbsent(toJsonPath(fe.getField()), message);
         }
         return counted(ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ErrorResponse.of("INVALID_REQUEST", "요청 값이 올바르지 않습니다", fields)));
