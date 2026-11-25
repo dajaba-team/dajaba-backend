@@ -18,8 +18,9 @@
 - 금액은 `numeric(20,6)`. 원본 금액을 반올림하지 않아요(Bitcoin 소수 6자리). [안건 19, 11/2 준혁·준영 합의, V005_2] 〔10/27의 `numeric(18,2)` 유지는 실제 파일에서 293,425개 필드가 바뀌어 변경〕
 - **은행 ID는 앞 0을 빼고 정규화**해 `account_key`를 만들어요(`023842` → `23842`, 예 `10_8000EBD30`). 거래·계좌 파일에 같은 규칙, 원본 표기는 `from_bank_id_raw`·`to_bank_id_raw`(V004_1), 계좌번호는 원문 그대로. 11/2 전체 파일에서 키 충돌·거래 계좌 미연결 0을 확인했고 ML 규약도 같은 규칙이에요. [미결 6, 서식 안건 5-1, SCRUM-54] 〔SD 명세 §11.2·공통 규약 §0의 "앞 0 보존"은 그 전 안 — 공통 규약은 반영 요청(SCRUM-71)〕
 - **`transaction_id` — DB가 자동 발급.** 원본 추적은 `source_files` 테이블로: `source_files(id, file_name, file_hash CHAR(64) UNIQUE)`, `transactions.source_file_id`(FK), `source_row_number`, `UNIQUE(source_file_id, source_row_number)`. CSV 행 번호·적재 순서로 ID를 추정하지 않아요. [안건 1, ML 규약 §1.1] 〔레퍼런스 §2·SD 명세 §11.2의 "CSV 행 번호를 그대로 PK"는 그 전 안〕
-- `customer_attributes`는 팀이 만든 **가상 KYC CSV**(`HI-Small_STR_expanded`의 `customer_attributes.csv`, 166,207명 — `entities`와 같은 수)를 postgres 계정으로 한 번 `COPY`해요. 백엔드 앱은 원천을 고칠 수 없어서(V004_1) 적재 코드가 없어요. 계좌 개설 목적(서식 IV-88)은 1,669명만 있고 나머지는 NULL이에요(V020). AI 피처로는 안 써요. [SCRUM-430, 레퍼런스 §3.1, ML 규약 §1] 〔"백엔드가 `entity_id` 해시를 시드로 만든다"는 그 전 안〕
-  - 적재: CSV를 `data/customer_attributes.csv`에 두고 아래를 실행해요. **DB를 리셋하면 다시 실행해요.** 확인은 `select count(*), count(account_purpose) from ops.customer_attributes` → `166207 | 1669`.
+- `customer_attributes`는 팀이 만든 **가상 KYC CSV**(`HI-Small_STR_expanded`의 `customer_attributes.csv`, 166,207명 — `entities`와 같은 수)예요. **데이터 적재 폴더(`data/`, `AML_DATASET_DIR`)에 HI-Small 파일 3개와 같이 두면 데이터 적재가 계좌(법인) 다음에 같이 넣어요**(`LoadCustomerAttributesFile`). 선택 파일이라 없으면 건너뛰고, 법인이 없거나 이미 있는 행도 건너뛰어요. 값 형식(날짜·국가코드 2자리·위험등급·필수값)이 틀리면 적재 전체가 실패해요. 계좌 개설 목적(서식 IV-88)은 1,669명만 있고 나머지는 NULL이에요(V020). AI 피처로는 안 써요. [SCRUM-430, 레퍼런스 §3.1, ML 규약 §1] 〔"백엔드가 `entity_id` 해시를 시드로 만든다"는 그 전 안〕
+  - 확인: `select count(*), count(account_purpose) from ops.customer_attributes` → `166207 | 1669`. 적재 로그 `KYC 적재 … file_found=true inserted=166207`.
+  - **이미 데이터 적재를 끝낸 DB**(같은 파일은 다시 적재되지 않아요)에는 아래로 한 번만 넣어요.
 
     ```
     docker cp data/customer_attributes.csv aml-db:/tmp/kyc.csv
