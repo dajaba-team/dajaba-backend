@@ -99,13 +99,24 @@ class CustomerAttributesLoadTest {
     void 법인이_없거나_이미_들어_있는_행은_건너뛰고_BOM_헤더도_읽는다() throws Exception {
         load("E1,RETAIL,MEDIUM,SALES_DEPOSIT,2022-01-01,US");
 
-        Path file = Files.writeString(dir.resolve("again.csv"), "﻿" + HEADER + "\r\n"
+        Path file = Files.writeString(dir.resolve("again.csv"), (char) 0xFEFF + HEADER + "\r\n"
                 + "E1,OTHER,HIGH,PERSONAL,2020-01-01,US\r\nE9,RETAIL,MEDIUM,,2020-01-01,US\r\n");
         CustomerAttributesLoadResult result = loadCustomerAttributesFile.execute(file);
 
         assertThat(result).isEqualTo(new CustomerAttributesLoadResult(true, 2, 0));
         assertThat(result.skipped()).isEqualTo(2);
         assertThat(text("select industry from ops.customer_attributes where entity_id = 'E1'")).isEqualTo("RETAIL");
+        assertThat(count("select count(*) from ops.customer_attributes where entity_id = 'E9'")).isZero();
+    }
+
+    @Test
+    void 법인이_없는_행은_값이_틀려도_건너뛰고_따옴표_빈_목적은_NULL이다() throws Exception {   // #190 리뷰 — 건너뛰기가 형식 검사보다 먼저
+        CustomerAttributesLoadResult result = load(
+                "E9,RETAIL,MEDIUM,,NOT-A-DATE,USA",
+                "E1,RETAIL,MEDIUM,\"\",2022-01-01,US");
+
+        assertThat(result).isEqualTo(new CustomerAttributesLoadResult(true, 2, 1));
+        assertThat(text("select account_purpose from ops.customer_attributes where entity_id = 'E1'")).isNull();
         assertThat(count("select count(*) from ops.customer_attributes where entity_id = 'E9'")).isZero();
     }
 

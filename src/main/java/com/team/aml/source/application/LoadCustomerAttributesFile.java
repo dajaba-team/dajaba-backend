@@ -22,6 +22,8 @@ import java.nio.file.Path;
 public class LoadCustomerAttributesFile {
 
     static final String HEADER = "entity_id,industry,risk_level,account_purpose,onboarded_at,country_code";
+    /** UTF-8 BOM(U+FEFF) — 엑셀로 저장한 CSV 맨 앞에 붙어요. */
+    private static final char BOM = (char) 0xFEFF;
 
     private final CustomerAttributesLoadRepository customerAttributes;
 
@@ -46,6 +48,6 @@ public class LoadCustomerAttributesFile {
     }
 
     private static String stripBom(String line) {
-        return line.startsWith("﻿") ? line.substring(1) : line;
+        return !line.isEmpty() && line.charAt(0) == BOM ? line.substring(1) : line;
     }
 }
