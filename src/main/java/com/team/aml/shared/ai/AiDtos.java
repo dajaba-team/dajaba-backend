@@ -1,6 +1,7 @@
 package com.team.aml.shared.ai;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
@@ -190,12 +191,18 @@ public final class AiDtos {
     public enum ReferenceSearchStatus { FOUND, EMPTY }
 
     /**
-     * 참고 사례 한 건 (AI `ReferenceResult`). 본문 칸 없음. `typologies` 는 그 청크 태그 전부라 검색 가능한 5종 밖
-     * 유형도 올 수 있어 문자열. `publisher`·`year` 는 없으면 null.
+     * 참고 사례 한 건 (AI `ReferenceResult`). 원문 본문은 제외하고 관련 구절 `excerpt` 만 받는다(최대 300 UTF-16 코드 유닛, 없으면 null).
+     * `typologies` 는 그 청크 태그 전부라 검색 가능한 5종 밖 유형도 올 수 있어 문자열. `publisher`·`year` 는 없으면 null.
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ReferenceResult(String docId, String docTitle, String publisher, Integer year, int page,
-                                  double score, String chunkId, List<String> typologies, String sourceType) {}
+                                  double score, String chunkId, List<String> typologies, String sourceType,
+                                  @JsonInclude(JsonInclude.Include.NON_NULL) String excerpt) {
+        public ReferenceResult(String docId, String docTitle, String publisher, Integer year, int page,
+                               double score, String chunkId, List<String> typologies, String sourceType) {
+            this(docId, docTitle, publisher, year, page, score, chunkId, typologies, sourceType, null);
+        }
+    }
 
     /** 참고 사례 검색 `search_meta` (AI `ReferenceSearchMeta`). */
     @JsonIgnoreProperties(ignoreUnknown = true)
