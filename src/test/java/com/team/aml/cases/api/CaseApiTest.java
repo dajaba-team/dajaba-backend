@@ -105,6 +105,12 @@ class CaseApiTest {
         assertThat(detail.get("account_ref").asText()).isEqualTo(item.get("account_ref").asText());
         assertThat(detail.get("account_no").asText()).isEqualTo("010_****BD30");
         assertThat(texts(detail.get("available_actions"))).contains("ESCALATE", "CLOSE");
+        // SCRUM-420 — 목업 순위는 근거 digest 가 가짜라 DB 와 안 맞는다 → 늘 UNAVAILABLE, 순위 칸은 null
+        JsonNode dlRank = detail.get("dl_rank");
+        assertThat(dlRank.get("status").asText()).isEqualTo("UNAVAILABLE");
+        assertThat(dlRank.get("reason").asText()).isNotBlank();
+        assertThat(dlRank.get("ml_rank").isNull()).isTrue();
+        assertThat(dlRank.get("fused_rank").isNull()).isTrue();
         assertThat(detail.get("history").get(0).get("action").asText()).isEqualTo("ASSIGN");
         assertThat(detail.get("history").get(0).get("created_by").asText()).isEqualTo(assigner.loginId());
         assertThat(detail.get("prior_alerts").isArray()).isTrue();
@@ -508,6 +514,7 @@ class CaseApiTest {
         JsonNode adminRow = itemOf(json.readTree(body(get("/api/v1/cases").param("status", "REVIEWING")
                 .param("size", "100").with(as(admin)), 200)), caseNo);
         assertThat(texts(adminRow.get("available_actions"))).contains("REASSIGN");
+        assertThat(adminRow.get("dl_rank").get("status").asText()).isEqualTo("UNAVAILABLE");   // SCRUM-420
         JsonNode invRow = itemOf(json.readTree(body(get("/api/v1/cases").param("status", "REVIEWING")
                 .param("size", "100").with(as(inv)), 200)), caseNo);
         assertThat(texts(invRow.get("available_actions"))).doesNotContain("REASSIGN").contains("ESCALATE");

@@ -10,6 +10,8 @@ import com.team.aml.cases.domain.PolicyNotConfiguredException;
 import com.team.aml.cases.domain.RejectionReasonCode;
 import com.team.aml.cases.domain.ScoreBand;
 import com.team.aml.cases.domain.ScoreClassification;
+import com.team.aml.detection.application.FindAlertKeys;
+import com.team.aml.detection.domain.AlertKey;
 import com.team.aml.shared.security.AppUserDetails;
 import com.team.aml.shared.security.CurrentUser;
 import com.team.aml.user.domain.Role;
@@ -72,11 +74,12 @@ public class ListCases {
     /**
      * 목록 한 줄. accountKey 는 내부 키 — 가린 account_no·account_ref 로 바꾸는 건 컨트롤러 응답 몫(SCRUM-106).
      * availableActions 는 상세와 같은 CaseAction.availableFor — 목록의 [배정]·[담당자 변경]도 이것만 보고 켠다(#23 리뷰).
+     * alertNo·batchDate 는 ML+DL 조사 순위를 붙이는 데 쓴다(CaseDlRanks, SCRUM-420) — 응답 칸은 아니다. 경보가 없으면 null.
      */
     public record Item(String caseNo, CaseStatus status, String accountKey, String entityId, UserRef assignee,
                        BigDecimal score, ScoreBand scoreBand, String policyVersion,
                        RejectionReasonCode rejectionReasonCode, long version, Instant createdAt,
-                       List<CaseAction> availableActions) {
+                       List<CaseAction> availableActions, String alertNo, LocalDate batchDate) {
         public Item {
             availableActions = availableActions == null ? List.of() : List.copyOf(availableActions);
         }
@@ -87,14 +90,16 @@ public class ListCases {
     private final UserRefs userRefs;
     private final CurrentUser currentUser;
     private final CasePolicySource policySource;
+    private final FindAlertKeys alertKeys;
 
     public ListCases(CaseRepository cases, UserRepository users, UserRefs userRefs, CurrentUser currentUser,
-                     CasePolicySource policySource) {
+                     CasePolicySource policySource, FindAlertKeys alertKeys) {
         this.cases = cases;
         this.users = users;
         this.userRefs = userRefs;
         this.currentUser = currentUser;
         this.policySource = policySource;
+        this.alertKeys = alertKeys;
     }
 
     @Transactional(readOnly = true)
@@ -118,13 +123,16 @@ public class ListCases {
         AppUserDetails me = currentUser.require();
         Role role = Role.valueOf(me.role());
         CasePolicy policy = currentPolicy();
+        Map<Long, AlertKey> keys = alertKeys.execute(found.map(Case::getAlertId).getContent());   // 한 페이지 쿼리 하나
         return found.map(c -> {
+            AlertKey key = keys.get(c.getAlertId());
             BigDecimal score = c.getOpenedScore() == null ? null : c.getOpenedScore().score();
             ScoreClassification grade = score == null || policy == null ? null : policy.classify(score, null);
             return new Item(c.getCaseNo(), c.getStatus(), c.getAccountKey(), c.getEntityId(),
                     refs.get(c.getAssigneeId()), score, grade == null ? null : grade.band(),
                     grade == null ? null : grade.policyVersion(), c.getRejectionReasonCode(), c.getVersion(),
-                    c.getCreatedAt().truncatedTo(ChronoUnit.SECONDS), CaseAction.availableFor(c, me.userId(), role));
+                    c.getCreatedAt().truncatedTo(ChronoUnit.SECONDS), CaseAction.availableFor(c, me.userId(), role),
+                    key == null ? null : key.alertNo(), key == null ? null : key.batchDate());
         });
     }
 

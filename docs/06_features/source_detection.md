@@ -147,9 +147,10 @@
 | `GetAlertSummary(alertId)` | cases 상세 (`GetCaseDetail`) | 경보(`alert_no`·`rule_id`·`batch_date`·창·`reference_ts`) + 거래 수 + 점수(`score_status`·`score`·실패 코드·모델·피처 버전·`data_quality_status`·`reasons`(저장값 그대로, 없으면 `[]`)). 점수 묶음은 늘 있고, 점수 전·산출 실패면 `score_status`·실패 코드만 있고 점수·버전·`data_quality_status`가 null. `reasons_status`는 값 목록·reasons 형식이 미결(3·5번)이라 안 줌(지윤 요청). 등급·정책 버전은 없음 — cases가 생성 때 저장 [SCRUM-152] | 읽기 |
 | `ListAlertTransactions(alertId, pageable)` | cases 거래 목록 | 근거 거래 페이지. 마스킹은 부르는 쪽 응답에서 | 읽기 |
 | `FindAlertsByEntity(entityId, before, limit)` | cases 상세 (`prior_alerts`) | 같은 법인의 과거 경보 — `reference_ts < before`만, 최근 것부터 `limit`건. 조건은 `prior_alert_count`와 같은 한 줄(`PRIOR_ALERT_WHERE`). 법인 null이면 `[]`(임의 연결 안 함). 경보 번호·룰·날짜·기준 시각·계좌 키·점수 상태·점수만, 정답 칸 없음 [SCRUM-239] | 읽기 |
+| `FindAlertKeys(alertIds)` | cases 목록 (`dl_rank`) | 경보 id 여럿 → 경보 번호·배치 날짜(쿼리 하나). 없는 id 는 빠짐. 목록이 날짜마다 `GetDlRanking` 을 부르려고 [SCRUM-420] | 읽기 |
 | `GetAlertForDraft(alertId)` (명세 이름 GetAlertPayload) | str 초안 요청 (`RequestStrDraft`) | `AlertPayload`(규약 §2, `created_at` 포함) + `reasons`(점수 payload 그대로, 없으면 `[]`) + `prior_alert_count`(같은 법인·앞선 경보 수) [SCRUM-155] | 읽기 |
 | ~~`RecordScoreBand`~~ | — | 안 만듦. 등급·정책 버전은 cases가 케이스 생성 때 자기 행에 저장(계약서 Q2, SCRUM-152) | — |
-| `GetDlRanking(scanDate)` | 없음 — 케이스 목록·상세(다음 이슈) | AI ML+DL 조사 순위를 그 날짜 경보·점수·기준 시각·근거와 맞춰 보고 `Available`/`Unavailable(reason)`. 아래 "ML+DL 조사 순위 대조 조회" [SCRUM-376·415] | AI 호출은 트랜잭션 밖, 그 뒤 읽기 |
+| `GetDlRanking(scanDate)` | cases `CaseDlRanks` — 케이스 목록·상세 `dl_rank`(SCRUM-420, 조회 트랜잭션 밖) | AI ML+DL 조사 순위를 그 날짜 경보·점수·기준 시각·근거와 맞춰 보고 `Available`/`Unavailable(reason)`. 아래 "ML+DL 조사 순위 대조 조회" [SCRUM-376·415] | AI 호출은 트랜잭션 밖, 그 뒤 읽기 |
 
 **ML+DL 조사 순위 대조 조회 — 구현됨 (SCRUM-376)** `GetDlRanking.execute(LocalDate scanDate)` → `DlRankingResult`. AI `getDlRankings`(`03_shared.md` 「ML+DL 조사 순위」 — 응답 모양 확인까지 거기서)를 **트랜잭션 밖에서** 부르고, 그 뒤 그날 경보 번호·룰·점수·모델·기준 시각·근거 원본 행을 쿼리 하나로 읽어 맞춰 봐요. 오래된 점수와 새 순위가 섞이지 않게 **하나라도 어긋나면 순위 전체를 버려요**(경보 몇 건만 빼고 쓰지 않음).
 - `Available(scanDate, snapshotSha256, mlModel, dlModel, ranks)` — `ranks` = 경보 번호 → `{ml_rank, fused_rank, fallback_reason, dl_score}`(그날 경보 전부, 순위 null 가능)

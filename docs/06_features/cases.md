@@ -136,6 +136,15 @@
 - **null·[]인 칸**은 위 "null로 두는 칸"과 같아요. 키는 빼지 않아요(계약서 2.3).
 - 남은 API: 04 재배정, 05 메모, 08~11·15 거래·근거·그래프·이력·메모 이력 — 각각 유스케이스가 생기면 이 컨트롤러에 붙여요.
 
+**ML+DL 조사 순위 `dl_rank` — 목록(C1)·상세(C2) (SCRUM-420)** 두 응답에 같은 모양의 `dl_rank` 칸이 붙어요(null 아님). 값은 detection `GetDlRanking`(`source_detection.md` 「ML+DL 조사 순위 대조 조회」) 결과예요.
+- 모양 `{status, reason, ml_rank, fused_rank, fallback_reason, dl_score}` — `status` = `AVAILABLE` | `UNAVAILABLE`
+  - `AVAILABLE` — `reason` null. `ml_rank`·`fused_rank`(1이 최상위)는 ML 점수 없는 경보(`fallback_reason` = `ML_UNSCORED`)면 null. `fallback_reason` null = ML·DL 둘 다 연결, `INCOMPLETE_DL_EVIDENCE` = DL 근거 일부 빠짐(ML 자리 유지, `dl_score` null)
+  - `UNAVAILABLE` — 순위 칸 전부 null, `reason` 은 `DlRankingResult.Reason` 이름 7종(`AI_UNAVAILABLE`·`ALERT_SET_MISMATCH`·`RULE_MISMATCH`·`MODEL_MISMATCH`·`SCORE_MISMATCH`·`REFERENCE_MISMATCH`·`EVIDENCE_MISMATCH`). 화면은 값마다 나누지 않고 "순위 조회 불가"
+- **조회 트랜잭션 밖에서 붙여요** — 컨트롤러가 `ListCases`·`GetCaseDetail`(트랜잭션)을 끝낸 뒤 `CaseDlRanks`(트랜잭션 없음)를 불러요. 안에서 부르면 AI 를 기다리는 동안(최대 10초) DB 커넥션을 잡고 있어요
+- 목록은 페이지의 경보 번호·배치 날짜를 detection `FindAlertKeys`(쿼리 하나)로 찾아 **배치 날짜마다 한 번** `GetDlRanking` 을 불러요. 날짜가 여럿이면 차례로 불러요(캐시 없음). 그날이 `Unavailable` 이면 그날 케이스 전부 `UNAVAILABLE`
+- DB 장애는 그대로 500 — `GetDlRanking` 과 같아요(순위가 없는 것과 DB 장애를 숨기지 않게)
+- 목업(`aml.ai.mock=true`)은 근거 digest 가 가짜라 늘 `UNAVAILABLE` 이에요. 순위가 붙는 건 DB 를 새로 만들고 9/7 을 처음 스캔했을 때(준영님 9/7 스냅샷)
+
 **질문 답변 — A8 질문하기 · C9 지난 질문 (SCRUM-302)** `CaseQuestionController` `/api/v1/cases/{case_no}/questions`. 근거: 노션 「조사역 질문 답변 설계 문서」 7·9.1·13절, 규약 5.4, 프론트 계약서 5.3 A8·C9(11/19). AI 호출·응답 확인은 진희 님 `AiClient.ask`(SCRUM-291)를 그대로 써요.
 
 | 유스케이스 | API | 검사 순서·오류 |

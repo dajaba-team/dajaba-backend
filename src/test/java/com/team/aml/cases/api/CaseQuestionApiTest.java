@@ -93,6 +93,9 @@ class CaseQuestionApiTest {
         apr = newUser("q_apr" + n, "APPROVER");
         admin = newUser("q_adm" + n, "ADMIN");
         reset(aiClient);
+        // 상세·목록이 ML+DL 조사 순위를 부른다(SCRUM-420). 목은 기본 null 을 돌려줘 500 이 되므로 "지금 못 씀"으로 답한다
+        doThrow(new AiClientException("DL_RANKING_UNAVAILABLE", "test", Map.of(), 503))
+                .when(aiClient).getDlRankings(any());
     }
 
     // ── 정상 ──────────────────────────────────────────────────

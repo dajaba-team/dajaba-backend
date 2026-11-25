@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.team.aml.detection.domain.AlertForCaseOpening;
 import com.team.aml.detection.domain.AlertForDraft;
+import com.team.aml.detection.domain.AlertKey;
 import com.team.aml.detection.domain.AlertRepository;
 import com.team.aml.detection.domain.AlertSummary;
 import com.team.aml.detection.domain.AlertTransaction;
@@ -13,11 +14,14 @@ import com.team.aml.detection.domain.PriorAlert;
 import com.team.aml.shared.ai.AiDtos.AlertPayload;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Repository
@@ -82,10 +86,12 @@ public class AlertJdbcRepository implements AlertRepository {
             rs.getBoolean("is_self_transfer"));
 
     private final JdbcTemplate jdbc;
+    private final NamedParameterJdbcTemplate named;
     private final ObjectMapper om;
 
     public AlertJdbcRepository(JdbcTemplate jdbc, ObjectMapper om) {
         this.jdbc = jdbc;
+        this.named = new NamedParameterJdbcTemplate(jdbc);
         this.om = om;
     }
 
@@ -107,6 +113,13 @@ public class AlertJdbcRepository implements AlertRepository {
     public boolean exists(long alertId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
                 "select exists(select 1 from ops.alerts where id = ?)", Boolean.class, alertId));
+    }
+
+    @Override
+    public List<AlertKey> findKeys(Collection<Long> alertIds) {
+        return named.query("select id, alert_no, batch_date from ops.alerts where id in (:ids)", Map.of("ids", alertIds),
+                (rs, rowNum) -> new AlertKey(rs.getLong("id"), rs.getString("alert_no"),
+                        rs.getObject("batch_date", LocalDate.class)));
     }
 
     @Override
