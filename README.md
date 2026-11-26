@@ -1,282 +1,280 @@
-# dajaba — AML 의심거래 탐지 + STR 초안 (백엔드)
+# 🛡️ 다자바 백엔드 (dajaba-backend)
 
-거래 데이터에서 자금세탁 의심 거래를 룰과 AI로 찾아 조사역에게 우선순위대로 보여주고, STR(의심거래보고서) 초안을 AI가 쓴 뒤
-코드와 AI가 이중 검증해 승인까지 가는 내부 업무 시스템. Spring Boot 3 / Java 17 / PostgreSQL 16 / Flyway.
+> 거래 데이터에서 자금세탁 의심 거래를 **룰로 찾고**, AI 점수로 **조사할 순서를 정해** 조사역에게 보여 주고, 의심거래보고서(STR) **초안 작성 → 검증 → 승인 → 확정본 PDF**까지 이어 주는 Spring Boot 서버
 
-설계 문서(정본)는 팀 노션: 백엔드 설계 가이드·레퍼런스, 인터페이스 규약, 계정·권한 안내, 10/27 회의 안건.
-코드 규칙·구조·기능별 요약과 리뷰 체크리스트는 [`docs/README.md`](docs/README.md), 흐름 그림은 [`docs/flows/`](docs/flows/README.md).
+![Java](https://img.shields.io/badge/Java-17-007396?logo=openjdk&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3-6DB33F?logo=springboot&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![Flyway](https://img.shields.io/badge/Flyway-V001~V019-CC0200?logo=flyway&logoColor=white)
+![Testcontainers](https://img.shields.io/badge/JUnit5-Testcontainers-25A162?logo=junit5&logoColor=white)
 
-## 처음 받았을 때 (5분)
+<br>
+
+## 1. 👥 백엔드 담당
+
+| 이름 | 맡은 일 |
+|---|---|
+| 박진희 (팀장) | 공통 코드·로그인·권한·감사 기록·AI 연동(`AiClient`) · 운영 도구 · 설계 문서 · `shared/` `user/` |
+| 배준혁 | 원천 적재·룰 탐지·점수 배치 · `source/` `detection/` |
+| 김지윤 | 케이스 생성·배정·조사·질문 답변 · `cases/` |
+| 오채영 | STR 초안·수정·검증·승인·모의 제출·확정본 PDF · `str/` |
+
+다자바는 다섯 명이 만든 프로젝트예요. 이 리포는 그중 백엔드 서버만 담고 있어요.
+
+| 리포 | 내용 |
+|---|---|
+| **dajaba-backend** (여기) | Spring Boot — 적재·룰 탐지·케이스·STR 워크플로·승인·확정본 PDF |
+| [dajaba-frontend](https://github.com/dajaba-team/dajaba-frontend) | React — 조사역·승인자·관리자 화면 |
+| [dajaba-ai](https://github.com/dajaba-team/dajaba-ai) | FastAPI — 점수·조사 순위·STR 초안·검증·참고 사례·질문 답변. 이 서버가 HTTP로 불러요 |
+
+<br>
+
+## 2. 📢 개요
+
+은행 조사역은 하루에도 수많은 경보를 받지만, 다 볼 수는 없어요. 다자바 백엔드는 거래 원천을 적재하고 룰로 경보를 만든 뒤, AI 점수를 받아 **우선순위가 높은 경보만 케이스로** 만들어요. 조사역은 케이스를 조사해 STR 초안을 받고, 고치고, 검증을 통과시킨 뒤 승인자에게 올려요. 승인된 보고서는 **바뀌지 않는 확정본 PDF**로 남아요.
+
+| 문제 | 이 서버가 하는 일 |
+|---|---|
+| 거래 508만 건에서 의심 패턴을 사람이 찾기 어려움 | 자금세탁 유형 룰 6개(분산 송금·집중 입금·환전 중계·순환·흩었다 모으기·모았다 흩기)로 하루치 경보 생성 |
+| 경보가 하루 1,500건이 넘음 | AI 점수 + 운영 정책(CasePolicy)으로 HIGH만 케이스로 열고 담당자 배정 |
+| 조사·보고 과정이 사람마다 다름 | 케이스 상태 전이(OPEN → REVIEWING → ESCALATED → DRAFTED → PENDING_APPROVAL → APPROVED → REPORTED)를 엔티티가 강제 |
+| AI가 쓴 초안을 그대로 믿기 어려움 | AI 코드 검사 + 평가자 검증을 통과한 현재 본문만 승인 요청 가능, 자기 승인 금지 |
+| 보고 뒤 "그때 무엇을 보고했나" 증명 필요 | 승인 시점 스냅샷으로 확정본 PDF 생성 · SHA-256 보관 · 누가 언제 열람했는지 기록 |
+
+<br>
+
+## 3. 🛠 기술 스택
+
+| 영역 | 사용 |
+|---|---|
+| Backend | ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-6DB33F?logo=springboot&logoColor=white) ![Spring Security](https://img.shields.io/badge/Spring%20Security-6DB33F?logo=springsecurity&logoColor=white) ![JPA](https://img.shields.io/badge/Spring%20Data%20JPA-59666C?logo=hibernate&logoColor=white) ![WebClient](https://img.shields.io/badge/WebClient-6DB33F?logo=spring&logoColor=white) ![springdoc](https://img.shields.io/badge/springdoc-85EA2D?logo=swagger&logoColor=black) |
+| Data | ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white) ![pgvector](https://img.shields.io/badge/pgvector-4169E1?logo=postgresql&logoColor=white) ![Flyway](https://img.shields.io/badge/Flyway-CC0200?logo=flyway&logoColor=white) |
+| Ops | ![RabbitMQ](https://img.shields.io/badge/RabbitMQ-FF6600?logo=rabbitmq&logoColor=white) ![Redis](https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white) ![MinIO](https://img.shields.io/badge/MinIO-C72E49?logo=minio&logoColor=white) ![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?logo=prometheus&logoColor=white) ![Grafana](https://img.shields.io/badge/Grafana-F46800?logo=grafana&logoColor=white) ![Docker](https://img.shields.io/badge/Docker%20Compose-2496ED?logo=docker&logoColor=white) |
+| PDF | ![openhtmltopdf](https://img.shields.io/badge/openhtmltopdf-B30B00) ![NanumGothic](https://img.shields.io/badge/NanumGothic-03C75A) |
+| Test | ![JUnit5](https://img.shields.io/badge/JUnit5-25A162?logo=junit5&logoColor=white) ![Testcontainers](https://img.shields.io/badge/Testcontainers-291A3F) ![ArchUnit](https://img.shields.io/badge/ArchUnit-555555) |
+
+버전은 [`build.gradle.kts`](build.gradle.kts) 기준이에요(Spring Boot 3.3.5 · PostgreSQL 16 + pgvector 0.8.2). Spring Security는 세션 + CSRF, WebClient는 AI 호출, springdoc은 Swagger UI, openhtmltopdf + 나눔고딕은 확정본 PDF, ArchUnit은 폴더 의존 방향 검사에 써요. RabbitMQ는 작업 큐, Redis는 로그인 세션, MinIO는 확정본 PDF 보관이에요. RabbitMQ·Redis·MinIO는 **기본으로 꺼져 있고**, 꺼져 있으면 앱 안 실행기·앱 메모리 세션·로컬 폴더로 똑같이 돌아요. 도구가 죽어도 로그인·케이스·STR은 멈추지 않아요.
+
+<br>
+
+## 4. ✨ 주요 기능
+
+| 기능 | 엔드포인트 (대표) | 한 줄 |
+|---|---|---|
+| 원천 적재 | `POST /api/v1/admin/batches/load` | IBM 합성 거래 508만 건을 `COPY`로 한 번 적재 |
+| 룰 스캔 | `POST /api/v1/admin/batches/rule-scan?date=` | 룰 6개로 그날 경보 생성 |
+| 점수 | `POST /api/v1/admin/batches/score?date=` | 경보를 500개씩 AI에 보내 점수 저장, 실패분만 재처리 |
+| 케이스 생성·배정 | `POST /api/v1/admin/batches/open-cases?date=` · `POST /api/v1/cases/{case_no}/assign` | 운영 정책으로 등급을 매겨 케이스를 열고 관리자가 배정 |
+| 케이스 조사 | `GET /api/v1/cases/{case_no}` · `/transactions` · `/graph` · `/summary` | 근거 거래·자금 흐름 그래프·AI 요약 5줄·메모·이력 |
+| 질문 답변 | `POST /api/v1/cases/{case_no}/questions` | 케이스에 대해 묻고 근거 거래가 붙은 답 받기 |
+| STR 초안 | `POST /api/v1/cases/{case_no}/str-drafts` | AI 초안 생성(동기 201 · 비동기 202) |
+| 수정·검증·승인 요청 | `PUT .../revisions` · `POST .../verify` · `POST .../submit` | 수정본마다 해시, 현재 본문이 검증을 통과해야 승인 요청 |
+| 승인·반려 | `POST /api/v1/approvals/{draft_no}/approve` · `/reject` | 담당했던 사람은 승인 불가, 반려는 보완 요청·종료 |
+| 모의 제출·확정본 PDF | `POST .../report` · `GET /api/v1/str-drafts/{draft_no}/report.pdf` | 승인 스냅샷으로 PDF 생성·보관, 열람 기록 |
+| 관리 | `/api/v1/admin/users` · `/access-logs` · `/ai-calls` · `/batches` | 계정·역할, 열람 기록, AI 호출 기록, 배치 상태 |
+
+모든 API는 세션 쿠키 + CSRF 헤더로 불러요. 역할은 조사역(`INVESTIGATOR`)·승인자(`APPROVER`)·관리자(`ADMIN`) 세 가지예요. 전체 목록과 요청·응답은 실행 뒤 Swagger(`/swagger-ui.html`)에서 볼 수 있어요.
+
+### 4.1 원천 적재·룰 탐지·점수 (준혁)
+
+> IBM 파일 3개 → `ops.transactions`(508만 건) → 룰 6개 스캔 → 경보 + 근거 거래 → AI 점수(500개씩) → 경보마다 점수·입력 품질 저장
+
+- 룰은 "새 관련 거래가 생긴 분"마다 지금 창과 1분 전 창을 비교해 **거짓 → 참**일 때만 경보를 내요(R04 순환은 고리가 닫힐 때마다). 창은 96시간이에요.
+- 금액은 방향대로(입금은 받은 금액, 출금은 보낸 금액) 다루고, 다른 통화끼리 더하지 않아요. 환산은 R03 환전 중계 하나만 써요.
+- 배치는 룰 스캔 → 점수 → 케이스 생성 순으로 성공하면 다음 단계가 이어져요. 실패한 묶음만 다시 보내요.
+- 룰 정의는 [`docs/06_features/rules.md`](docs/06_features/rules.md), 흐름은 [`docs/06_features/source_detection.md`](docs/06_features/source_detection.md)에 있어요.
+
+### 4.2 케이스 (지윤)
+
+> SCORED 경보 → CasePolicy가 점수로 HIGH·MEDIUM·LOW → HIGH를 케이스로 → 관리자 배정 → 조사역 조사 → 상신(ESCALATED) 또는 종료
+
+- 상태 전이는 `Case` 엔티티 메서드로만 바꿔요(`setStatus()` 없음). 동시 수정은 `version`으로 막아요(409 `CONCURRENT_UPDATE`).
+- 조사역은 새 케이스를 스스로 맡을 수 없고, 관리자가 배정·변경해요.
+- 근거 거래 보기, 자금 흐름 그래프, AI 요약, 메모 이력, 질문 답변이 한 화면에 모여요.
+
+### 4.3 STR 워크플로·확정본 PDF (채영)
+
+> 초안 생성(AI) → 조사역 수정(수정본마다 SHA-256) → 검증(AI) → 승인 요청 → 승인·반려 → 모의 제출 → 확정본 PDF
+
+- **현재 본문만 통과**: 승인 요청은 지금 본문 해시와 검증한 본문 해시가 같고 검증을 통과했을 때만 받아요.
+- **자기 승인 금지**: 그 케이스를 담당했던 사람은 승인·반려할 수 없어요. 모의 제출과 PDF 다시 만들기는 그 초안을 승인한 사람만 할 수 있어요.
+- **확정본은 바뀌지 않음**: 승인 시점의 본문·거래·서식 데이터를 스냅샷으로 고정해 별지 제1호 서식 PDF를 만들어요. 파일은 SHA-256과 함께 보관하고, 내려받을 때 해시가 다르면 내보내지 않아요.
+- PDF는 커밋 뒤 RabbitMQ 큐(꺼지면 앱 안 실행기)에서 만들어요. 실패하면 승인한 사람이 다시 만들 수 있어요.
+- 화면의 버튼은 서버가 주는 `available_actions`만 보고 켜요. 버튼 조건과 API의 403·409 검사는 같은 코드로 판단해요.
+
+### 4.4 공통·보안·감사 (진희)
+
+> 로그인(세션 + CSRF) → 역할별 URL 권한 → 유스케이스의 담당자·상태 검사 → 열람 기록·AI 호출 기록
+
+- 세션은 같은 계정 1개, 30분 만료예요. 로그인 실패는 이유와 상관없이 같은 401을 줘요.
+- 에러는 하나의 JSON 형식(`error.code`·`message`·`details`)과 `request_id`로 내려가요.
+- STR 본문·PDF 열람, 내보내기는 `access_logs`에, AI 호출은 시도마다 `ai_call_logs`에 메타데이터만 남겨요. 로그에는 계좌번호·금액·본문을 남기지 않아요.
+
+<br>
+
+## 5. 📌 아키텍처
+
+<!-- 📷 사진 첨부: 시스템 아키텍처 (AI 리포와 같은 그림을 써도 됨) -->
+![다자바 시스템 아키텍처](docs/images/architecture.png)
+
+> 로컬은 같은 구성을 Docker Compose로 띄워요. `name: dajaba`로 프로젝트 이름을 고정해서, AI 서버는 `dajaba_default` 네트워크에 붙어요.
+
+- 프론트는 백엔드만 불러요. AI 서버는 백엔드만 불러요(`X-Internal-Key`).
+- 백엔드와 AI는 같은 PostgreSQL을 써요. 백엔드는 `ops` 스키마를 읽고 쓰고, AI는 원천 4개 테이블만 읽고 `ai` 스키마에 써요.
+- 기능 폴더 6개(`source`·`detection`·`cases`·`str`·`user`·`shared`)는 각각 `api → application → domain`, `infrastructure` 4계층이에요. 폴더끼리는 `application` 유스케이스로만 부르고, 방향은 `source ← detection ← cases ← str`이에요. `ArchitectureTest`가 CI에서 막아요.
+
+| 백엔드 → AI | 쓰는 곳 |
+|---|---|
+| `POST /v1/scores` | 점수 배치 |
+| `GET /v1/dl-rankings/{scan_date}` | ML+DL 조사 순위 |
+| `POST /v1/str/drafts` · `/v1/str/verify` | STR 초안·검증 |
+| `POST /v1/cases/summary` · `/v1/cases/ask` | 케이스 요약·질문 답변 |
+| `POST /v1/references/search` · `/v1/references/str` | 참고 사례 찾기·승인 STR 색인 |
+
+AI 서버 없이 화면을 개발할 수 있게 `AML_AI_MOCK=true`(기본)면 목업 응답을 써요.
+
+<br>
+
+## 6. 🗂 ERD (`ops` 스키마)
+
+<!-- 📷 사진 첨부: ops 스키마 ERD -->
+![백엔드 ERD](docs/images/erd-ops.png)
+
+Flyway `V001`~`V019`, 테이블 23개예요. DB 구조는 Flyway 파일로만 바꾸고(`ddl-auto=validate`), 이미 적용한 파일은 고치지 않아요.
+
+| 묶음 | 테이블 |
+|---|---|
+| 원천 | `transactions` · `accounts` · `entities` · `customer_attributes` · `source_files` |
+| 탐지 | `rules` · `alerts` · `alert_transactions` · `alert_scores` · `batch_runs` |
+| 케이스 | `cases` · `case_history` · `case_summaries` · `case_questions` |
+| STR | `str_draft_requests` · `str_drafts` · `str_revisions` · `verification_results` · `approvals` · `str_reports` |
+| 계정·기록 | `users` · `access_logs` · `ai_call_logs` |
+
+번호 규칙과 쓴 번호는 [`docs/05_flyway.md`](docs/05_flyway.md)에 있어요.
+
+<br>
+
+## 7. 📊 데이터
+
+| 데이터 | 내용 |
+|---|---|
+| 거래 | Kaggle 「IBM Transactions for Anti Money Laundering」 **HI-Small** (거래 508만 건). 실제 은행 데이터는 쓰지 않았어요 |
+| 고객 속성 | 적재 단계에서 만든 합성 값(`customer_attributes`) — 보고서에는 늘 "합성"으로 표시 |
+| 시연 날짜 | `2022-09-07` 하루 — 경보 1,545 → HIGH 27 → 케이스 27 (rc2 실제 모델 기준) |
+| 테스트 축소본 | `src/test/resources/fixtures/ibm_small/` (테스트 전용) |
+
+원본 파일은 커밋하지 않아요. 리포 루트 `data/`에 `HI-Small_Trans.csv`·`HI-Small_accounts.csv`·`HI-Small_Patterns.txt`를 그대로 두면 돼요.
+
+<br>
+
+## 8. 🔀 흐름도
+
+<!-- 📷 사진 첨부: 아래 그림들 (docs/flows/ 의 Mermaid를 이미지로 내보내도 됨) -->
+
+### 배치 — 적재부터 케이스까지
+![배치 흐름](docs/images/flow-batch.png)
+
+### 조사 — 배정부터 상신까지
+![조사 흐름](docs/images/flow-investigation.png)
+
+### STR — 초안부터 확정본 PDF까지
+![STR 흐름](docs/images/flow-str.png)
+
+### 로그인·권한
+![로그인·권한 흐름](docs/images/flow-auth.png)
+
+글로 된 흐름(Mermaid)은 [`docs/flows/`](docs/flows/README.md)에 있어요 — 배치 · 조사 · STR · 실패 경로 · 로그인 · 경보 일생.
+
+<br>
+
+## 9. 📁 폴더 구조
+
+```
+dajaba-backend/
+├─ src/main/java/com/team/aml/
+│  ├─ source/       준혁 — 원천 적재
+│  ├─ detection/    준혁 — 룰 스캔·경보·점수 배치
+│  ├─ cases/        지윤 — 케이스·배정·조사·질문 답변
+│  ├─ str/          채영 — 초안·수정·검증·승인·모의 제출·확정본 PDF
+│  ├─ user/         진희 — 계정·로그인·역할
+│  └─ shared/       진희 — 에러 응답·보안·감사 기록·AiClient·배치·작업 큐·지표
+│     (기능 폴더마다 api / application / domain / infrastructure)
+├─ src/main/resources/
+│  ├─ db/migration/ Flyway V001~V019
+│  ├─ fonts/        NanumGothic (확정본 PDF)
+│  └─ application.yml
+├─ db/init/         DB 첫 기동 — pgvector 확장·역할 3개·스키마 2개
+├─ contracts/       AI 규약 예시 JSON · MANIFEST
+├─ ops/             Prometheus·Grafana·Loki·Alloy 설정
+├─ tools/           축소본 만들기 등 도구
+├─ docs/            규칙·구조·기능별 설계·결정 기록·흐름
+└─ compose.yaml     db·app (+ ops 프로필 도구)
+```
+
+<br>
+
+## 10. 🧪 테스트
+
+| 구분 | 무엇을 | 방법 |
+|---|---|---|
+| 단위 | 엔티티 상태 전이·룰 판정·해시·서식 조립 | `./gradlew test` (DB 없이) |
+| 구조 | 폴더 의존 방향·`@Transactional` 위치·compose 규칙 | `ArchitectureTest` · `ComposeStructureTest` |
+| DB | 저장소·유스케이스·권한·동시 수정·배치 | `*DbTest` (Testcontainers PostgreSQL, Docker 필요) |
+| JSON 계약 | 요청·응답 칸 이름(SNAKE_CASE)·AI 규약 예시 | `@JsonTest` · `contracts/` |
+| 시연 리허설 | 빈 DB → 적재 → 룰 → 점수 → 케이스 → STR → 승인 → PDF | 11/24 리허설 순서 (아래 「실행 방법」) |
+
+<!-- ✏️ 채우기: 최신 ./gradlew test 결과 (통과·실패·skip 수와 날짜) -->
+| 항목 | 결과 |
+|---|---|
+| 자동 테스트 (MM/DD) | 통과 ___ · 실패 0 · skip ___ |
+| 9/7 시연 데이터 | 경보 1,545 → 점수 실패 0 → HIGH 27 → 케이스 27 |
+
+<br>
+
+## 11. 🚀 실행 방법
+
+준비물: Docker(메모리 8GB 이상 권장), JDK 17(IDE로 띄울 때).
 
 ```bash
-git clone <repo> && cd <받은 폴더>   # 폴더 이름은 무엇이든 됨 — compose.yaml 의 name: dajaba 로 프로젝트 이름 고정
-# 1. 환경변수 — 노션 「다자바 환경변수」 페이지의 내용을 .env 로 저장 (아래 변수 이름 참조). .env 는 커밋되지 않는다.
-# 2. 기동
-docker compose up --build
-# 3. 확인
+git clone https://github.com/dajaba-team/dajaba-backend.git
+cd dajaba-backend
+# .env — 팀 노션 「다자바 환경변수」의 백엔드 부분을 저장 (커밋하지 않음)
+docker compose up -d --build          # db + app
 open http://localhost:8080/swagger-ui.html
 ```
 
-swagger에서 **`POST /api/v1/auth/login`** 본문 `{"login_id": "inv01", "password": "<DEV_USER_PASSWORD 값>"}` → 200, 그 다음 **`GET /api/v1/auth/me`** → 200 이면 준비 끝.
-앱 없이 DB만 띄우고 IDE에서 돌리려면 `docker compose up db` 후 `SPRING_PROFILES_ACTIVE=local ./gradlew bootRun` (환경변수는 .env 내용을 IDE 실행 설정에).
+- Swagger에서 `POST /api/v1/auth/login` `{"login_id": "admin", "password": "<DEV_USER_PASSWORD>"}` → `GET /api/v1/auth/me`가 200이면 준비 끝이에요. 개발 계정은 `admin`·`inv01`·`inv02`·`apr01`이에요.
+- 기본은 AI 목업이에요. 진짜 AI 서버로 띄우려면 [dajaba-ai](https://github.com/dajaba-team/dajaba-ai)를 띄우고 `AML_AI_MOCK=false docker compose up -d app`.
+- 운영 도구(RabbitMQ·Redis·MinIO·Prometheus·Grafana·Loki·Elasticsearch·Langfuse)는 `docker compose --profile ops up -d`로 같이 띄워요.
+- 시연 데이터는 `admin`으로 `/admin/batches`에서 **원천 적재 → 룰 스캔 → 점수 → 케이스 생성**(날짜 `2022-09-07`) 순서로 만든 뒤 담당자를 배정해요.
 
-### .env 변수 이름 (값은 노션)
+<!-- ✏️ 지금 README의 상세 내용(.env 변수 표, 진짜 AI로 띄우기, 시연 데이터 순서, 운영 도구 표, compose.override.yml, Redis·RabbitMQ 확인, 로그인 방법)을
+     docs/09_local_setup.md 로 옮기고 아래 링크를 살려 주세요 -->
+`.env` 변수 전체, 운영 도구 화면 열기, 시연 데이터 만들기, 문제 해결은 [`docs/09_local_setup.md`](docs/09_local_setup.md)에 있어요.
 
-`application.yml`·`compose.yaml`이 읽는 변수 전부예요. 기본값이 있는 건 `.env`에 없어도 돼요. 계정·권한은 [`docs/03_shared.md` §11](docs/03_shared.md).
-
-| 변수 | 무엇 | 계정 | AI `.env`와 같은 값 | 기본값 (없으면) |
-|---|---|---|---|---|
-| `POSTGRES_PASSWORD` | db 컨테이너 슈퍼유저 비밀번호 (볼륨이 빌 때만 씀) | `postgres` | — | 없음 (필수) |
-| `APP_MIGRATE_PASSWORD` | Flyway DDL 계정. db 계정 만들기(`01_roles.sh`)와 앱 Flyway가 같이 씀 | `app_migrate` | — | 없음 (필수) |
-| `APP_BACKEND_PASSWORD` | 앱 DB 계정 (`ops` 읽기·쓰기) | `app_backend` | — | 없음 (필수) |
-| `APP_AI_PASSWORD` | AI 서버 DB 계정. 앱은 안 씀(db 계정 만들기용) | `app_ai` | **같음** | 없음 (필수) |
-| `AI_INTERNAL_KEY` | AI 서버와 맞추는 내부 키(32자 이상 난수, `X-Internal-Key`) | — | **같음** | 비어 있음 (`AML_AI_MOCK=true`면 무관) |
-| `AI_BASE_URL` | AI 서버 주소 | — | — | compose 앱 `http://ai:8000` · IDE `http://localhost:8000` |
-| `AML_AI_MOCK` | local에서 AI 목업(`true`)·진짜 AI 서버(`false`). `true`/`false`만 — 다른 값이면 앱이 안 떠요 | — | — | `true` (목업) |
-| `AML_AI_ASK_ENABLED` | 케이스 질문 답변 켜기(`true`)·끄기(`false`). 참·거짓으로 못 읽는 값(예: `maybe`)이면 앱이 안 떠요 | — | — | `false` (꺼짐) |
-| `AML_AI_REFERENCE_SEARCH_ENABLED` | STR 참고 사례 검색 켜기(`true`)·끄기(`false`). 참·거짓으로 못 읽는 값이면 앱이 안 떠요. 빈 값은 compose로 띄우면 `false`, 직접(IDE·`.env`) 띄우면 앱이 안 떠요. 진짜 AI 쪽도 켜져 있어야 해요(꺼져 있으면 `AI_INVALID_REQUEST`) | — | — | `false` (꺼짐) |
-| `AML_AI_STR_INDEX_ENABLED` | 승인된 STR 을 AI 참고 사례 색인에 넣기 켜기(`true`)·끄기(`false`). 참·거짓으로 못 읽는 값이면 앱이 안 떠요. 빈 값은 compose로 띄우면 `false`, 직접(IDE·`.env`) 띄우면 앱이 안 떠요. 진짜 AI 쪽도 켜져 있어야 해요(꺼져 있으면 색인 안 하고 `SKIPPED`·`DISABLED`, 승인은 그대로) | — | — | `false` (꺼짐) |
-| `AML_STR_DRAFT_ASYNC` | STR 초안 만들기를 비동기(`true` — 202로 받고 뒤에서 AI 호출)·동기(`false` — AI를 최대 90초 기다려 201)로. 값이 없으면 지금처럼 동기. compose 앱에도 넘어가요 | — | — | `false` (동기) |
-| `AML_AI_TIMEOUT_SECONDS`·`AML_AI_MAX_BATCH` | AI 호출 한 번의 전체 시간 한도(초, 재시도 포함)·점수 묶음 크기. 보통 안 바꿔요. 빈 값·0 이하이거나 묶음이 500을 넘으면(규약 6.2) 앱이 안 떠요 | — | — | `90`·`500` |
-| `DEV_USER_PASSWORD` | local 시연 계정 4명(admin·inv01·apr01·inv02)의 비밀번호 | — | — | 비어 있음 → 개발 계정을 안 만들고 경고 한 줄 |
-| `DB_HOST` | DB 호스트 | — | — | compose 앱 `db`(고정) · IDE `localhost` |
-| `DB_PORT` | DB 포트 | — | — | `5432` |
-| `DB_NAME` | DB 이름 | — | — | `aml` |
-| `AML_DATASET_DIR` | 적재할 IBM 파일 폴더 | — | — | compose 앱 `/data`(고정, `./data` 를 붙임) · IDE `./data` |
-| `AML_CASE_POLICY_VERSION` | 케이스 등급 경계값 버전 | — | — | 기본값 없음, 미결 23에서 확정 — 비면 케이스 생성 배치 `POLICY_NOT_CONFIGURED` |
-| `AML_CASE_POLICY_LOW_TO_MEDIUM` | 점수 경계 LOW → MEDIUM | — | — | 위와 같음 |
-| `AML_CASE_POLICY_MEDIUM_TO_HIGH` | 점수 경계 MEDIUM → HIGH | — | — | 위와 같음 |
-| `AML_RABBITMQ_ENABLED` | RabbitMQ 작업 큐 켜기(`true`)·끄기(`false`). 끄면 케이스 생성 등은 앱 안 실행기로 — 지금과 같아요 (SCRUM-276) | — | — | `false` |
-| `RABBITMQ_HOST` · `RABBITMQ_PORT` | RabbitMQ 주소 | — | — | compose 앱 `rabbitmq`(고정) · IDE `localhost`·`5672` |
-| `AML_SESSION_REDIS_ENABLED` | 로그인 세션을 Redis(db 0)에(`true`)·앱 메모리에(`false`). **`true`/`false`만** — 다른 값(오타 `ture` 등)이면 두 설정이 다 안 걸려 `SessionRegistry` 빈이 없다는 기동 실패가 나요. 끄면 지금과 같아요 — 앱을 다시 띄우면 모두 로그아웃 (SCRUM-273) | — | — | `false` |
-| `AML_STR_PDF_STORAGE` | STR 확정본 PDF 저장소. `filesystem` 또는 `minio`. `minio`로 쓰려면 `.env`에 `AML_STR_PDF_STORAGE=minio`를 넣고 `ops` 프로필로 MinIO를 실행해야 해요 | — | — | `filesystem` |
-| `REDIS_HOST` · `REDIS_PORT` | Redis 주소(세션을 켰을 때만 씀) | — | — | compose 앱 `redis`(고정) · IDE `localhost`·`6379` |
-| 참고: `SPRING_PROFILES_ACTIVE` | 프로파일 | — | — | compose 앱은 `local` 고정 · IDE는 실행 설정에 `local` |
-
-IDE에서 띄우면 앱이 리포 루트의 `.env`를 직접 읽어요(`application.yml`의 `spring.config.import`). compose로 띄운 앱은 위 표의 변수를 `compose.yaml`이 넘겨 줘요.
-
-**진짜 AI로 띄우기** (기본은 목업 — 토큰·AI 서버 없이 화면 개발. 연결 확인·통합 테스트·시연만 진짜 AI, SCRUM-262)
+테스트:
 
 ```bash
-AML_AI_MOCK=false docker compose up -d app   # 진짜 AI — 같은 aml-app 컨테이너를 다시 만들어요
-docker compose up -d app                     # 목업으로 돌아가기
+./gradlew test                         # Docker가 있으면 DB 테스트까지
+./gradlew test --tests "*ArchitectureTest"
 ```
 
-- 명령 앞에 붙여 쓰고 `export` 하지 마세요. 셸에 남아 있으면 `./gradlew test`까지 진짜 AI로 떠서 테스트가 깨질 수 있어요.
-- 시연처럼 계속 진짜 AI로 둘 때는 `.env`에 `AML_AI_MOCK=false`. 이러면 compose·IDE 둘 다 **기본이 진짜 모드**가 돼요 — 목업으로 돌아가려면 그 줄을 지우거나 `false`를 `true`로.
-- AI 서버(dajaba-AI compose)가 떠 있어야 하고, `AI_INTERNAL_KEY`가 AI `.env`와 같아야 해요.
+<br>
 
-DB를 완전히 초기화하려면 `docker compose down -v` (볼륨 삭제 → 다음 기동 때 `db/init/00_extensions.sql`·`01_roles.sh` 와 Flyway가 다시 돈다).
+## 12. 📚 주요 문서
 
-### 시연 데이터 만들기 — 빈 DB에서 케이스까지 (리허설 순서, SCRUM-250)
-
-위 3단계까지는 **로그인만** 돼요. 목록에 케이스가 보이려면 데이터를 넣고 배치 네 개를 순서대로 돌린 뒤, 관리자가 조사역에게 배정해야 해요.
-
-1. **원본 파일 3개를 `./data`에** — Kaggle 「IBM Transactions for Anti Money Laundering (AML)」의 HI-Small 세 파일 `HI-Small_Trans.csv`·`HI-Small_accounts.csv`·`HI-Small_Patterns.txt`를 리포 루트 `data/`에 그대로 둬요(파일 이름 바꾸지 않음, 커밋 안 됨). compose 앱은 `./data`를 `/data`로 읽기 전용으로 붙이고, IDE는 `AML_DATASET_DIR` 기본 `./data`.
-   - `src/test/resources/fixtures/ibm_small/`(축소본)은 **테스트 전용**이에요. 계좌 파일이 없고, 적재는 HI-Small 전체 건수(508만)로 검사해서 축소본을 넣으면 `DATASET_FILES_MISSING` 또는 "검증값 불일치"로 실패해요.
-2. **`.env`에 케이스 등급 경계값 세 줄** — `AML_CASE_POLICY_VERSION`·`AML_CASE_POLICY_LOW_TO_MEDIUM`·`AML_CASE_POLICY_MEDIUM_TO_HIGH`(값은 노션 `.env`). 없으면 4단계가 `POLICY_NOT_CONFIGURED`로 거절돼요. rc2 실제 모델로 바꾸는 날 값이 바뀌어요(SCRUM-329).
-3. **`admin`으로 로그인해 배치 네 개를 순서대로 돌리고 담당을 배정** — 프론트 `/admin/batches` 화면 버튼으로 하거나, swagger로 아래를 차례로 불러요. 날짜는 **`2022-09-07` 하나만** 써요(경계값을 9/7 기준으로 골라서, 다른 날은 HIGH가 하루 30건을 넘을 수 있어요 — 11/20 #개발).
-
-   | 순서 | 호출 | 응답 | 다음으로 넘어가는 때 |
-   |---|---|---|---|
-   | ① 적재 | `POST /api/v1/admin/batches/load` | 202 (뒤에서 돌아요) | `GET /api/v1/admin/batches` 맨 위 `LOAD_DATASET`이 `SUCCEEDED`. 수 분 걸려요. **한 번만** — 다시 하려면 `docker compose down -v` |
-   | ② 룰 스캔 | `POST /api/v1/admin/batches/rule-scan?date=2022-09-07` | 200 (끝날 때까지 기다림) | 경보 건수가 응답에 |
-   | ③ 점수 | `POST /api/v1/admin/batches/score?date=2022-09-07` | 200 — **일부 실패가 있어도 200** | 응답의 `scored`·`failed`. 다시 부르면 실패분만 재처리 |
-   | ④ 케이스 생성 | `POST /api/v1/admin/batches/open-cases?date=2022-09-07` | 202 | 배치 목록 맨 위 `OPEN_CASES`가 `SUCCEEDED` |
-   | ⑤ 담당 배정 | 프론트 케이스 상세 [담당자 배정] 또는 `POST /api/v1/cases/{case_no}/assign` `{"assignee": "inv01", "version": …}` — **`admin`만** | 200 | 그 뒤 `inv01`로 `/cases` → 「내 담당」에 보임. 조사역은 새 케이스를 스스로 맡을 수 없어요(SCRUM-339) |
-
-   - ③은 기본(`AML_AI_MOCK=true`)이면 **목업 점수**(경보마다 0.05~0.95 고르게)라 HIGH 수가 실제와 달라요. 실제 점수는 dajaba-AI를 띄우고 `AML_AI_MOCK=false`(위 「진짜 AI로 띄우기」).
-   - 실제 모델로 처음 채점할 때는 **rc2로 바꾼 뒤** ③을 처음 돌려요. rc1으로 먼저 돌리면 R03·R05·R06 경보가 `RULE_NOT_SUPPORTED`로 남고 다시 보내지 않아요(#155).
-   - 숫자 확인(11/21 rc2 실제 모델 기준): 9/7 경보 1,545 → 점수 실패 0 → HIGH 27 → 케이스 27.
-
-### 프로젝트 이름 `dajaba` · pgvector (11/8, SCRUM-124)
-
-- `compose.yaml` 맨 위 `name: dajaba` — 폴더 이름과 상관없이 네트워크 `dajaba_default`(AI compose가 붙는 곳), 볼륨 `dajaba_aml-db-data`.
-- **다른 폴더 이름으로 띄워 둔 적이 있으면** 한 번만: `docker rm -f aml-db aml-app` 뒤 `docker compose up`. 새 빈 볼륨이라 **적재를 다시** 해요(옛 볼륨은 지워지지 않고 남아요).
-- db 이미지는 `pgvector/pgvector:0.8.2-pg16-trixie`(PostgreSQL 16 그대로 + pgvector 0.8.2, 원래 `postgres:16`과 같은 trixie — collation 버전이 같아요). 새 볼륨은 `db/init/00_extensions.sql`이 확장을 만들어요. **이미 있는 볼륨**은 손으로 1회:
-
-```bash
-docker exec aml-db psql -U postgres -d aml -c "CREATE EXTENSION IF NOT EXISTS vector;"
-docker exec aml-db psql -U postgres -d aml -c "\dx"     # vector 가 보이면 끝
-```
-
-## 운영 도구 (ops 프로필, 11/18, SCRUM-263)
-
-지표·로그·세션·큐·파일·검색·LLM 추적 도구를 `compose.yaml`에 **`profiles: [ops]`** 로 넣었어요. 지금은 **띄우기까지만** 돼요. 앱·AI에서 도구를 부르는 연결은 각자 Jira에서 해요(노션 「운영 도구 붙이기 — 팀원별 담당」).
-
-```bash
-docker compose up -d                  # 평소 — db·app만 (지금과 같음, 도구 없음)
-docker compose --profile ops up -d    # 도구까지
-docker compose --profile ops down     # 도구까지 내리기 (볼륨은 남음)
-```
-
-- 시연처럼 늘 도구까지 띄울 때는 `.env`에 `COMPOSE_PROFILES=ops`를 넣어요.
-- **Docker Desktop 메모리 최소 8GB · 권장 10GB**(도구 상한 합계 약 6.8GB + db·app·ai).
-- 도구는 **호스트 포트를 열지 않아요.** app·ai의 `depends_on`에도 없어서 도구가 죽어도 로그인·케이스·STR은 그대로 돌아요. AI 컨테이너는 `dajaba_default` 네트워크에서 `langfuse-web:3000`·`elasticsearch:9200`처럼 이름으로 찾아요.
-- 비밀값이 하나라도 비어 있으면 `ops-env-check`가 **빈 변수 이름만** 찍고 멈춰요(값은 찍지 않아요). 그러면 비밀값을 쓰는 도구는 뜨지 않아요(비밀값이 없는 Prometheus·Loki·Alloy는 그대로 떠요). 프로필 없이 `docker compose up`을 하면 이 검사는 돌지 않아요.
-
-| 도구 | 무엇 | 첫 사용처 · 붙이는 사람 | 메모리 상한 |
-|---|---|---|---|
-| prometheus | 지표 수집. 대상은 `app:8081/actuator/prometheus`(관리 포트, 호스트엔 안 열림 — `docs/03_shared.md` §13)·`ai:8000/metrics`(AI 끝점이 생기기 전에는 DOWN) | 백엔드·AI 공통 지표 — 진희, 기능 지표 — 각자 | 256m |
-| grafana | 지표·로그 화면. Prometheus·Loki 데이터 소스 자동 등록, 익명 접근 끔 | 대시보드 — 각자 | 384m |
-| loki · alloy | 컨테이너 표준출력 로그 모음(`dajaba_default` 네트워크 컨테이너만). Alloy는 Docker 소켓을 **읽기 전용**으로 붙여요 — 컨테이너 목록·로그를 읽는 공식 방법이 소켓뿐이라서, 그래서 ops 프로필에만 둬요 | 로그 형식 — 각자 | 256m · 256m |
-| redis | **db 0 = 로그인 세션, db 1 = Langfuse**. 앱은 `AML_SESSION_REDIS_ENABLED=true`일 때만 세션을 여기 둬요(기본 꺼짐 = 앱 메모리, 키 `aml:session:*`). 켠 채 Redis가 죽으면 앱은 그대로 떠 있고, 로그인·로그인한 요청만 503 `SESSION_STORE_UNAVAILABLE`이에요(쿠키 없는 요청은 지금처럼 401). Langfuse 필수인 `noeviction`이 db 0에도 걸려서, 메모리가 차면 지우는 대신 **세션 쓰기까지 실패**(로그인 안 됨)해요. 그래서 컨테이너 상한 256m 안에서 `maxmemory 200mb`로 두고(강제 종료 대신 쓰기 거부), Grafana에서 Redis 메모리를 봐요 | 세션 — 지윤(SCRUM-273) | 256m |
-| rabbitmq | vhost `aml`, 관리 UI 포함. 큐 이름은 `batch.*`·`case.*`·`str.pdf.*`·`str.draft.*`, **메시지에는 작업 ID만**(`batch_run_id`·`draft_id`). 앱 쪽 공통 설정은 `shared/messaging` — 큐는 `JobQueues`에 한 줄 추가하면 DLQ까지 앱이 선언해요. 앱은 `AML_RABBITMQ_ENABLED=true`일 때만 붙어요(기본 꺼짐). 붙이는 법은 [`docs/03_shared.md` §14](docs/03_shared.md) | 배치 잇기 — 준혁, 케이스 생성 — 지윤(`case.open-cases`, SCRUM-276), 확정본 PDF — 채영 | 384m |
-| minio (+ minio-init) | 파일 저장. 버킷 `str-reports`(확정본 PDF)·`langfuse`(Langfuse 이벤트)를 `minio-init`이 한 번 만들어요. 공식 Docker Hub 이미지가 중단돼서 Chainguard 이미지를 **digest로 고정**했어요(무료판은 `latest` 태그만 있음) | 확정본 PDF — 채영 | 256m |
-| elasticsearch | 단일 노드, 보안 켬(`elastic` 계정), 힙 512m | RAG 키워드 검색 — 진희 | 1g |
-| langfuse-web · langfuse-worker · clickhouse | LLM 호출 추적(v4, 직접 띄우기). Postgres는 db의 `langfuse` DB(`langfuse-db-init`이 없을 때만 만들고, 비밀번호는 기동마다 `.env` 값으로 맞춰요), Redis db 1, MinIO `langfuse` 버킷 | AI LLM 호출 — 진희 | 1g · 768m · 2g (web·worker는 Node 힙 = 상한, 공식 권장) |
-
-**RabbitMQ 켜고 띄우기** (SCRUM-276) — `.env`에 `AML_RABBITMQ_ENABLED=true`를 넣고 도구까지 띄워요.
-
-```bash
-docker compose --profile ops up -d rabbitmq      # 브로커 먼저 (healthy 까지 1분쯤)
-docker compose up -d --build app                 # 앱이 붙으면서 aml.jobs 교환기·큐·DLQ를 선언
-```
-
-관리 UI(`compose.override.yml`로 15672를 열었을 때) `http://localhost:15672` → vhost `aml` → Queues에 `case.open-cases`·`case.open-cases.dlq`·`str.pdf.generate`·`str.pdf.generate.dlq`가 보이면 붙은 거예요. 브로커가 죽어 있거나 꺼져 있으면 앱은 그냥 지금처럼(앱 안 실행기) 돌아요.
-
-**STR PDF를 MinIO에 보관하기** — `.env`에 `AML_STR_PDF_STORAGE=minio` 한 줄을 추가하고 ops 프로필로 MinIO를 띄워요. 앱은 MinIO에 `depends_on` 하지 않으므로, MinIO가 꺼져 있으면 앱은 계속 뜨고 PDF 생성만 `FAILED`가 됩니다. MinIO를 다시 띄운 뒤 STR 화면의 [PDF 다시 만들기]로 재시도할 수 있어요.
-
-```bash
-docker compose --profile ops up -d minio minio-init
-docker compose up -d --build app
-```
-
-**Redis 세션 켜고 띄우기** (SCRUM-273) — `.env`에 `AML_SESSION_REDIS_ENABLED=true`를 넣고 Redis까지 띄워요.
-
-```bash
-docker compose --profile ops up -d redis         # ops-env-check 가 비밀값을 본 뒤 뜸
-docker compose up -d --build app
-```
-
-로그인한 뒤 `docker compose restart app`을 해도 같은 브라우저의 `/api/v1/auth/me`가 200이면 세션 유지가 확인된 거예요. 끄면(`false`) 앱은 Redis에 연결하지 않아요.
-
-**적용 확인** — `PING`이나 health `UP`만으로는 세션 연동을 확인할 수 없어요. 로그인 전후 DB 0의 세션 키 개수와 같은 쿠키의 응답을 함께 봐요. 키 원문(세션 ID)은 출력·공유하지 않아요.
-
-```bash
-# Redis 서버 응답 확인 (인증은 컨테이너 REDISCLI_AUTH 사용)
-docker compose --profile ops exec -T redis redis-cli PING
-# 세션 키는 원문 대신 개수만 확인
-docker compose --profile ops exec -T redis redis-cli -n 0 --scan --pattern 'aml:session:sessions:*' | wc -l
-# 로그인한 브라우저를 유지한 채 앱만 재시작 → /api/v1/auth/me 200
-docker compose restart app
-```
-
-로컬 장애 확인은 `docker compose --profile ops stop redis` 뒤 **로그인한 쿠키로** `/api/v1/auth/me`를 호출해 503 `SESSION_STORE_UNAVAILABLE`을 확인하고, 반드시 `docker compose --profile ops start redis`로 복구해요. 세션이 만료되지 않았다면 같은 쿠키로 다시 200이어야 해요. 로그아웃 후에는 401이에요. Redis 장애 중 쿠키 없는 요청은 401일 수 있어요.
-
-**자동 테스트** — Docker를 켜고 아래를 실행해요. 테스트 전용 PostgreSQL·Redis 컨테이너에서 DB 0 저장, 앱 컨텍스트 재생성 후 세션 유지, 중복 로그인·로그아웃, Redis 장애·메모리 부족 503을 확인해요.
-
-```bash
-./gradlew test --tests '*RedisSession*Test' --tests '*MemorySessionDefaultTest' --tests '*SessionStore*Test'
-./gradlew test
-```
-
-`AML_SESSION_REDIS_ENABLED=false`는 메모리 모드로의 명시적 전환이에요. `true`인 상태에서 Redis가 죽는다고 메모리로 자동 전환하지 않아요.
-
-**로그 주의** — Alloy는 앱 로그를 **그대로** Loki로 옮겨요. 로그에 계좌번호·금액·본문·프롬프트 전문을 남기지 않는 규칙(NFR-COM-04)은 앱 쪽 로그 형식에서 지켜요.
-
-**화면을 로컬에서 열기** — 리포 루트에 `compose.override.yml`을 만들어요(커밋하지 않아요, `.gitignore`에 있음). `127.0.0.1`에만 묶어요.
-
-```yaml
-services:
-  grafana:       { ports: ["127.0.0.1:3001:3000"] }
-  langfuse-web:  { ports: ["127.0.0.1:3000:3000"] }   # NEXTAUTH_URL 이 http://localhost:3000
-  rabbitmq:      { ports: ["127.0.0.1:15672:15672", "127.0.0.1:5672:5672"] }   # 15672 관리 UI · 5672 IDE에서 띄운 앱이 붙을 때
-  minio:         { ports: ["127.0.0.1:9001:9001"] }
-  prometheus:    { ports: ["127.0.0.1:9090:9090"] }
-```
-
-**ops 프로필 `.env` 변수** (값은 노션 `.env` 페이지, compose에 기본값 없음)
-
-| 변수 | 도구 | 무엇 |
-|---|---|---|
-| `GRAFANA_ADMIN_PASSWORD` | grafana | 관리자(`admin`) 비밀번호 |
-| `REDIS_PASSWORD` | redis · langfuse · app | Redis 비밀번호. 앱도 이 값으로 붙어요(`AML_SESSION_REDIS_ENABLED=true`일 때) |
-| `RABBITMQ_USER` · `RABBITMQ_PASSWORD` | rabbitmq · app | 관리 계정. 앱도 이 계정으로 붙어요(`AML_RABBITMQ_ENABLED=true`일 때) |
-| `MINIO_ROOT_USER` · `MINIO_ROOT_PASSWORD` | minio · minio-init · langfuse | MinIO 루트 계정 |
-| `ELASTIC_PASSWORD` | elasticsearch | `elastic` 계정 비밀번호 |
-| `CLICKHOUSE_PASSWORD` | clickhouse · langfuse | ClickHouse 비밀번호 |
-| `LANGFUSE_DB_PASSWORD` | langfuse-db-init · langfuse | Postgres `langfuse` 계정 비밀번호 |
-| `LANGFUSE_NEXTAUTH_SECRET` · `LANGFUSE_SALT` | langfuse | 로그인 세션 서명·API 키 해시용 난수 |
-| `LANGFUSE_ENCRYPTION_KEY` | langfuse | 16진수 64자(`openssl rand -hex 32`) |
-| `LANGFUSE_INIT_PROJECT_PUBLIC_KEY` · `LANGFUSE_INIT_PROJECT_SECRET_KEY` | langfuse | 첫 프로젝트 API 키(`pk-lf-…`·`sk-lf-…`) — AI `.env`에 같은 값 |
-| `LANGFUSE_INIT_USER_EMAIL` · `LANGFUSE_INIT_USER_PASSWORD` | langfuse | 첫 관리자 로그인 |
-| (기존) `POSTGRES_PASSWORD` | langfuse-db-init | `langfuse` DB·계정을 만들 때 |
-| (선택) `COMPOSE_PROFILES` | — | `ops`면 `docker compose up`에 도구까지 |
-
-`LANGFUSE_DB_PASSWORD`·`REDIS_PASSWORD`·`MINIO_ROOT_USER`·`MINIO_ROOT_PASSWORD`는 접속 주소(URL) 안에 그대로 들어가요 — **영문·숫자만** 써요(`@`·`:`·`/`·`#` 등이 있으면 주소가 깨져요).
-
-**문제 해결** — elasticsearch가 unhealthy이고 로그에 `flood stage disk watermark [95%] exceeded`가 보이면 Docker 디스크가 찬 거예요(ES가 `elastic` 계정 인증까지 못 해요). `docker system df`로 확인하고 `docker builder prune`(빌드 캐시)로 비우거나 Docker Desktop 설정의 디스크 한도를 늘린 뒤 `docker compose restart elasticsearch`.
-
-**ClickHouse 예전 로그 테이블 정리 — 11/18(SCRUM-287) 전에 ops를 띄운 적 있으면 한 번만** — 메모리를 아끼려고 Langfuse가 읽지 않는 시스템 로그 7개를 `ops/clickhouse/low-memory.xml`에서 껐어요. 그런데 그전에 만들어진 테이블은 볼륨에 남아서, ClickHouse가 예전 파트를 계속 합치느라 메모리를 써요(그러면 `memory limit exceeded`가 나고 Langfuse 기록이 버려져요). **새 볼륨으로 처음 띄우는 사람은 이 테이블이 생기지 않으니 필요 없어요.** 순서가 중요해요:
-
-1. develop을 받은 뒤 **먼저** 새 설정으로 ClickHouse를 다시 띄워요.
-2. **그다음** 아래 DROP 명령을 한 번 실행해요(두 번 돌려도 괜찮아요 — `IF EXISTS`). 비밀번호는 컨테이너 환경 변수를 읽어서 화면에 찍히지 않아요.
-
-거꾸로 하면(옛 설정으로 도는 서버에서 DROP) 아직 꺼지지 않은 로그가 다음 기록 때 테이블을 다시 만들어요.
-
-```bash
-docker compose --profile ops up -d --force-recreate clickhouse
-```
-
-```bash
-docker compose --profile ops exec clickhouse sh -c 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery -q "DROP TABLE IF EXISTS system.trace_log SYNC; DROP TABLE IF EXISTS system.text_log SYNC; DROP TABLE IF EXISTS system.opentelemetry_span_log SYNC; DROP TABLE IF EXISTS system.asynchronous_metric_log SYNC; DROP TABLE IF EXISTS system.metric_log SYNC; DROP TABLE IF EXISTS system.latency_log SYNC; DROP TABLE IF EXISTS system.processors_profile_log SYNC"'
-```
-
-확인 — ClickHouse는 로그를 **컨테이너 안 파일**에 써요. `docker compose logs clickhouse`에는 설정 파일 안내 몇 줄만 나와서, 거기서 `memory limit`을 grep하면 늘 0줄이에요(아무것도 확인하지 못해요). `--profile ops`를 빼도 서비스를 못 찾는 오류만 나고 grep 결과는 0이라 확인된 것처럼 보여요. 아래처럼 컨테이너 안 오류 로그를 봐요. 로그 폴더는 볼륨이 아니라 `--force-recreate`로 다시 띄우면 새로 시작해요. 옛 로그는 번호가 붙고 압축되기도 해서 `zcat -f`로 둘 다 읽고, 시각은 정렬해서 봐요(로그 줄이 날짜로 시작해서 파일 순서와 상관없어요). **명령이 오류(`No such file`·`Permission denied`·gzip 오류)를 내면 확인 실패예요 — 숫자나 "없음"·시각이 나올 때만 확인된 거예요.**
-
-- 다시 띄운 뒤 `memory limit` 줄 수 — 0이면 돼요:
-
-```bash
-docker compose --profile ops exec clickhouse sh -c "ls /var/log/clickhouse-server/clickhouse-server.err.log* && zcat -f /var/log/clickhouse-server/clickhouse-server.err.log* | grep -c 'memory limit'"
-```
-
-- 다시 만들지 않은 컨테이너라면 마지막 `memory limit` 줄 시각(UTC) — DROP 전이면 돼요(한 번도 없으면 "없음"):
-
-```bash
-docker compose --profile ops exec clickhouse sh -c "ls /var/log/clickhouse-server/clickhouse-server.err.log* && { zcat -f /var/log/clickhouse-server/clickhouse-server.err.log* | grep 'memory limit' | sort | tail -n 1 | cut -c1-30 | grep . || echo 없음; }"
-```
-
-- 서버가 언제 시작됐는지(UTC) — `uptime()`은 맥이 잠든 동안 늘지 않아 실제보다 짧게 나와서 이 줄로 봐요:
-
-```bash
-docker compose --profile ops exec clickhouse sh -c "ls /var/log/clickhouse-server/clickhouse-server.log* && zcat -f /var/log/clickhouse-server/clickhouse-server.log* | grep 'Starting ClickHouse' | sort | cut -c1-60"
-```
-
-## 지금 들어 있는 것 (W1 뼈대, 10/26)
-
-| 묶음 | 파일 | 상태 |
-|---|---|---|
-| 폴더 구조 | `com.team.aml.{source,detection,cases,str,user,shared}` × `domain/application/infrastructure/api` | 각 폴더 `package-info.java`에 담당·들어갈 클래스 적어 둠 |
-| DB | `db/init/00_extensions.sql`(pgvector), `db/init/01_roles.sh`(역할 3개·스키마 2개), Flyway `V001`~`V004` (권한, 원천 4개+스테이징, users+SYSTEM, batch_runs), `V004_1`(source_files), `V004_2`(ai_call_logs), `V004_3`(access_logs) | 레퍼런스 3절 그대로. `ddl-auto=validate` |
-| shared/domain | `AuditedEntity`(감사 4, SCRUM-68), `BaseEntity`(+ 자동 id), `AssignedIdEntity`(+ 미리 받은 id, SCRUM-68), `CreatedOnlyEntity`, `DomainException`, `NotFoundException`, `ForbiddenException`(403 부모, SCRUM-67), `DisplayNumber` | |
-| shared/api | `GlobalExceptionHandler`(8.2 에러 JSON), `ErrorResponse`, `PageResponse` | |
-| shared/security | `SecurityConfig`(세션·CSRF·URL 역할), `CurrentUser`, `SessionAuditorAware`, 401/403 JSON, `request_id` MDC | 진짜 |
-| shared/audit | `AccessLogWriter`(열람 기록 한 줄 — `view`·`strView`·`pdfDownload`·`export`), `LoginAccessLogWriter`(로그인·로그아웃, security 전용), `AccessLog` | 진짜 (SCRUM-19) |
-| shared/batch | `BatchRun`, `BatchRunRepository`, 409 예외 2개 | 안건 14 반영 |
-| shared/ai | `AiClient` 인터페이스, DTO 틀, `MockAiClient`(local/test), 기동 시 health, `AiCallLog`·`AiCallLogWriter`(시도마다 1행, 메타데이터만) | 진짜 (SCRUM-17·18) |
-| user | `User`, `Role`, `UserRepository`, `GetMe`, `AuthController(/me)`, `DbUserDetailsService`(로그인 때 users 읽기), `DevUserSeeder` | 진짜 (SCRUM-19) |
-| 테스트 | `ArchitectureTest`(ArchUnit, DB 없이), `ApplicationContextTest`(Testcontainers, Docker 필요) | |
-| 자료 | `src/test/resources/fixtures/ibm_small/`(축소본 — 지금은 합성 샘플), `tools/fixture/`, `docs/flows/` | |
-
-### 로그인 방법
-
-`POST /api/v1/auth/login` 본문 `{"login_id", "password"}` — 개발 계정은 `admin`·`inv01`·`apr01`·`inv02`, 비밀번호는 `.env`의 `DEV_USER_PASSWORD`(값은 노션, local 프로파일에서 `DevUserSeeder`가 만든다).
-성공 200 `{id, login_id, display_name, role}`, 실패 401 `LOGIN_FAILED`(없는 ID·틀린 비밀번호·비활성 모두 같은 응답). 그 뒤: 세션 쿠키 `SESSION`, CSRF(`XSRF-TOKEN` 쿠키 → `X-XSRF-TOKEN` 헤더),
-같은 계정 동시 세션 1개, 30분 만료, `GET /auth/me`, `POST /auth/logout`(204), 401/403 JSON. 다른 사람 코드는 전부 `CurrentUser`로 사용자를 꺼낸다.
-
-프론트: `axios` 에 `withCredentials: true`. 쓰기 요청은 `XSRF-TOKEN` 쿠키 값을 `X-XSRF-TOKEN` 헤더로(axios 기본 동작). swagger에서는 오른쪽 위 Authorize에 쿠키 값을 붙여 넣는다.
-
-## 규칙 세 줄
-
-1. **DB 구조는 Flyway 파일만.** `V{번호}__{설명}.sql`, PR 하나에 파일 하나, 번호는 팀 채팅에 예약. 적용된 파일은 안 고친다.
-2. **업무 규칙은 엔티티 안에.** `setStatus()` 없음. 상태 전이는 `case.escalate()` 같은 메서드. `@Transactional`은 application에만.
-3. **기능 폴더끼리는 application 유스케이스로만 부른다.** 의존 방향 `source ← detection ← cases ← str`. `ArchitectureTest`가 CI에서 막는다.
-
-자세한 건 백엔드 설계 가이드(먼저 읽기) → 레퍼런스(찾아보기).
-
-## 다음
-
-- W2 진희: 진짜 login, access_logs, `WebClientAiClient`(W3), 규약 v0.2 반영
-- W2 준혁: V005 detection, `LoadIbmDataset`, 룰 1개 · 지윤: V006 cases, 상태 전이 + `CaseTest` · 채영: V008 str (W3)
-- 축소본: 진희 PC에서 `python tools/fixture/make_fixture.py` 로 실제 IBM 원본에서 다시 생성 → `src/test/resources/fixtures/ibm_small/` 덮어쓰기
+| 문서 | 내용 |
+|---|---|
+| [`docs/README.md`](docs/README.md) | 문서 지도 (읽는 순서·누가 고치나) |
+| [`docs/01_code_rules.md`](docs/01_code_rules.md) | 코드 규칙·이름·JSON·로그·보안·PR 규칙 |
+| [`docs/02_structure.md`](docs/02_structure.md) | 기능 폴더 6개 × 4계층, 의존 방향 |
+| [`docs/03_shared.md`](docs/03_shared.md) | 공통 코드 — 에러 응답·`CurrentUser`·`AiClient`·배치·작업 큐·관리 포트 |
+| [`docs/04_auth_user.md`](docs/04_auth_user.md) | 계정·역할·로그인·CSRF·권한 표 |
+| [`docs/05_flyway.md`](docs/05_flyway.md) | 마이그레이션 규칙·번호 표 |
+| [`docs/06_features/source_detection.md`](docs/06_features/source_detection.md) | 적재·탐지·점수 |
+| [`docs/06_features/rules.md`](docs/06_features/rules.md) | 룰 6개 정의 |
+| [`docs/06_features/cases.md`](docs/06_features/cases.md) | 케이스 |
+| [`docs/06_features/str.md`](docs/06_features/str.md) | STR·승인·확정본 PDF |
+| [`docs/07_review_checklist.md`](docs/07_review_checklist.md) | PR 리뷰 체크리스트 |
+| [`docs/08_decisions.md`](docs/08_decisions.md) | 결정 기록·미결 사항 |
+| [`docs/flows/`](docs/flows/README.md) | 흐름 그림 (Mermaid) |
