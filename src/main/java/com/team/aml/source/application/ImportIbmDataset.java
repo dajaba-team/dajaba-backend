@@ -2,6 +2,7 @@ package com.team.aml.source.application;
 
 import com.team.aml.source.domain.AccountLoadRepository;
 import com.team.aml.source.domain.AccountLoadResult;
+import com.team.aml.source.domain.CustomerAttributesLoadResult;
 import com.team.aml.source.domain.DatasetExpectation;
 import com.team.aml.source.domain.DatasetFiles;
 import com.team.aml.source.domain.DatasetLoadSummary;
@@ -13,6 +14,8 @@ import com.team.aml.source.domain.PatternStagingRepository;
 import com.team.aml.source.domain.TransactionLoadRepository;
 import com.team.aml.source.domain.TransactionLoadResult;
 import com.team.aml.shared.batch.BatchProgress;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,13 +27,17 @@ import java.util.List;
  * 하나라도 실패하면 원천·source_files가 전부 롤백되어 따로 비울 것이 없다.
  * 성공 기록(SUCCEEDED)도 같은 트랜잭션이라 데이터와 상태가 어긋나지 않는다.
  * 단계마다 진행(BatchProgress: PATTERNS → ACCOUNTS → TRANSACTIONS → VERIFY)을 적는다 — 화면 "거래 적재 중 3/4"(SCRUM-349).
+ * 같은 폴더에 가상 KYC(customer_attributes.csv)가 있으면 계좌 단계에서 법인 뒤에 같이 넣는다 — 없으면 건너뜀(SCRUM-430).
  * 지우는 건 부르는 쪽(LoadIbmDataset.run)이 끝난 뒤에.
  */
 @Service
 public class ImportIbmDataset {
 
+    private static final Logger log = LoggerFactory.getLogger(ImportIbmDataset.class);
+
     private final StagePatternFile stagePatternFile;
     private final LoadAccountFile loadAccountFile;
+    private final LoadCustomerAttributesFile loadCustomerAttributesFile;
     private final LoadTransactionFile loadTransactionFile;
     private final PatternStagingRepository patterns;
     private final AccountLoadRepository accounts;
@@ -44,12 +51,14 @@ public class ImportIbmDataset {
     static final List<String> STEPS = List.of("PATTERNS", "ACCOUNTS", "TRANSACTIONS", "VERIFY");
 
     public ImportIbmDataset(StagePatternFile stagePatternFile, LoadAccountFile loadAccountFile,
+                            LoadCustomerAttributesFile loadCustomerAttributesFile,
                             LoadTransactionFile loadTransactionFile, PatternStagingRepository patterns,
                             AccountLoadRepository accounts, TransactionLoadRepository transactions,
                             DatasetRepository dataset, DatasetExpectation expectation,
                             DatasetLoadRecorder recorder, BatchProgress progress) {
         this.stagePatternFile = stagePatternFile;
         this.loadAccountFile = loadAccountFile;
+        this.loadCustomerAttributesFile = loadCustomerAttributesFile;
         this.loadTransactionFile = loadTransactionFile;
         this.patterns = patterns;
         this.accounts = accounts;
@@ -67,6 +76,11 @@ public class ImportIbmDataset {
         stagePatternFile.execute(dir.resolve(DatasetFiles.PATTERNS));
         step(batchRunId, 1);
         AccountLoadResult accountsLoaded = loadAccountFile.execute(dir.resolve(DatasetFiles.ACCOUNTS));
+        // KYC는 법인 FK라 계좌(법인) 뒤에. 파일이 없으면 건너뛴다 — 건수만 남긴다(파일 내용은 로그에 없음).
+        CustomerAttributesLoadResult kyc =
+                loadCustomerAttributesFile.execute(dir.resolve(DatasetFiles.CUSTOMER_ATTRIBUTES));
+        log.info("KYC 적재 batch_run_id={} file_found={} file_rows={} inserted={} skipped={}",
+                batchRunId, kyc.fileFound(), kyc.fileRows(), kyc.inserted(), kyc.skipped());
         step(batchRunId, 2);
         TransactionLoadResult loaded = loadTransactionFile.execute(dir.resolve(DatasetFiles.TRANSACTIONS));
 

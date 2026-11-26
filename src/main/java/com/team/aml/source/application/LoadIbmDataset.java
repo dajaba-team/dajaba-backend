@@ -4,6 +4,7 @@ import com.team.aml.shared.batch.BatchProgress;
 import com.team.aml.shared.config.AmlProperties;
 import com.team.aml.shared.domain.DomainException;
 import com.team.aml.source.domain.AccountFileFormatException;
+import com.team.aml.source.domain.CustomerAttributesFileFormatException;
 import com.team.aml.source.domain.DatasetFiles;
 import com.team.aml.source.domain.DatasetFilesMissingException;
 import com.team.aml.source.domain.DatasetLoadSummary;
@@ -76,7 +77,7 @@ public class LoadIbmDataset {
     private static String failureMessage(RuntimeException e) {
         if (e instanceof DatasetVerificationException || e instanceof TransactionFileFormatException
                 || e instanceof AccountFileFormatException || e instanceof PatternFileFormatException
-                || e instanceof DomainException) {
+                || e instanceof CustomerAttributesFileFormatException || e instanceof DomainException) {
             return e.getMessage();
         }
         return "적재 실패 (" + e.getClass().getSimpleName() + ")";

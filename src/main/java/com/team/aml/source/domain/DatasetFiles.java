@@ -10,6 +10,8 @@ public final class DatasetFiles {
     public static final String TRANSACTIONS = "HI-Small_Trans.csv";
     public static final String ACCOUNTS = "HI-Small_accounts.csv";
     public static final String PATTERNS = "HI-Small_Patterns.txt";
+    /** 가상 KYC(팀이 만든 HI-Small_STR_expanded). 선택 파일 — 없어도 적재는 하고 KYC만 비운다. 아래 ALL·missingIn에 넣지 않는다(SCRUM-430). */
+    public static final String CUSTOMER_ATTRIBUTES = "customer_attributes.csv";
 
     private static final List<String> ALL = List.of(TRANSACTIONS, ACCOUNTS, PATTERNS);
 

@@ -157,6 +157,42 @@ class SourceSchemaTest {
     }
 
     @Test
+    void KYC_계좌_개설_목적은_비울_수_있고_나머지_칸은_필수다() throws Exception {   // V020, SCRUM-430
+        try (Connection c = backend(); Statement statement = c.createStatement()) {
+            statement.execute("insert into ops.entities(entity_id, entity_name, entity_type) values ('KYCNULL1', 'kyc', 'INDIVIDUAL')");
+            statement.execute("""
+                    insert into ops.customer_attributes(entity_id, industry, risk_level, account_purpose, onboarded_at, country_code)
+                    values ('KYCNULL1', 'RETAIL', 'MEDIUM', null, '2020-01-01', 'US')""");
+            try (ResultSet result = statement.executeQuery(
+                    "select account_purpose from ops.customer_attributes where entity_id = 'KYCNULL1'")) {
+                result.next();
+                assertThat(result.getString(1)).isNull();
+            }
+
+            statement.execute("insert into ops.entities(entity_id, entity_name, entity_type) values ('KYCNULL2', 'kyc', 'INDIVIDUAL')");
+            assertSqlState("23502", () -> statement.execute("""
+                    insert into ops.customer_attributes(entity_id, industry, risk_level, account_purpose, onboarded_at, country_code)
+                    values ('KYCNULL2', null, 'MEDIUM', null, '2020-01-01', 'US')"""));
+            // 빈 문자열·공백만은 NULL 과 다르게 막는다(V020, #190 리뷰) — AI 가 빈 코드를 라벨 사전에서 찾다 깨져서
+            for (String blank : new String[] {"''", "'   '"}) {
+                assertSqlState("23514", () -> statement.execute("""
+                        insert into ops.customer_attributes(entity_id, industry, risk_level, account_purpose, onboarded_at, country_code)
+                        values ('KYCNULL2', 'RETAIL', 'MEDIUM', %s, '2020-01-01', 'US')""".formatted(blank)));
+            }
+        }
+    }
+
+    @Test
+    void 백엔드_계정은_KYC_적재용_임시_표를_만들_수_있다() throws Exception {   // TEMP 권한 — CustomerAttributesLoadJdbcRepository(#190 리뷰)
+        try (Connection c = backend(); Statement statement = c.createStatement()) {
+            c.setAutoCommit(false);
+            statement.execute("create temporary table if not exists kyc_staging (entity_id text) on commit drop");
+            statement.execute("insert into pg_temp.kyc_staging values ('E1')");
+            c.rollback();
+        }
+    }
+
+    @Test
     void 백엔드_계정은_계좌를_COPY하고_중복은_건너뛰며_적재할_수_있다() throws Exception {
         try (Connection c = backend(); Statement statement = c.createStatement()) {
             statement.execute("truncate table ops.accounts_staging");

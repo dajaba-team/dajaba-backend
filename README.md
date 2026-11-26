@@ -167,6 +167,8 @@ Flyway `V001`~`V019`, 테이블 23개예요. DB 구조는 Flyway 파일로만 �
 
 원본 파일은 커밋하지 않아요. 리포 루트 `data/`에 `HI-Small_Trans.csv`·`HI-Small_accounts.csv`·`HI-Small_Patterns.txt`를 그대로 두면 돼요.
 
+(선택) 가상 KYC `customer_attributes.csv`도 같이 두면 적재 때 함께 들어가요. 넣었는데 값 형식이 틀리면 적재가 실패해요 — [`source_detection.md`](docs/06_features/source_detection.md)
+
 <br>
 
 ## 8. 🔀 흐름도

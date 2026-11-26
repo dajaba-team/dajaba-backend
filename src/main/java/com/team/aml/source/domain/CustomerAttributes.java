@@ -24,7 +24,8 @@ public class CustomerAttributes {
     @Column(name = "risk_level", nullable = false, length = 8)
     private String riskLevel;
 
-    @Column(name = "account_purpose", nullable = false, length = 32)
+    /** 계좌 개설 목적(서식 IV-88). KYC 원천이 비워 둔 고객은 null(V020, SCRUM-430). */
+    @Column(name = "account_purpose", length = 32)
     private String accountPurpose;
 
     @Column(name = "onboarded_at", nullable = false)
