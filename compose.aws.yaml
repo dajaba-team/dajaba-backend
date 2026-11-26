@@ -1,0 +1,47 @@
+# AWS(EC2 한 대 + RDS) 배포용 덮어쓰기 파일. 로컬에서는 쓰지 않는다.
+#   docker compose -f compose.yaml -f compose.aws.yaml --profile ops up -d --build
+# .env 에 RDS_HOST(RDS 엔드포인트 주소)가 있어야 한다. !reset·!override 는 Docker Compose 2.24.6 이상.
+services:
+  # DB 는 RDS 를 쓴다 — 컨테이너 db 는 프로필로 빼서 기본으로 안 뜬다
+  db:
+    profiles: [localdb]
+
+  app:
+    restart: unless-stopped
+    depends_on: !reset {}
+    environment:
+      DB_HOST: ${RDS_HOST:?.env 에 RDS_HOST 가 없어요}
+
+  # langfuse 역할·DB 를 RDS 에 만든다
+  langfuse-db-init:
+    depends_on: !override
+      ops-env-check:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: ${RDS_HOST}
+
+  langfuse-worker:
+    environment:
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:-}@${RDS_HOST}:5432/langfuse?sslmode=require
+
+  langfuse-web:
+    environment:
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:-}@${RDS_HOST}:5432/langfuse?sslmode=require
+
+  # 웹 진입점 — 밖으로 열리는 건 이 컨테이너의 80/443 뿐
+  web:
+    image: caddy:2-alpine
+    container_name: aml-web
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../dajaba-frontend/dist:/srv:ro
+      - caddy-data:/data
+
+volumes:
+  caddy-data:
