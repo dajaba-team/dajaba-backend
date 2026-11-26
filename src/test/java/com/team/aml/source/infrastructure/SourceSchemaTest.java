@@ -173,7 +173,7 @@ class SourceSchemaTest {
             assertSqlState("23502", () -> statement.execute("""
                     insert into ops.customer_attributes(entity_id, industry, risk_level, account_purpose, onboarded_at, country_code)
                     values ('KYCNULL2', null, 'MEDIUM', null, '2020-01-01', 'US')"""));
-            // 빈 문자열·공백만은 NULL 과 다르게 막는다(V021, #190 리뷰) — AI 가 빈 코드를 라벨 사전에서 찾다 깨져서
+            // 빈 문자열·공백만은 NULL 과 다르게 막는다(V020, #190 리뷰) — AI 가 빈 코드를 라벨 사전에서 찾다 깨져서
             for (String blank : new String[] {"''", "'   '"}) {
                 assertSqlState("23514", () -> statement.execute("""
                         insert into ops.customer_attributes(entity_id, industry, risk_level, account_purpose, onboarded_at, country_code)
