@@ -1,0 +1,16 @@
+# AWS 배포용 웹 진입점. 도메인이 생기면 ":80" 을 도메인 이름으로 바꾸면 Caddy 가 HTTPS 를 자동으로 붙인다.
+:80 {
+	encode gzip
+
+	# 백엔드 API — 프론트와 같은 출처(/api)라 쿠키·CSRF 가 로컬과 같게 동작한다
+	handle /api/* {
+		reverse_proxy app:8080
+	}
+
+	# 나머지는 프론트 빌드 파일. 없는 경로는 index.html 로(SPA 라우팅)
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
